@@ -17,6 +17,7 @@
   "methods": "../field_materials/methods.json",
   "grid": { "nx": 4, "ny": 4, "cell_size_m": 4.0 },
   "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
   "operations": [
     { "op": "apply", "material": "lime_carbonate_90", "method": "incorporated", "rate_t_ha": 4.0, "doy": 250, "every_years": 4 },
     { "op": "apply", "material": "dap_18_46", "method": "broadcast", "rate_t_ha": 0.15, "doy": 262 },

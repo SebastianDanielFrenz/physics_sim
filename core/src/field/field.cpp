@@ -122,6 +122,8 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         const std::string e = crop_validation_error(cr);
         if (!e.empty()) throw std::invalid_argument("Field: " + e);
     }
+    if (!(cfg_.co2_ppm > 0.0)) throw std::invalid_argument("Field: co2_ppm must be > 0");
+    for (const CropDesc& cr : cfg_.crops) co2_f_.push_back(cr.co2_factor(cfg_.co2_ppm));
     if (cfg_.management_enabled && !cfg_.nutrients_enabled) throw std::invalid_argument("Field: management_enabled needs nutrients_enabled");
     if (cfg_.nutrients_enabled) {
         for (const SoilDesc& so : cfg_.soils)
@@ -421,10 +423,21 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                                                std::min(s.stress_ph[c] * nf_ph, s.stress_weed[c])) *
                                       s.stress_rotation[c];
                 const real f_rad = cr->biomass_rs_ref_mj_m2 > 0.0 ? clamp01(w.rs_mj_m2 / cr->biomass_rs_ref_mj_m2) : 1.0;
-                real gain = cr->wp_star_g_m2 * (tr / et0) * ft * f_rad * f_stress * s.weed_f[c];
-                // radiation-use cap: AquaCrop's WP* x Tr/ET0 does not see how little light a cold, short day offers
-                if (cr->biomass_rue_g_mj > 0.0) gain = std::min(gain, cr->biomass_rue_g_mj * w.rs_mj_m2 * cc);
-                s.biomass[c] += gain;
+                const real f_co2 = co2_f_[static_cast<std::size_t>(s.crop[c] - 1)];
+                real gain = cr->wp_star_g_m2 * f_co2 * (tr / et0) * ft * f_rad;
+                if (cr->biomass_rue_g_mj > 0.0) {
+                    const real ft_rue = cr->biomass_rue_t_full_c > 0.0
+                                            ? clamp01((w.tmean_c - cr->biomass_rue_t_low_c) / (cr->biomass_rue_t_full_c - cr->biomass_rue_t_low_c))
+                                            : 1.0;
+                    const real light = cr->biomass_rue_g_mj * f_co2 * ft_rue * w.rs_mj_m2 * cc;
+                    if (cr->biomass_light_primary) {
+                        const real tr_pot = kcb * et0;
+                        gain = light * (tr_pot > 1.0e-9 ? tr / tr_pot : 1.0);
+                    } else {
+                        gain = std::min(gain, light);
+                    }
+                }
+                s.biomass[c] += gain * f_stress * s.weed_f[c];
             }
             if (st >= cr->stage_flowering) {
                 // Harvest index (AquaCrop ch. 3.12): pollination during the flowering distribution, then

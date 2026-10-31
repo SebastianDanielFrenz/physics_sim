@@ -58,6 +58,23 @@ std::string soil_validation_error(const SoilDesc& s) {
     return c.err;
 }
 
+real CropDesc::co2_factor(real ppm) const {
+    if (co2_response.empty()) return 1.0;
+    real f;
+    if (ppm <= co2_response.front().ppm) f = co2_response.front().factor;
+    else if (ppm >= co2_response.back().ppm) f = co2_response.back().factor;
+    else {
+        std::size_t i = 1;
+        while (co2_response[i].ppm < ppm) ++i;
+        const Co2Point& a = co2_response[i - 1];
+        const Co2Point& b = co2_response[i];
+        f = a.factor + (b.factor - a.factor) * (ppm - a.ppm) / (b.ppm - a.ppm);
+    }
+    real ftype = (40.0 - wp_star_g_m2) / 20.0;
+    ftype = ftype < 0.0 ? 0.0 : (ftype > 1.0 ? 1.0 : ftype);
+    return 1.0 + ftype * (f - 1.0);
+}
+
 std::string crop_validation_error(const CropDesc& d) {
     Check c{"crop " + d.name + ": ", {}};
     c.fail_if(d.name.empty(), "name must not be empty");
@@ -102,6 +119,14 @@ std::string crop_validation_error(const CropDesc& d) {
     c.nonneg("biomass_gdd_full", d.biomass_gdd_full);
     c.nonneg("biomass_rs_ref_mj_m2", d.biomass_rs_ref_mj_m2);
     c.nonneg("biomass_rue_g_mj", d.biomass_rue_g_mj);
+    for (std::size_t i = 0; c.err.empty() && i < d.co2_response.size(); ++i) {
+        c.fail_if(!(fin(d.co2_response[i].ppm) && d.co2_response[i].ppm > 0.0 && fin(d.co2_response[i].factor) && d.co2_response[i].factor > 0.0),
+                  "co2_response entries need ppm > 0 and factor > 0");
+        if (i > 0) c.fail_if(!(d.co2_response[i].ppm > d.co2_response[i - 1].ppm), "co2_response ppm must be ascending");
+    }
+    c.fail_if(!fin(d.biomass_rue_t_low_c) || !fin(d.biomass_rue_t_full_c) ||
+                  (d.biomass_rue_t_full_c != 0.0 && !(d.biomass_rue_t_full_c > d.biomass_rue_t_low_c)),
+              "biomass_rue_t_full_c must exceed biomass_rue_t_low_c");
     c.frac("hi0", d.hi0);
     c.fail_if(!(fin(d.straw_harvest_fraction) && d.straw_harvest_fraction > 0.0 && d.straw_harvest_fraction <= 1.0),
               "straw_harvest_fraction must be in (0, 1]");

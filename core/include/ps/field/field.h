@@ -74,6 +74,7 @@ struct FieldConfig {
     std::vector<CropDesc> crops;          // palette; crop id = index + 1, 0 = no crop
     std::vector<std::uint16_t> cell_soil; // empty = every cell soil 0, else nx * ny entries
     real initial_depletion_fraction = 0.0;  // of the root zone's TAW, and the layer below's
+    real co2_ppm = 369.41;                // atmospheric CO2; AquaCrop's reference (factor 1). A crop's co2_response scales WP* and rue
     std::int64_t initial_day = -1;        // the day the initial state belongs to (the next step is initial_day + 1)
     // Nutrients (F1b). Every soil and crop of the palettes then needs its nutrient block.
     bool nutrients_enabled = false;
@@ -359,6 +360,7 @@ private:
     const SoilDesc& soil_of(std::size_t c) const { return cfg_.soils[soil_idx_[c]]; }
 
     FieldConfig cfg_;
+    std::vector<real> co2_f_;          // per crop (index = id - 1): WP* / rue multiplier of cfg_.co2_ppm
     std::vector<int> weed_vol_crop_;   // per weed group: crop id whose shed grain seeds it, 0 = none
     int moa_count_ = 0;
     int nx_ = 0, ny_ = 0;

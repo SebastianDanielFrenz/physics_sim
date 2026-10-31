@@ -7,6 +7,7 @@
   "crops": ["../crops/winter_wheat.json"],
   "grid": { "nx": 1, "ny": 1, "cell_size_m": 4.0 },
   "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
   "operations": [
     { "op": "sow", "crop": "winter_wheat", "doy": 280 },
     { "op": "harvest", "doy": 240, "first_year": 1 }

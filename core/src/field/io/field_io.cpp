@@ -272,6 +272,20 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         d.biomass_gdd_full = w.number("gdd_full", true, 0.0);
         d.biomass_rs_ref_mj_m2 = w.number("rs_ref_mj_m2", false, 0.0);
         d.biomass_rue_g_mj = w.number("rue_g_mj", false, 0.0);
+        d.biomass_rue_t_low_c = w.number("rue_t_low_c", false, 0.0);
+        d.biomass_rue_t_full_c = w.number("rue_t_full_c", false, 0.0);
+        d.biomass_light_primary = w.number("light_primary", false, 0.0) != 0.0;
+        if (const json* arr = w.child("co2_response")) {
+            if (!arr->is_array() || arr->empty()) w.fail("\"co2_response\" must be a non-empty array of {ppm, factor}");
+            for (const json& e : *arr) {
+                ObjectReader pr(e, "biomass.co2_response[]", origin);
+                Co2Point cp;
+                cp.ppm = pr.number("ppm", true, 0.0);
+                cp.factor = pr.number("factor", true, 0.0);
+                pr.finish();
+                d.co2_response.push_back(cp);
+            }
+        }
         w.skip("source");
         w.finish();
     }

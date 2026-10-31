@@ -66,6 +66,7 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
         g.finish();
     }
     sc.field.initial_depletion_fraction = r.number("initial_depletion_fraction", false, 0.0);
+    sc.field.co2_ppm = r.number("co2_ppm", false, sc.field.co2_ppm);
     sc.field.initial_day = -1;
     if (r.has("soil_pattern")) {
         // soil index per column, repeated across the grid

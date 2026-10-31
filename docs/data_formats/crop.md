@@ -79,10 +79,19 @@ Rejections: untagged or unknown key, shares outside [0, 1], `ph_floor < ph_opt_l
 
 ## `biomass.rue_g_mj` and `yield.straw_harvest_fraction` (F1c)
 
-`biomass.rue_g_mj` (optional, 0 = off): radiation-use cap on the daily biomass gain, at most `rue x Rs x cc` g/m2/day. AquaCrop's
-`WP* x Tr/ET0` does not depend on the light, so a canopy at low spring radiation would grow as fast as in June. (The older
-optional `biomass.rs_ref_mj_m2`, growth proportional to Rs below a reference radiation, stays available and is off in the shipped
-crop.) `yield.straw_harvest_fraction` (optional, default 1): share of the non-grain aboveground biomass a harvest can carry off;
+`biomass.rue_g_mj` (optional, 0 = off): light-use efficiency, g per MJ of global radiation. AquaCrop's `WP* x Tr/ET0` does not
+depend on the light or the temperature (the same gain on a 3 and a 25 MJ day), so a canopy in early spring would grow as fast as in
+June and the model had 6.7 t/ha at BBCH 31 where fields have 2-4 t/ha. With `rue_g_mj` set the light potential is
+`rue x f_CO2 x f_T(Tmean) x Rs x cc` g/m2/day; `f_T` is a linear ramp from 0 at `biomass.rue_t_low_c` to 1 at `biomass.rue_t_full_c`
+(both optional; `rue_t_full_c` = 0: no ramp, f_T = 1; full must exceed low). `biomass.light_primary` (optional, default 0): 1 = the
+daily gain is the light potential x Tr/Tr_potential (Tr_potential = Kcb x ET0, so water stress and a closed stoma scale the gain)
+and `wp_star_g_m2` is not used for the gain; 0 = the smaller of the light potential and `WP* x Tr/ET0 x GDD factor`. The stress
+factors (N, P/K, pH, weeds, rotation) multiply the result in both forms. winter_wheat: rue 1.1, ramp 5..13 C, light_primary 1.
+`biomass.co2_response` (optional array of `{ppm, factor}`, ppm ascending; empty = factor 1): multiplier of WP* and of the light
+potential over the atmospheric CO2 concentration (AquaCrop Eq. 3.11c, linear interpolation, clamped at the ends); the
+`FieldConfig::co2_ppm` / scenario key `co2_ppm` (default 369.41, the table's reference, factor 1) selects the row.
+(The older optional `biomass.rs_ref_mj_m2`, growth proportional to Rs below a reference radiation, stays available and is off in the
+shipped crop.) `yield.straw_harvest_fraction` (optional, default 1): share of the non-grain aboveground biomass a harvest can carry off;
 the rest (stubble, chaff, leaf litter) stays on the field as residue. winter_wheat: 0.68.
 
 ## Optional `management` block (F1c)

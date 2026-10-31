@@ -21,6 +21,12 @@ struct CropStageDesc {
     real gdd = 0.0;      // development units from sowing at which the stage starts (ascending)
 };
 
+// One point of the AquaCrop WP* adjustment for atmospheric CO2 (Eq. 3.11c, Table 3.11c/1: the multiplier of a C3 crop).
+struct Co2Point {
+    real ppm = 0.0;
+    real factor = 1.0;
+};
+
 struct CropDesc {
     std::string name;
     std::string family;          // crop family; the pathogen pressure of F1d is per family
@@ -63,7 +69,15 @@ struct CropDesc {
     // Biomass.
     real wp_star_g_m2 = 0.0;             // normalised water productivity, g biomass per m2 per (Tr/ET0 mm/mm)
     real biomass_gdd_full = 0.0;         // GDD/day for unrestricted biomass; below it growth is proportional (0 = off)
-    real biomass_rue_g_mj = 0.0;         // radiation-use cap on the daily biomass gain: at most rue x Rs x canopy cover g/m2/day (0 = off)
+    real biomass_rue_g_mj = 0.0;         // light-limited potential of the daily biomass gain: rue x f_T x Rs x canopy cover g/m2/day (0 = off); the stress factors multiply the smaller of it and the water-limited gain
+    real biomass_rue_t_low_c = 0.0;      // f_T: linear in the daily mean air temperature, 0 at and below this ...
+    real biomass_rue_t_full_c = 0.0;     // ... and 1 at and above this (both 0 = no temperature response)
+    bool biomass_light_primary = false;  // true: the daily gain is the light potential x Tr/Tr_potential (WP* unused); false: the smaller of it and WP* x Tr/ET0
+    std::vector<Co2Point> co2_response;  // WP* (and rue) multiplier of a C3 crop over the CO2 concentration, ascending ppm; empty = no adjustment
+
+    // WP* adjustment for the CO2 concentration (AquaCrop Eq. 3.11c/d): 1 + f_type (f_CO2 - 1), f_CO2 interpolated from
+    // co2_response, f_type = clamp((40 - WP*)/20, 0, 1). 1 when the table is empty.
+    real co2_factor(real ppm) const;
     real biomass_rs_ref_mj_m2 = 0.0;     // daily global radiation (MJ/m2) at and above which biomass growth is unrestricted; below it proportional (0 = off)
 
     // Harvest index (AquaCrop, Raes et al. reference manual ch. 3.12). HI at the end of

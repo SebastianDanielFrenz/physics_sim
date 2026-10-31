@@ -24,6 +24,7 @@ never harvests or kills a crop by itself.
 | `crops` | yes | list of crop file paths; crop ids are 1-based list positions, rules name the crop |
 | `grid` | yes | `nx`, `ny`, `cell_size_m` (4), `origin_x_m`, `origin_y_m` |
 | `initial_depletion_fraction` | no (0) | of both buckets' TAW |
+| `co2_ppm` | no (369.41) | atmospheric CO2 for the crops' `biomass.co2_response` (369.41 = AquaCrop reference, factor 1; the shipped demos use 400) |
 | `test_irrigate_to_capacity` | no (false) | test only: every morning the profile is brought to field capacity (booked as irrigation) |
 | `nutrients` | no (false) | boolean: the field runs the nutrient model (F1b); needs the `nutrients` blocks of every soil and crop |
 | `materials` | no | list of `physics_sim.field_material/1` paths ([field_material.md](field_material.md)); ids are 1-based list positions |

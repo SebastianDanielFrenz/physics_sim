@@ -43,6 +43,7 @@
     "cell_size_m": 4.0
   },
   "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
   "operations": [
     {
       "op": "apply",

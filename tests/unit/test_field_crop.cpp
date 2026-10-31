@@ -276,7 +276,8 @@ TEST_CASE("C3 canopy cover follows the AquaCrop growth and senescence laws", "[f
 }
 
 TEST_CASE("C4 biomass = WP* Tr/ET0 (thermally limited), harvest index builds after flowering", "[field][crop]") {
-    const CropDesc crop = no_vern();
+    CropDesc crop = no_vern();
+    crop.biomass_rue_g_mj = 0.0;   // the pure AquaCrop law: the light potential has its own test (C4b)
     // Same crop at ET0 = 4 and 6 mm/day: Tr/ET0 (the crop coefficient) is the same, so is the biomass.
     Field a = irrigated_field(crop), b = irrigated_field(crop);
     double prev_biomass = 0.0;
@@ -328,6 +329,74 @@ TEST_CASE("C4 biomass = WP* Tr/ET0 (thermally limited), harvest index builds aft
     CHECK(final_hi(16.0, 40.0) < 1e-12);
     // Cold at flowering: Tmin 0 is 5 K below the 5 C threshold: failure; Tmin 5 is no stress.
     CHECK(final_hi(0.0, 14.0) < 1e-12);
+}
+
+TEST_CASE("C4c light-limited biomass: RUE x f_T(Tmean) x Rs x CC, CO2 normalisation, light-primary and min-law forms", "[field][crop]") {
+    CropDesc crop = no_vern();
+    REQUIRE(crop.biomass_rue_g_mj > 0.0);
+    REQUIRE(crop.biomass_light_primary);              // the shipped wheat file uses the light-primary form
+    const double rue = crop.biomass_rue_g_mj;
+    const double lo = crop.biomass_rue_t_low_c, hi = crop.biomass_rue_t_full_c;
+
+    // The CO2 factor of the shipped table: 1 at the AquaCrop reference 369.41 ppm, 1.073 at 400 ppm (Table 3.11c/1).
+    CHECK_THAT(crop.co2_factor(369.41), WithinAbs(1.0, 1e-12));
+    CHECK_THAT(crop.co2_factor(400.0), WithinAbs(1.073, 1e-12));
+    CHECK_THAT(crop.co2_factor(100.0), WithinAbs(0.815, 1e-12));     // clamped below the table
+    CHECK_THAT(crop.co2_factor(900.0), WithinAbs(1.230, 1e-12));     // clamped above the table
+
+    // Daily gain over one season at constant weather: expected = rue f_co2 f_T Rs CC (Tr/Tr_pot = 1 while irrigated).
+    const auto season_ratio = [&](const CropDesc& c, double co2, double tmin, double tmax) {
+        FieldConfig cfg = test_field::one_cell_config(test_field::loess(), c);
+        cfg.co2_ppm = co2;
+        Field f(cfg);
+        f.set_irrigate_to_capacity(true);
+        f.sow_all(1);
+        const double f_co2 = c.co2_factor(co2);
+        const double tmean = 0.5 * (tmin + tmax);
+        const double f_t = std::min(1.0, std::max(0.0, (tmean - lo) / (hi - lo)));
+        double prev = 0.0, worst = 0.0;
+        int days = 0;
+        for (int k = 1; k <= 200; ++k) {
+            f.step_day(test_field::synth(k - 1, tmin, tmax, 0.0, 0.0, 4.0));
+            const CellView v = f.view(0);
+            if (v.cc > 0.0 && v.stage < c.stage_maturity) {
+                const double expected = rue * f_co2 * f_t * 15.0 * v.cc;          // synth: Rs = 15 MJ/m2
+                const double got = v.biomass_g_m2 - prev;
+                if (expected > 1e-9) worst = std::max(worst, std::fabs(got / expected - 1.0));
+                else worst = std::max(worst, std::fabs(got));
+                ++days;
+            }
+            prev = v.biomass_g_m2;
+        }
+        REQUIRE(days > 50);
+        return worst;
+    };
+    CHECK(season_ratio(crop, 369.41, 5.0, 15.0) < 1e-9);       // Tmean 10: on the ramp (0.625)
+    CHECK(season_ratio(crop, 400.0, 5.0, 15.0) < 1e-9);        // CO2 400: x 1.073
+    CHECK(season_ratio(crop, 369.41, 10.0, 20.0) < 1e-9);      // Tmean 15: above the ramp, f_T = 1
+    CHECK(season_ratio(crop, 369.41, -4.0, 6.0) < 1e-9);       // Tmean 1: below the ramp, no gain at all
+
+    // Min-law form (light_primary off): the daily gain is the smaller of the light potential and WP* x Tr/ET0 x GDD factor.
+    CropDesc m = crop;
+    m.biomass_light_primary = false;
+    Field f(test_field::one_cell_config(test_field::loess(), m));
+    f.set_irrigate_to_capacity(true);
+    f.sow_all(1);
+    double prev = 0.0;
+    int light_binding = 0, water_binding = 0;
+    for (int k = 1; k <= 200; ++k) {
+        f.step_day(test_field::synth(k - 1, 5.0, 15.0, 0.0, 0.0, 4.0));
+        const CellView v = f.view(0);
+        if (v.cc > 0.0 && v.stage < m.stage_maturity) {
+            const double f_t = (10.0 - lo) / (hi - lo);
+            const double light = rue * f_t * 15.0 * v.cc;
+            const double water = m.wp_star_g_m2 * m.kc_tr_x * cc_star(v.cc) * (10.0 / m.biomass_gdd_full);
+            REQUIRE_THAT(v.biomass_g_m2 - prev, WithinRel(std::min(light, water), 1e-9));
+            (light < water ? light_binding : water_binding)++;
+        }
+        prev = v.biomass_g_m2;
+    }
+    CHECK(light_binding > 0);       // on this cool spring the light potential binds on at least some days
 }
 
 TEST_CASE("C4b harvest index under drought: pollination and stomatal-closure factors of AquaCrop 3.12", "[field][crop]") {

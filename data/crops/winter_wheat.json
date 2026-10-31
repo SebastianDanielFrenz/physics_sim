@@ -121,9 +121,54 @@
     "source": {
       "wp_star_g_m2": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.1: WP* 15.0 g/m2.",
       "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum growing degrees required for full biomass production 13.0-15.0 degC day (estimated); 14 is the midpoint.",
-      "rue_g_mj": "[AS] radiation-use cap on the daily biomass gain: at most rue x Rs x canopy cover (g/m2/day). The AquaCrop gain WP* x Tr/ET0 does not depend on the radiation at all, so a canopy at low spring light would grow as fast as in June; 1.4 g per MJ of global radiation is the order of the total-biomass radiation-use efficiency of wheat (about 2.8 g/MJ PAR, Gallagher and Biscoe 1978, recalled, not re-read). It bites in February-March only: B at BBCH 31 stays 6-7 t/ha where field figures are 2-3 t/ha - a structural property of the Tr/ET0 growth law, recorded in the F1c report."
+      "rue_g_mj": "[C]+[D] light-limited potential of the daily biomass gain: rue x f_T(Tmean) x Rs x canopy cover, g/m2/day, global radiation Rs. Gallagher and Biscoe 1978 (J. Agric. Sci. 91:47-60, abstract read: crop dry weight tracked the total PAR absorbed at about 2.2 g per MJ) x PAR share of global radiation 0.5 [D] = 1.1 g/MJ. The AquaCrop gain WP* x Tr/ET0 has no light term (the same gain on a 3 MJ and a 25 MJ day); the stresses multiply the smaller of the two. Replaces the F1c cap of 1.4 g/MJ [AS].",
+      "rue_t_low_c": "[M] ramp of the light-use efficiency over the daily mean air temperature: 0 at and below this value, 1 at rue_t_full_c. Form: linear ramp as in the SIMPLE crop model (Zhao et al. 2019, Eur. J. Agron. 104:97-106; read in a code port, not the paper). Both values fitted (F1d part 1) so that the aboveground biomass at BBCH 31 falls from 6.7 t/ha to about 4 t/ha without the harvest falling by more than 15 %; field benchmark: AHDB Wheat growth guide, 'Biomass growth and dry matter accumulation in wheat': 1.9 t/ha at GS31 and 'just 10 % of total growth by GS31' (page read). The model's BBCH 31 (DWD mean 26 April) is later than the AHDB date of 10 April; the fit does not reach 1.9 t/ha, see the F1d report.",
+      "rue_t_full_c": "[M] see rue_t_low_c.",
+      "light_primary": "[M] 1: the daily gain is the light potential x Tr/Tr_potential (the water factor of the AquaCrop gain, Tr = transpiration, Tr_potential = Kcb x ET0), WP* is then not used for the gain. 0: the smaller of the light potential and WP* x Tr/ET0. With 0 and the ramp below the harvest was 14 % under the DESTATIS mean at the same BBCH 31 biomass (F1d part 1); with 1 the same early biomass keeps the yield, because the front-loaded gain of the water law is no longer needed to make up for summer water stress. A modelling choice, not a published coefficient.",
+      "co2_response": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), chapter 3, Table 3.11c/1 (Eq. 3.11c): multiplier of WP* for a C3 crop (f_type = 1) over the atmospheric CO2 concentration, the FACE-based column (fsink 0); WP* is normalised to 369.41 ppm (the year 2000). Applied to WP* and, as photosynthesis, to rue. The crop's f_type = clamp((40 - WP*)/20, 0, 1) (Eq. 3.11d)."
     },
-    "rue_g_mj": 1.4
+    "rue_g_mj": 1.1,
+    "rue_t_low_c": 5.0,
+    "rue_t_full_c": 13.0,
+    "light_primary": 1,
+    "co2_response": [
+      {
+        "ppm": 298.2,
+        "factor": 0.815
+      },
+      {
+        "ppm": 304.5,
+        "factor": 0.832
+      },
+      {
+        "ppm": 311.9,
+        "factor": 0.851
+      },
+      {
+        "ppm": 331.11,
+        "factor": 0.901
+      },
+      {
+        "ppm": 369.41,
+        "factor": 1.0
+      },
+      {
+        "ppm": 400.0,
+        "factor": 1.073
+      },
+      {
+        "ppm": 450.0,
+        "factor": 1.162
+      },
+      {
+        "ppm": 500.0,
+        "factor": 1.214
+      },
+      {
+        "ppm": 550.0,
+        "factor": 1.23
+      }
+    ]
   },
   "yield": {
     "hi0": 0.46,
