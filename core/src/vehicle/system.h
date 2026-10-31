@@ -94,6 +94,7 @@ public:
     [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).desc(); }
     [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).state(); }
     void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) { tools_[id.index].at(tool).set_gauge_depth(depth_m); }
+    void set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s) { tools_[id.index].at(tool).set_material_flow(kg_s); }
     void set_tool_enabled(VehicleId id, std::size_t tool, bool on) {
         machine::ToolRuntime& t = tools_[id.index].at(tool);
         if (t.desc().kind != machine::ToolKind::Applicator) throw std::invalid_argument("set_tool_enabled: tool '" + t.desc().name + "' is not an applicator");

@@ -69,7 +69,8 @@ struct ToolPtoDesc {
     real no_load_kw = 0.0;
     real kw_per_m = 0.0;          // with the rotor running, per metre of width
     real specific_energy_mj_m3 = 0.0; // per cubic metre of soil worked
-    real min_speed_fraction = 0.0; // below this share of nominal the tool does no work
+    real specific_energy_kj_kg = 0.0; // per kilogram of material through the tool (ToolRuntime::set_material_flow): a sprayer's pump, a spreader's discs, a slurry vacuum pump, later a combine's threshing
+    real min_speed_fraction = 0.0; // below this share of nominal the tool's quality falls in proportion (it keeps working, slower)
 };
 
 // What a tool does with the ground. A Soil tool is pulled through it (draft, soil force, depth); an Applicator puts something
@@ -94,6 +95,12 @@ struct ToolDesc {
     ToolDraftDesc draft;
     ToolSoilDesc soil;
     ToolPtoDesc pto;
+    // This machine against the class the coefficients describe: the share of the class's draft and of its shaft power it
+    // needs for the same work. 1 = the class; a better machine of the same type is below 1. Set by the machine part's
+    // top-level "efficiency" block, which a part that extends another can state alone.
+    real efficiency_draft = 1.0;
+    real efficiency_shaft = 1.0;
+    std::string efficiency_source;
 };
 
 struct MachineDesc {
@@ -110,8 +117,10 @@ void validate_machine(const MachineDesc& d); // std::invalid_argument
 [[nodiscard]] real tool_draft_n(const ToolDesc& tool, const SoilSample& soil, real speed_km_h, real depth_m);
 // 1 up to the tool's top speed, then down to the floor. Slower never hurts.
 [[nodiscard]] real tool_quality(const ToolDesc& tool, real speed_km_h);
-// The rotor's power with soil going through it at this speed and depth; speed 0 gives the no-load power.
-[[nodiscard]] real tool_pto_power_w(const ToolDesc& tool, real speed_m_s, real depth_m);
+// The shaft power the tool takes at this speed and depth: no load + per metre of width + per volume of soil + per kilogram
+// through it (`material_kg_s`, which the game feeds), times the machine's efficiency. Speed 0 gives the no-load power.
+// Soil tools and applicators alike.
+[[nodiscard]] real tool_pto_power_w(const ToolDesc& tool, real speed_m_s, real depth_m, real material_kg_s = 0.0);
 
 // Last tick (sim thread only). Derived, not hashed.
 struct ToolState {
@@ -126,6 +135,7 @@ struct ToolState {
     real pto_torque_nm = 0.0;      // at the tractor's shaft
     real gauge_depth_m = 0.0;
     bool enabled = false;     // Applicator only: switched on (World::set_tool_enabled)
+    real material_kg_s = 0.0; // what the game says goes through the tool (World::set_tool_material_flow)
 };
 
 // --- What a machine needs of a tractor, for a shop's "needs about N kW". ---
@@ -153,8 +163,10 @@ struct ToolPowerSweep {
     real needed_kw = 0.0;               // the worst point with the reserve: what the shop quotes
 };
 
-// Sweeps the tool's speed range in `speed_steps` steps at its nominal depth.
-[[nodiscard]] ToolPowerSweep tool_power_sweep(const ToolDesc& tool, const ToolPowerSpec& spec, int speed_steps = 5);
+// Sweeps the tool's speed range in `speed_steps` steps at its nominal depth. `material_kg_m2` is what the game puts through the
+// tool per square metre of ground (a spray rate, a spread rate): at each speed it makes a flow of width x speed x that, which the
+// tool's `specific_energy_kj_kg` is taken against.
+[[nodiscard]] ToolPowerSweep tool_power_sweep(const ToolDesc& tool, const ToolPowerSpec& spec, int speed_steps = 5, real material_kg_m2 = 0.0);
 
 // A tool against a tractor, as limit findings.
 struct ToolTractorFit {

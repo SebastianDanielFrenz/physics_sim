@@ -97,7 +97,7 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
 }
 
 [[nodiscard]] machine::ToolPtoDesc read_pto(const json& j, const std::string& ctx) {
-    reject_unknown(j, {"source", "nominal_rpm", "inertia_kgm2", "no_load_kw", "kw_per_m", "specific_energy_mj_m3", "min_speed_fraction"}, ctx);
+    reject_unknown(j, {"source", "nominal_rpm", "inertia_kgm2", "no_load_kw", "kw_per_m", "specific_energy_mj_m3", "specific_energy_kj_kg", "min_speed_fraction"}, ctx);
     machine::ToolPtoDesc p;
     p.present = true;
     p.source = tagged_source(j, ctx);
@@ -106,6 +106,7 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     p.no_load_kw = number(j, "no_load_kw", ctx);
     p.kw_per_m = number(j, "kw_per_m", ctx);
     p.specific_energy_mj_m3 = number(j, "specific_energy_mj_m3", ctx);
+    p.specific_energy_kj_kg = j.contains("specific_energy_kj_kg") ? number(j, "specific_energy_kj_kg", ctx) : real(0.0);
     p.min_speed_fraction = number(j, "min_speed_fraction", ctx);
     return p;
 }
@@ -134,7 +135,7 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     const std::string range_ctx = ctx + ": range";
     const bool applicator = t.kind == machine::ToolKind::Applicator;
     if (applicator) {
-        for (const char* key : {"draft", "soil", "pto"}) {
+        for (const char* key : {"draft", "soil"}) {
             if (j.contains(key)) throw std::runtime_error(ctx + ": an applicator has no '" + key + "' block");
         }
         reject_unknown(range, {"source", "speed_min_km_h", "speed_max_km_h", "overspeed_quality_per_km_h", "quality_floor"}, range_ctx);
@@ -152,7 +153,10 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     t.overspeed_quality_per_km_h = number(range, "overspeed_quality_per_km_h", range_ctx);
     t.quality_floor = number(range, "quality_floor", range_ctx);
 
-    if (applicator) return t;
+    if (applicator) {
+        if (j.contains("pto")) t.pto = read_pto(object(j, "pto", ctx), ctx + ": pto");
+        return t;
+    }
     t.draft = read_draft(object(j, "draft", ctx), ctx + ": draft");
     t.soil = read_soil(object(j, "soil", ctx), ctx + ": soil");
     if (j.contains("pto")) t.pto = read_pto(object(j, "pto", ctx), ctx + ": pto");
@@ -164,12 +168,25 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
 machine::MachineDesc load_machine_json(const std::string& path, const MachineSockets& sockets) {
     const json j = load_json_with_extends(std::filesystem::path(path));
     if (j.value("format", std::string()) != "physics_sim.machine/1") throw std::runtime_error(path + ": 'format' must be \"physics_sim.machine/1\"");
-    reject_unknown(j, {"format", "name", "source", "tools"}, path);
+    reject_unknown(j, {"format", "name", "source", "tools", "efficiency"}, path);
     machine::MachineDesc m;
     m.name = text(j, "name", path);
     m.source = text(j, "source", path);
     if (!j.contains("tools") || !j.at("tools").is_array()) throw std::runtime_error(path + ": 'tools' is required and must be an array");
     for (const json& t : j.at("tools")) m.tools.push_back(read_tool(t, sockets, path));
+    if (j.contains("efficiency")) {
+        const json& e = object(j, "efficiency", path);
+        const std::string ctx = path + ": efficiency";
+        reject_unknown(e, {"source", "draft", "shaft"}, ctx);
+        const std::string source = tagged_source(e, ctx);
+        const real draft = e.contains("draft") ? number(e, "draft", ctx) : real(1.0);
+        const real shaft = e.contains("shaft") ? number(e, "shaft", ctx) : real(1.0);
+        for (machine::ToolDesc& t : m.tools) {
+            t.efficiency_draft = draft;
+            t.efficiency_shaft = shaft;
+            t.efficiency_source = source;
+        }
+    }
     machine::validate_machine(m);
     return m;
 }
