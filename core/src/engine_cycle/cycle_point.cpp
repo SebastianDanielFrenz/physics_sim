@@ -39,6 +39,8 @@ PointResult run_operating_point(const CycleStepper& proto, const OperatingPoint&
     r.ca50_deg = s.wiebe().angle_at_fraction(0.5) - 360.0;
     r.steps = total;
     r.ivc = PointResult::Ivc{s.ivc_crank_deg(), s.ivc_cyl_m(), s.ivc_cyl_u(), s.ivc_cyl_mb()};
+    r.burn = s.burn_angles();
+    r.mbt_spark_btdc = s.mbt_spark_btdc();
     return r;
 }
 

@@ -128,7 +128,14 @@ ec::OperatingPoint gen_op(const CycleModelDesc& d, real rpm, real p) {
     if (d.intake->compressor_supply) op.p_supply_pa = std::max(kIsaAirPressurePa, p * 1.05);
     op.lambda = 1.0;
     const bool scheduled = !d.spark_advance_deg.x.empty();
-    op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) + d.ignition_delay_deg : mbt_atdc(d);
+    if (d.burn_law == CycleModelDesc::BurnLawMode::Standard) {
+        // Burn law (2026-10-19, vault PHYS-079): the generator's node_op - ECU spark in Spark mode (the law adds its own
+        // delay), MBT tracking relative to the cycle's own MBT.
+        op.spark_mode = scheduled ? ec::OperatingPoint::SparkMode::Spark : ec::OperatingPoint::SparkMode::MbtOffset;
+        op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) : 0.0;
+    } else {
+        op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) + d.ignition_delay_deg : mbt_atdc(d);
+    }
     op.intake_advance_deg = d.cam.intake_advance_deg.x.empty() ? 0.0 : d.cam.intake_advance_deg.value(rpm, p);
     op.exhaust_retard_deg = d.cam.exhaust_retard_deg.x.empty() ? 0.0 : d.cam.exhaust_retard_deg.value(rpm, p);
     return op;
@@ -312,8 +319,8 @@ EngineMapsPtr mazda_pipes_sketch() {
 
 // W8a: the runtime's own lookup (map_pressure_index + Table2D::value, as SimulatedEngine reads ve/pmep_excess/theta_kl)
 // returns every kept node at its own pressure and every WOT node at its own plenum pressure at ISA: the table coordinate
-// exactly, the value to <= 1e-15 relative (Table2D's bilinear form v0 + t (v1 - v0) at t = 1 is 1-2 ulp off an interior
-// knot - for every author node too, before P7d).
+// exactly, the value to <= 1e-15 relative to the largest neighbouring knot (Table2D's bilinear form v0 + t (v1 - v0) at
+// t = 1 is 1-2 ulp of the larger operand off an interior knot - for every author node too, before P7d).
 void check_nodes_exact(const EngineMaps& em) {
     const SimulatedEngineMapsDesc& m = em.maps;
     REQUIRE(has_wot_rows(m));
@@ -334,7 +341,19 @@ void check_nodes_exact(const EngineMaps& em) {
             for (const Table2D* t : tables) {
                 if (t->values.empty()) continue;
                 const real want = t->values[ir * np + ip];
-                CHECK(std::abs(t->value(rpm, ix.y) - want) <= 1e-15 * std::abs(want));
+                // 2026-10-20 (burn law phase 3): v0 + t (v1 - v0) at t = 1 rounds to a few ulp of the larger OPERAND, not
+                // of the result, so the bound is relative to the largest knot the bilinear lookup can read (the 3 x 3
+                // neighbourhood). The 4-row Sketch grid of the Mazda pipe experiment has theta_kl 53.43 / 1.71 / 16.10 deg
+                // along rpm 2000 / 2500 / 3000 at 80 kPa: 1.71 comes back 3.55e-15 off (half an ulp of 53.4) against a
+                // 1.71e-15 result-relative bound. The value is still the node's own to rounding.
+                real scale = std::abs(want);
+                for (std::size_t jr = (ir > 0 ? ir - 1 : 0); jr < std::min(nr, ir + 2); ++jr) {
+                    for (std::size_t jp = (ip > 0 ? ip - 1 : 0); jp < std::min(np, ip + 2); ++jp) {
+                        scale = std::max(scale, std::abs(t->values[jr * np + jp]));
+                    }
+                }
+                INFO("operand scale " << scale);
+                CHECK(std::abs(t->value(rpm, ix.y) - want) <= 1e-15 * scale);
                 ++checked;
             }
         }
@@ -379,9 +398,15 @@ void check_pins(const char* file, const std::filesystem::path& dir, const std::v
     const SimulatedEngineDesc sd = load_desc(file, dir);
     for (const Pin& p : pins) {
         INFO(file << " " << qname(p.q));
-        CHECK(engine_map_cache_key(*sd.cycle, sd.fuels[0], p.q) == p.key);
-        if (!generate) continue;
+        const std::uint64_t key = engine_map_cache_key(*sd.cycle, sd.fuels[0], p.q);
+        std::printf("P7d pins %s %s: key 0x%016llx", file, qname(p.q), static_cast<unsigned long long>(key));
+        CHECK(key == p.key);
+        if (!generate) {
+            std::printf("\n");
+            continue;
+        }
         const EngineMapsPtr m = generate_engine_maps(*sd.cycle, sd.fuels[0], p.q, &pool());
+        std::printf(", content_hash 0x%016llx\n", static_cast<unsigned long long>(m->content_hash));
         CHECK(m->content_hash == p.hash);
         CHECK(!has_wot_rows(m->maps));
     }
@@ -397,7 +422,7 @@ TEST_CASE("P7d W1: the Mazda pipe experiment generates Sketch maps with a WOT to
     for (real y : m->maps.ve.y) std::printf(" %.0f", y);
     std::printf(", non-breathing filled %d, dropped rows %d, held %d\n", m->nonbreathing_points, m->wot_dropped_rows,
                 m->held_plenum_points);
-    CHECK(m->generator_version == kPipeWotGeneratorVersion);
+    CHECK(m->generator_version == kLawPipeWotGeneratorVersion); // burn law 2026-10-19 (was kPipeWotGeneratorVersion 4)
     CHECK(m->nonbreathing_points >= 1); // the long-overlap nodes the fix exists for
     for (real v : m->maps.ve.values) CHECK((std::isfinite(v) && v > 0.0));
     check_nodes_exact(*m);
@@ -533,25 +558,35 @@ TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel c
 // W5h + W8e: compressor-fed pipe engines (the hyper) and lumped engines keep their key and content hash at every quality
 // (pins recorded on the unchanged generator, header). Keys always; the fast hashes here, the hyper's slow ones [long].
 TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map hashes", "[cycle][pipe][drivetrain]") {
+    // 2026-10-19 burn law F + knock model v5 (vault PHYS-079) moved the A25A gen and Mazda keys and hashes; was A25A
+    // 0x7d4f5df61b83fd3d/0x75f0658d60c662b8, 0xbd44b606c7ef765f/0x4e108f53ec6e4541, 0x1d4a09fe71b9b9ce/0x470361fea395f4f3,
+    // Mazda 0xd64488ea1fff9442/0x1bb312f8a650b0f4, 0x964f30d973941b20/0xbafd38470361fbab, 0x3649dce1c9c9d7b1/0x94534cc297971f9e.
+    // 2026-10-20 burn law v3 + knock model v6 (PHYS-079 phase 3) moved them again, and the Sketch rows again for the
+    // 4-row Sketch grid (kSketchGridVersion 2 in the Sketch key); was A25A 0x2fe4dae6fb085a53/0x9fa4fb02b889c7ab,
+    // 0xefef82d64e9ce131/0x2e71479db8c0b848, 0x4ff4d6cdf86724a0/0x2eaa40899574544b, Mazda 0x8140a538e6448b19/
+    // 0x23a4d1f462b9a556, 0xc135fd4992b0043b/0x117bd3ef7ecc0cf8, 0x213b51413c7a47aa/0x7cec2a203265eb47.
+    // Hyper re-pinned 2026-10-20 (burn v3 / knock v6, owner 2026-10-20: hyper is a guess, not tuned; Sketch also
+    // kSketchGridVersion 2): was Sketch 0x98217b790e718eb9/0xa09334bc88debc6c, Preview 0xd816d389badd07db/
+    // 0xc962e26f4009c30b, Full 0x381c278164a74b4a/0xd1dee97c3fdcaa0c.
     check_pins("toyota_a25a_fks_gen.json", kEngines,
-               {{MapQuality::Sketch, 0x7d4f5df61b83fd3dull, 0x75f0658d60c662b8ull},
-                {MapQuality::Preview, 0xbd44b606c7ef765full, 0x4e108f53ec6e4541ull},
-                {MapQuality::Full, 0x1d4a09fe71b9b9ceull, 0x470361fea395f4f3ull}},
+               {{MapQuality::Sketch, 0x253bbfd0ceb28042ull, 0x20f029ffc4fae10full},
+                {MapQuality::Preview, 0x7e9d6c1b70121e42ull, 0xc46a220a9a92063bull},
+                {MapQuality::Full, 0x1e981823c647dad3ull, 0xaf2fe424cda51481ull}},
                true);
     check_pins("engine.json", kMazdaDir,
-               {{MapQuality::Sketch, 0xd64488ea1fff9442ull, 0x1bb312f8a650b0f4ull},
-                {MapQuality::Preview, 0x964f30d973941b20ull, 0xbafd38470361fbabull},
-                {MapQuality::Full, 0x3649dce1c9c9d7b1ull, 0x94534cc297971f9eull}},
+               {{MapQuality::Sketch, 0x3f02abcdb78fb872ull, 0xa14edf744d9401d1ull},
+                {MapQuality::Preview, 0x029974d1e620ab72ull, 0x72cd7ab175cfb86bull},
+                {MapQuality::Full, 0xa29420da3c566803ull, 0xfd7d1733c21dabd5ull}},
                true);
-    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x98217b790e718eb9ull, 0xa09334bc88debc6cull}}, true);
+    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x0a5d355fdc243a17ull, 0x6a233d6475a57032ull}}, true);
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0xd816d389badd07dbull, 0}, {MapQuality::Full, 0x381c278164a74b4aull, 0}}, false);
+               {{MapQuality::Preview, 0x8bb600415357f947ull, 0}, {MapQuality::Full, 0xebbb5438fd223cb6ull, 0}}, false);
 }
 
 TEST_CASE("P7d W5h: the hyper keeps its Preview and Full map hashes", "[cycle][pipe][drivetrain][turbo][long]") {
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0xd816d389badd07dbull, 0xc962e26f4009c30bull},
-                {MapQuality::Full, 0x381c278164a74b4aull, 0xd1dee97c3fdcaa0cull}},
+               {{MapQuality::Preview, 0x8bb600415357f947ull, 0xfc3d03b81646d8a1ull},
+                {MapQuality::Full, 0xebbb5438fd223cb6ull, 0xbc895c1fc6ad4d58ull}},
                true);
 }
 
@@ -622,7 +657,7 @@ TEST_CASE("P7d W8h: the map cache keeps the WOT curve and writes the old format 
     const std::string dir = td.path.generic_string();
     const EngineMapsPtr m = mazda_pipes_sketch();
     store_cached_engine_maps(dir, 1, *m);
-    const EngineMapsPtr hit = load_cached_engine_maps(dir, 1, kPipeWotGeneratorVersion);
+    const EngineMapsPtr hit = load_cached_engine_maps(dir, 1, m->generator_version); // the maps' own stamp (burn law: v7, 2026-10-19)
     REQUIRE(hit != nullptr);
     CHECK(hit->content_hash == m->content_hash);
     CHECK(hit->maps.wot_p_im_pa.x == m->maps.wot_p_im_pa.x);
@@ -633,7 +668,7 @@ TEST_CASE("P7d W8h: the map cache keeps the WOT curve and writes the old format 
     const EngineMapsPtr l = generate_engine_maps(*lumped.cycle, lumped.fuels[0], MapQuality::Sketch, &pool());
     store_cached_engine_maps(dir, 2, *l);
     CHECK(!file_has_wot_tag(td.path / "0000000000000002.psmaps"));
-    const EngineMapsPtr lhit = load_cached_engine_maps(dir, 2, kLumpedGeneratorVersion);
+    const EngineMapsPtr lhit = load_cached_engine_maps(dir, 2, l->generator_version); // burn law: v5 (2026-10-19)
     REQUIRE(lhit != nullptr);
     CHECK(lhit->content_hash == l->content_hash);
     CHECK(!has_wot_rows(lhit->maps));

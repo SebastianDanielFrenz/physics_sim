@@ -1129,6 +1129,8 @@ constexpr const char* kCycleKeys[] = {
     // own spark_advance_deg must be absent - it is filled from this one) and
     // Tier 2 flame-development delay.
     "spark_advance_deg", "ignition_delay_deg",
+    // Burn law (design C, vault PHYS-079): "standard" (default) or the "fixed" escape hatch.
+    "burn_law",
     // ps_audio A4 (out/audio_plan.md section 3.1): the optional intake/
     // exhaust pipe pair, the engine's own default_installation and the
     // pipe cell-size "resolution" block. See read_intake_block/
@@ -1801,6 +1803,28 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
         d.spark_advance_deg = read_engine_table(cj.at("spark_advance_deg"), sctx, "p_im_kpa", real(1000.0), real(1.0));
         require_positive_y_axis(d.spark_advance_deg, sctx, "p_im_kpa");
         require_table_values(d.spark_advance_deg, sctx, real(-30.0), true, real(70.0), true);
+    }
+    // Burn law (design C, owner decision 2026-10-19, vault PHYS-079): every cycle-block engine runs the law (the compiled
+    // parameter set, equal to data/burn_laws/default.json); its constant burn duration / ignition delay keys are only
+    // accepted next to the narrow escape hatch "burn_law": "fixed" (analytic cycle-model fixtures).
+    if (cj.contains("burn_law")) {
+        const json& bl = cj.at("burn_law");
+        const std::string v = bl.is_string() ? bl.get<std::string>() : std::string();
+        if (v == "standard") {
+            d.burn_law = CycleModelDesc::BurnLawMode::Standard;
+        } else if (v == "fixed") {
+            d.burn_law = CycleModelDesc::BurnLawMode::Fixed;
+        } else {
+            throw std::runtime_error(cctx + ": 'burn_law' must be \"standard\" or \"fixed\"");
+        }
+    }
+    if (d.burn_law == CycleModelDesc::BurnLawMode::Standard) {
+        for (const char* k : {"burn_duration_deg", "ignition_delay_deg"}) {
+            if (cj.contains(k)) {
+                throw std::runtime_error(cctx + ": '" + k + "' is set by the burn law for every cycle (ps/engine_cycle/burn_law.h); "
+                                         "a constant value needs \"burn_law\": \"fixed\" (analytic cycle-model fixtures only)");
+            }
+        }
     }
     if (cj.contains("ignition_delay_deg")) {
         d.ignition_delay_deg = require_number(cj, "ignition_delay_deg", cctx);

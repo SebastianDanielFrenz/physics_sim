@@ -115,7 +115,9 @@ SimulatedEngineDesc engine_on(const EngineMaps& em) {
     SimulatedEngineDesc e = fx::base_engine();
     e.maps = em.maps;
     e.ecu.lambda_target = const_table(1.0);
-    e.ecu.spark_advance_deg = const_table(em.maps.theta_mbt_deg.values.front());
+    // Burn law (2026-10-19): theta_MBT varies per node, so the ECU table is the maps' own theta_MBT (a constant table
+    // under the fixed burn, as before).
+    e.ecu.spark_advance_deg = em.maps.theta_mbt_deg;
     e.breakaway_torque_nm = em.maps.friction_torque_nm.y.front() + 5.0;
     return e;
 }
@@ -127,7 +129,14 @@ ec::PointResult reference_point(const ec::CycleStepper& proto, const CycleModelD
     op.t_im_k = SimulatedEngine::kIsaTemperatureK;
     op.p_amb_pa = SimulatedEngine::kIsaPressurePa;
     op.lambda = 1.0;
-    op.spark_deg_atdc = mbt_atdc(d);
+    // Burn law (2026-10-19, vault PHYS-079): a Standard desc's node runs at the cycle's own MBT (the generator's
+    // MbtOffset 0); a Fixed desc at the constant MBT Wiebe start.
+    if (d.burn_law == CycleModelDesc::BurnLawMode::Standard) {
+        op.spark_mode = ec::OperatingPoint::SparkMode::MbtOffset;
+        op.spark_deg_atdc = 0.0;
+    } else {
+        op.spark_deg_atdc = mbt_atdc(d);
+    }
     ec::StepperSettings st;
     st.h_s = ec::kStepPreview;
     st.cycles = ec::kCyclesPreview;

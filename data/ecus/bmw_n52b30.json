@@ -10,7 +10,7 @@
   },
   "ecu": {
     "ignition_strategy": "knock_limited",
-    "knock_margin_deg": 2.0,
+    "knock_margin_deg": 0.0,
     "lambda_target": {
       "rpm": [0, 7000],
       "p_im_kpa": [20, 100],
@@ -21,13 +21,25 @@
       "source": "[AS] stoichiometric everywhere. A Valvetronic engine runs its manifold a few kPa below ambient at every part load, so a power enrichment keyed to manifold pressure (the A25A/K20A tables) would enrich the whole part-load range; the N52's own full-load enrichment is keyed to load, which the table cannot express. No BMW calibration available."
     },
     "spark_advance_deg": {
-      "rpm": [0, 7000],
-      "p_im_kpa": [20, 100],
+      "rpm": [700, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6600, 7000],
+      "p_im_kpa": [20, 30, 40, 50, 60, 70, 80, 90, 95, 100],
       "values": [
-        [16.73105104, 16.73105104],
-        [16.73105104, 16.73105104]
+        [23.72506057, 23.38176177, 22.73519835, 22.51498657, 22.23789518, 21.83824322, 21.53874097, 21.30584265, 21.20758861, 21.11896785],
+        [24.07878594, 24.07878594, 23.62480379, 23.61867304, 23.77142185, 23.64034053, 23.32847916, 23.08564509, 22.98302332, 22.89034854],
+        [25.55963681, 25.55963681, 26.00782359, 26.33863208, 26.47029994, 26.24486322, 26.06701092, 25.91961752, 25.8171461, 25.70676132],
+        [25.97395167, 25.97395167, 25.97395167, 26.82074511, 27.34753432, 27.53369174, 27.33572645, 27.16872241, 27.09338958, 27.0235251],
+        [28.32969627, 29.00960888, 29.21594392, 29.20788239, 28.97822685, 28.71579287, 28.50073936, 28.31596165, 28.23423893, 28.15939292],
+        [28.71739619, 28.71739619, 29.39135385, 29.50760023, 29.51129839, 29.50895873, 29.50144228, 29.49023757, 29.46156194, 29.38190682],
+        [28.07875076, 28.07875076, 28.93089502, 29.25391756, 29.47824113, 29.65730163, 29.81179021, 29.93781083, 29.99309267, 29.9981669],
+        [26.31476491, 26.31476491, 28.15391645, 28.86042395, 29.22394648, 29.52870397, 29.70094769, 29.76504538, 29.77910653, 29.78869549],
+        [28.13408912, 29.79254079, 30.20600969, 30.42539836, 30.5765376, 30.69584783, 30.7914949, 30.86799376, 30.90097264, 30.9311204],
+        [27.03944741, 27.03944741, 29.20209534, 29.92993201, 30.2742692, 30.54752434, 30.59398816, 30.58396637, 30.57563684, 30.56639079],
+        [31.99483971, 33.35219063, 33.38310401, 33.35727793, 33.33850667, 33.32948131, 33.32070159, 33.29541732, 33.26472783, 33.24396916],
+        [34.59782037, 33.35032212, 33.07866296, 32.96074392, 32.9086828, 32.87453301, 32.84726826, 32.82354876, 32.81258021, 32.80234383],
+        [30.8787711, 30.8787711, 31.55317535, 31.72923841, 31.75863035, 31.7704193, 31.77779949, 31.78479702, 31.78944907, 31.79307529],
+        [32.35462203, 32.35462203, 33.81907827, 34.0962848, 34.19739482, 34.1930163, 34.00263863, 33.85892049, 33.79891991, 33.74486777]
       ],
-      "source": "[D] the generator's MBT spark at every lift node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) the MBT spark is the same constant at every node, so the engine runs at MBT at every lift. No BMW spark calibration was available; Knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
+      "source": "[D] the minimum over the six lift nodes of the generator's MBT spark at every grid node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies over the grid and the lift (the table spans 21.1-34.6 deg BTDC; was the constant 16.731 deg of the fixed 40.3 deg burn). No BMW spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg; margin 0 since 2026-10-20, knock model v6: the calibrated limit already carries the OEM margin, knock_margin_deg is margin beyond it): runtime spark = min(this table, theta_kl)."
     }
   },
   "idle_rpm": 700.0,

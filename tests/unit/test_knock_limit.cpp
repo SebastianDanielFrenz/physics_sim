@@ -212,7 +212,9 @@ TEST_CASE("P7 K1: fuel knock block - shipped values, the E25 blend rule, every r
         real ron, mon;
     };
     const Shipped shipped[] = {{"gasoline", 95.0, 85.0}, {"e5", 95.0, 85.0},     {"e10", 95.0, 85.0},
-                               {"e25", 100.91, 87.04},  {"e85", 104.0, 88.0},    {"ethanol", 108.6, 89.7},
+                               {"e25", 100.91, 87.04},
+                               {"e85", 100.0, 87.0}, // [C] Australian E85 Determination 2019 minimum (2026-10-19; was 104/88 [AS])
+                               {"ethanol", 108.6, 89.7},
                                {"tier3_e10_cert", 92.0, 84.0}};
     for (const Shipped& s : shipped) {
         INFO(s.name);
@@ -365,20 +367,41 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
     // 0.972 -> 0.877, +3.1 deg); 35 [AS] bounds it. A node whose theta_kl lies above MBT does not bind (runtime spark =
     // min(MBT, theta_kl)) and is not checked: there v3 rises up to +53 deg per unit lambda (6900 rpm, 74 -> 82 kPa).
     constexpr real kVapourDegPerLambda = 35.0;
+    // Burn law F + knock model v5 (2026-10-19, vault PHYS-079; re-derived with the hidden "K3 vapour budget" diag): at
+    // lambda 1 the limit is no longer non-increasing in p_im everywhere - the law's burn shortens as the residual falls
+    // with load, and a flat lambda 1 twin of this engine rises up to +2.65 deg [M] at a binding step (4900 rpm, 81.8 ->
+    // 89.5 kPa, tier3). The vapour term on top of the twin stays inside the old budget (measured <= 18.5 deg per unit
+    // lambda at the binding enriched steps). So a step of the shipped engine may rise by the twin's own rise (when > 0)
+    // plus kTol plus the vapour budget, and the twin's binding rise itself is capped at kLawRiseDeg [M + margin].
+    constexpr real kLawRiseDeg = 3.0;
+    json twin_j = knock_engine("toyota_a25a_fks_gen.json", 0.0, true);
+    twin_j["fuels"] = j["fuels"];
+    twin_j["ecu"]["lambda_target"] = {{"rpm", {600.0, 6900.0}}, {"p_im_kpa", {20.0, 105.0}}, {"values", {{1.0, 1.0}, {1.0, 1.0}}}};
+    const SimulatedEngineDesc twin = load_sim(twin_j);
+    REQUIRE(twin.maps.theta_kl_by_fuel.size() == 3);
     REQUIRE_FALSE(e.cycle->knock.lambda_target.values.empty());
     const Table2D& lam = e.cycle->knock.lambda_target;
     std::size_t limited = 0, e85_gain = 0, enriched_pairs = 0;
+    real twin_rise_max = -1e9;
     for (std::size_t ix = 0; ix < t3.x.size(); ++ix) {
         for (std::size_t iy = 0; iy < t3.y.size(); ++iy) {
             INFO("rpm " << t3.x[ix] << " p_im " << t3.y[iy]);
             if (iy > 0) {
                 const real drop = std::max(real(0.0), lam.value(t3.x[ix], t3.y[iy - 1]) - lam.value(t3.x[ix], t3.y[iy]));
-                const real allow = kTol + kVapourDegPerLambda * drop;
                 enriched_pairs += kl_at(t3, ix, iy) > kl_at(t3, ix, iy - 1) + kTol ? 1 : 0;
                 const real mbt_up = e.maps.theta_mbt_deg.value(t3.x[ix], t3.y[iy]);
-                if (kl_at(t3, ix, iy) < mbt_up) CHECK(kl_at(t3, ix, iy) <= kl_at(t3, ix, iy - 1) + allow);
-                if (kl_at(e10, ix, iy) < mbt_up) CHECK(kl_at(e10, ix, iy) <= kl_at(e10, ix, iy - 1) + allow);
-                if (kl_at(e85, ix, iy) < mbt_up) CHECK(kl_at(e85, ix, iy) <= kl_at(e85, ix, iy - 1) + allow);
+                for (std::size_t f = 0; f < 3; ++f) {
+                    const Table2D& t = e.maps.theta_kl_by_fuel[f];
+                    const Table2D& tw = twin.maps.theta_kl_by_fuel[f];
+                    INFO("fuel " << f);
+                    const real twin_rise = kl_at(tw, ix, iy) - kl_at(tw, ix, iy - 1);
+                    if (kl_at(tw, ix, iy) < mbt_up) {
+                        twin_rise_max = std::max(twin_rise_max, twin_rise);
+                        CHECK(twin_rise <= kLawRiseDeg);
+                    }
+                    const real allow = std::max(real(0.0), twin_rise) + kTol + kVapourDegPerLambda * drop;
+                    if (kl_at(t, ix, iy) < mbt_up) CHECK(kl_at(t, ix, iy) <= kl_at(t, ix, iy - 1) + allow);
+                }
             }
             CHECK(kl_at(e10, ix, iy) >= kl_at(t3, ix, iy) - kTol);
             CHECK(kl_at(e85, ix, iy) >= kl_at(e10, ix, iy) - kTol);
@@ -388,8 +411,9 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
         }
         CHECK(kl_at(t3, ix, 0) >= e.maps.theta_mbt_deg.value(t3.x[ix], t3.y[0])); // 20 kPa: never knock-limited
     }
-    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes, %zu tier3 p_im steps rise (enrichment)\n",
-                limited, t3.values.size(), e85_gain, enriched_pairs);
+    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes, %zu tier3 p_im steps rise; "
+                "lambda 1 twin binding rise max %+.3f deg\n",
+                limited, t3.values.size(), e85_gain, enriched_pairs, twin_rise_max);
     CHECK(limited > 0);
     CHECK(e85_gain > 0);
 
@@ -452,6 +476,50 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
     }
 }
 
+// K3's vapour budget, re-derived (knock model v5, 2026-10-19): the shipped lambda target against a flat lambda 1 twin
+// (Full, the three K3 fuels). At every binding p_im step with a lambda drop the twin's own rise is the non-vapour part;
+// the rest per unit lambda is what kVapourDegPerLambda must bound. Also prints the test's own quantity (rise - kTol) per
+// unit lambda.
+TEST_CASE("P7 diag: K3 vapour budget, enriched vs flat lambda twin", "[.][diag][knock][drivetrain][cycle]") {
+    const json fuels = json::array({fuel_path("tier3_e10_cert"), fuel_path("e10"), fuel_path("e85")});
+    json a = knock_engine("toyota_a25a_fks_gen.json", 0.0, true);
+    a["fuels"] = fuels;
+    json b = a;
+    b["ecu"]["lambda_target"] = {{"rpm", {600.0, 6900.0}}, {"p_im_kpa", {20.0, 105.0}}, {"values", {{1.0, 1.0}, {1.0, 1.0}}}};
+    const SimulatedEngineDesc ea = load_sim(a);
+    const SimulatedEngineDesc eb = load_sim(b);
+    const Table2D& lam = ea.cycle->knock.lambda_target;
+    const char* names[] = {"tier3", "e10", "e85"};
+    real worst_flat = -1e9, worst_vap = -1e9, worst_test = -1e9;
+    for (std::size_t f = 0; f < 3; ++f) {
+        const Table2D& ta = ea.maps.theta_kl_by_fuel[f];
+        const Table2D& tb = eb.maps.theta_kl_by_fuel[f];
+        for (std::size_t ix = 0; ix < ta.x.size(); ++ix) {
+            for (std::size_t iy = 1; iy < ta.y.size(); ++iy) {
+                const real mbt_up = ea.maps.theta_mbt_deg.value(ta.x[ix], ta.y[iy]);
+                if (!(kl_at(ta, ix, iy) < mbt_up)) continue;
+                const real drop = lam.value(ta.x[ix], ta.y[iy - 1]) - lam.value(ta.x[ix], ta.y[iy]);
+                const real rise_a = kl_at(ta, ix, iy) - kl_at(ta, ix, iy - 1);
+                const real rise_b = kl_at(tb, ix, iy) - kl_at(tb, ix, iy - 1);
+                if (kl_at(tb, ix, iy) < ea.maps.theta_mbt_deg.value(ta.x[ix], ta.y[iy])) worst_flat = std::max(worst_flat, rise_b);
+                if (drop <= 0.0) continue;
+                const real vap = (rise_a - rise_b) / drop;
+                const real test_q = (rise_a - 0.1) / drop;
+                worst_vap = std::max(worst_vap, vap);
+                worst_test = std::max(worst_test, test_q);
+                if (test_q > 25.0 || vap > 25.0) {
+                    std::printf("K3 vap %-5s %5.0f rpm %5.1f -> %5.1f kPa lambda %.3f -> %.3f: rise %+6.2f flat %+6.2f deg, "
+                                "vapour %5.1f deg/lambda, (rise - tol)/drop %5.1f\n",
+                                names[f], ta.x[ix], ta.y[iy - 1] / 1000.0, ta.y[iy] / 1000.0,
+                                lam.value(ta.x[ix], ta.y[iy - 1]), lam.value(ta.x[ix], ta.y[iy]), rise_a, rise_b, vap, test_q);
+                }
+            }
+        }
+    }
+    std::printf("K3 vap worst: flat-twin binding rise %+.3f deg, vapour %.1f deg/lambda, (rise - tol)/drop %.1f deg/lambda\n",
+                worst_flat, worst_vap, worst_test);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 TEST_CASE("P7 K4: the closed-cycle replay - p_max of the cycle, the integral rises with advance, step convergence", "[knock][drivetrain][cycle]") {
     const SimulatedEngineDesc e = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true), MapQuality::Sketch, false);
@@ -505,7 +573,11 @@ TEST_CASE("P7 K4: the closed-cycle replay - p_max of the cycle, the integral ris
             auto dtdl = [&](real t) { return rm * t / (cv(t) + rm); };
             const int n = 4000;
             const real dl = std::log(end.p_end_pa / s0.p) / n;
+            // Knock model v6: the end gas starts the charge-heat fraction of the way from T_ivc back toward the intake
+            // temperature.
             real t = s0.t;
+            REQUIRE(s0.t > op.t_im_k);
+            t -= ec::kKnockCalChargeHeatFraction * (s0.t - op.t_im_k);
             for (int k = 0; k < n; ++k) {
                 const real k1 = dtdl(t), k2 = dtdl(t + 0.5 * dl * k1), k3 = dtdl(t + 0.5 * dl * k2), k4 = dtdl(t + dl * k3);
                 t += dl * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0;
@@ -926,4 +998,50 @@ TEST_CASE("P7b diag: garage CR ranges with the calibrated knock limit", "[.][dia
         }
         std::printf(" mean retard %.2f deg, torque knock on/off %.3f\n", retard, t_on / t_off);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// K9 (knock model v5, burn law phase 2a; v6 phase 3): the generator reads the knock model's parameter set from the desc,
+// not the compiled defaults - an end fraction of 0.6 instead of the calibrated 0.90 (v6; v5 0.75) ends the Livengood-Wu integral earlier, so
+// no node's knock limit falls and at least one limited node's rises; every other model field moves the table too.
+// Recorded sabotages (2026-10-19): the generator line kin.end_burn_fraction removed -> "rose > 0" fails (0 rose); the
+// end fraction dropped from the cache key -> H3 row knock.model.end_burn_fraction fails (test_engine_map_cache.cpp);
+// douaud_eyzat_v5.json end fraction 0.74 -> "KCB knock model file" fails. v6 (2026-10-20): the generator line
+// kin.charge_heat_fraction removed -> moves("charge_heat_fraction") fails; the charge-heat fraction dropped from the cache
+// key -> H3 row knock.model.charge_heat_fraction fails.
+TEST_CASE("P7 K9: the generator reads the knock model from the desc (v5 end fraction)", "[knock][drivetrain][cycle]") {
+    const CycleModelDesc d = small_knock_desc();
+    REQUIRE(d.knock.model.end_burn_fraction == ec::kKnockCalEndBurnFraction);
+    const FuelDesc fuel = ps::test::mvem::gasoline();
+    const EngineMapsPtr base = generate_engine_maps(d, fuel, MapQuality::Sketch, &pool());
+    REQUIRE(base->knock_limited_points > 0);
+    CycleModelDesc e = d;
+    e.knock.model.end_burn_fraction = 0.6;
+    const EngineMapsPtr early = generate_engine_maps(e, fuel, MapQuality::Sketch, &pool());
+    std::size_t rose = 0;
+    for (std::size_t f = 0; f < 2; ++f) {
+        const std::vector<real>& a = base->maps.theta_kl_by_fuel[f].values;
+        const std::vector<real>& b = early->maps.theta_kl_by_fuel[f].values;
+        REQUIRE(a.size() == b.size());
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            INFO("fuel " << f << " node " << i);
+            CHECK(b[i] >= a[i] - 0.1); // two independent 0.05 deg bisections
+            rose += b[i] > a[i] + 0.5 ? 1 : 0;
+        }
+    }
+    std::printf("K9: %zu node-fuels rose by > 0.5 deg with end fraction 0.6\n", rose);
+    CHECK(rose > 0);
+    auto moves = [&](const char* what, void (*edit)(CycleModelDesc&)) {
+        CycleModelDesc x = d;
+        edit(x);
+        const EngineMapsPtr m = generate_engine_maps(x, fuel, MapQuality::Sketch, &pool());
+        INFO(what);
+        CHECK(m->maps.theta_kl_by_fuel[0].values != base->maps.theta_kl_by_fuel[0].values);
+    };
+    moves("prefactor_scale", [](CycleModelDesc& x) { x.knock.model.prefactor_scale *= 2.0; });
+    moves("pressure_exponent", [](CycleModelDesc& x) { x.knock.model.pressure_exponent += 0.2; });
+    moves("activation_k", [](CycleModelDesc& x) { x.knock.model.activation_k += 300.0; });
+    moves("octane_index_k", [](CycleModelDesc& x) { x.knock.model.octane_index_k = 0.9; });
+    moves("dilution_exponent", [](CycleModelDesc& x) { x.knock.model.dilution_exponent += 3.0; });
+    moves("charge_heat_fraction", [](CycleModelDesc& x) { x.knock.model.charge_heat_fraction = 0.6; }); // knock model v6
 }

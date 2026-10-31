@@ -7,9 +7,22 @@ the vehicle tank. `hyper_v8_torque.json` remains an alternative static envelope.
 
 Published geometry is eight cylinders, 92 mm bore, 95.25 mm stroke, 9:1
 compression, four valves per cylinder and an 8250 rpm limit. The rounded
-geometry integrates to approximately 5.066 L. The published One:1 targets are
+geometry integrates to approximately 5.066 L. The published One:1 figures are
 1371 Nm at 6000 rpm and 1 MW at 7500 rpm:
 https://www.koenigsegg.com/technical-specifications-one1
+
+**Published reference values, not calibration targets (owner, 2026-10-20).**
+Little about this engine is public, so the model is a guess and is not tuned to
+the published figures. Calibration effort goes to the public parameters and to
+the EPA-tested engines. Under burn law v3 and knock model v6 (vault PHYS-079),
+the held-crank dyno on Full maps gives **1425 Nm at 6000 rpm and 1017 kW at
+7500 rpm** (+4.0 % / +1.7 %). The pressure term in burn law v3 burns the boosted
+charge faster. The authored ECU spark table already retards the midrange: an
+MBT-only ECU would give 1455 Nm. At 1.8 bar on E85 the knock limit never binds,
+so margin 2, margin 0 and knock off give bit-identical results. The tests
+(`test_simulated_engine.cpp` "Twin turbo hyper V8", `test_car_hyper_n2o.cpp`)
+hold regression bands around these values. The 2026-10-03 table below is
+historical.
 
 Firing order [1,5,4,8,6,3,7,2], bank layout, cams, ports, pipe lengths,
 ECU settings and turbo hardware are authored assumptions, not measured

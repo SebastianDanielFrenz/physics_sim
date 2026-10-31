@@ -84,7 +84,11 @@ struct LiveControl {
     real p_intake_pa = 0.0;        // plenum pressure target (<= 0: use throttle)
     real throttle = 0.0;
     real lambda = 1.0;
-    real start_of_burn_deg_atdc = 0.0;  // resolved start of burn (spark + ignition delay, or MBT)
+    // The spark: spark_given -> spark_deg_atdc [deg ATDC, negative = before TDC]; else each cycle at its MBT. The start
+    // of burn and the burn duration of every cycle follow the burn law from that cylinder's IVC state (a Standard desc,
+    // ps/engine_cycle/burn_law.h); a Fixed desc uses spark + its constant delay / its constant MBT start.
+    bool spark_given = false;
+    real spark_deg_atdc = 0.0;
     std::uint32_t flags = 0;       // EngineInputFlags
 };
 
@@ -121,9 +125,11 @@ public:
     [[nodiscard]] real plenum_filtered_pa() const { return p_f_; }
     [[nodiscard]] real throttle_cd_area() const { return core_.throttle_cd_area(); }
     [[nodiscard]] const ps::engine_cycle::EngineCore& core() const { return core_; }
-    // The model's MBT start of burn [deg ATDC] (ca50_mbt through the Wiebe).
+    // The model's MBT start of burn [deg ATDC] (ca50_mbt through the Wiebe) and ignition delay: the constants of a Fixed
+    // desc; with the burn law, the law's reference angles (the first combustion event before an IVC was seen).
     [[nodiscard]] real mbt_start_of_burn_deg() const { return sob_mbt_; }
     [[nodiscard]] real ignition_delay_deg() const { return ign_delay_; }
+    [[nodiscard]] bool burn_law() const { return law_; }
 
     // Per-cylinder fresh air through the intake valve over the last full cycle
     // (between consecutive IVC events) [kg], and the IVC event count.
@@ -151,6 +157,7 @@ private:
     real p_f_ = 0.0;
     real rho_amb_ = 0.0;
     real sob_mbt_ = 0.0, ign_delay_ = 0.0, burn_deg_ = 0.0;
+    bool law_ = false; // burn law (Standard desc)
     std::array<real, kLiveMaxSources> q_prev_{};
     // Substep outputs of one sample, and one half-band cascade per source
     // (stage 0 at the physics rate).

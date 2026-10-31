@@ -16,6 +16,7 @@
 #include "drivetrain/limit_thresholds.h"
 #include "ps/drivetrain/engine_dyno.h"
 #include "ps/drivetrain/limit_findings.h"
+#include "ps/drivetrain/limit_policy.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
 
@@ -317,13 +318,18 @@ TEST_CASE("L6 wastegate: owner's example - stock hardware saturates under more a
     CHECK(find(big, LimitKind::TurboRotorCap, 7000.0) != nullptr); // other hardware, still reported
 }
 
-TEST_CASE("L7 wastegate Near, rotor and choke severities (air demand x1.6)", "[drivetrain][dyno][turbo]") {
-    // Air demand x1.6 at 7000 rpm: gate mean opening 0.932 (Near: 0.92 <= open < 0.98), the rotor at 230.7k of 180k
-    // (Exceeded), pair flow 1.21 x the compressor's max_mass_flow (CompressorChoke Limiting). At wastegate x1.26 the gate
+TEST_CASE("L7 wastegate Near, rotor and choke severities (air demand x1.65)", "[drivetrain][dyno][turbo]") {
+    // Air demand x1.65 at 7000 rpm: gate mean opening 0.932 (Near: 0.92 <= open < 0.98), the rotor at 235.6k of 180k
+    // (Exceeded), pair flow over the compressor's max_mass_flow (CompressorChoke Limiting). At wastegate x1.26 the gate
     // finding is gone. Recorded sabotage: kGateNear 0.92 -> 0.99 loses the Near; kChokeLimiting 1.0 -> 1.5 turns the
     // Limiting into Near/none.
+    // 2026-10-20 (burn law v3 / knock v6, owner 2026-10-20: the hyper is a guess, not tuned): the factor moved x1.6 ->
+    // x1.65. Under burn law v3 the gate at x1.6 opens only 0.916, just below the Near band, so the old factor no longer
+    // exercised the case; the finding is legitimately gone there, not lost. Gate over the factor ('L7 diag', hidden):
+    // 0.883 / 0.900 / 0.916 / 0.932 / 0.947 / 0.962 / 0.976 / 1.000 at x1.50 / 1.55 / 1.60 / 1.65 / 1.70 / 1.75 / 1.80 /
+    // 1.90; x1.65 sits mid-band, as x1.6 (0.932) did before.
     static jobs::JobSystem pool(10);
-    const DynoResult r = run_dyno_sweep(hyper_crafted(1.6, 1.0), nullptr, turbo_spec({7000.0}), &pool);
+    const DynoResult r = run_dyno_sweep(hyper_crafted(1.65, 1.0), nullptr, turbo_spec({7000.0}), &pool);
     const LimitFinding* g = find(r, LimitKind::WastegateSaturated, 7000.0);
     REQUIRE(g != nullptr);
     CHECK(g->severity == LimitSeverity::Near);
@@ -342,6 +348,24 @@ TEST_CASE("L7 wastegate Near, rotor and choke severities (air demand x1.6)", "[d
     CHECK(choke->part.field == "/max_mass_flow_kg_s");
     CHECK(find(r, LimitKind::BoostAboveTarget, 7000.0) == nullptr); // the gate still holds the target
     CHECK(find(r, LimitKind::BoostBelowTarget, 7000.0) == nullptr);
+}
+
+// Hidden: the 7000 rpm gate opening, rotor and findings over the air-demand factor (the gate-near threshold set to 0 so
+// the gate's window mean is always reported). Used to place L7's factor.
+TEST_CASE("L7 diag: gate opening over the air-demand factor", "[.][diag][drivetrain][dyno][turbo]") {
+    static jobs::JobSystem pool(10);
+    LimitPolicy pol = default_limit_policy();
+    pol.gate_near_opening = 0.0;
+    for (double f : {1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.9}) {
+        DynoSweepSpec s = turbo_spec({7000.0});
+        s.policy = &pol;
+        const DynoResult r = run_dyno_sweep(hyper_crafted(f, 1.0), nullptr, s, &pool);
+        const LimitFinding* g = find(r, LimitKind::WastegateSaturated, 7000.0);
+        const DynoResult d = run_dyno_sweep(hyper_crafted(f, 1.0), nullptr, turbo_spec({7000.0}), &pool);
+        std::printf("L7 diag x%.2f: gate %.4f, boost %.3f bar, rotor %.0f, torque %.1f, converged %d | default policy: %s\n", f,
+                    g ? g->value : -1.0, d.points[0].boost_bar, d.points[0].turbo_rpm, d.points[0].torque_nm,
+                    int(d.points[0].converged), at_rpm(d, 7000.0).c_str());
+    }
 }
 
 TEST_CASE("L8 rotor cap and choke: Near below the edge, Exceeded beyond (air demand x1.05 / x1.10 at 8000 rpm)",
@@ -650,9 +674,11 @@ TEST_CASE("L18 the sweep's points are untouched by the findings (stock hyper val
     REQUIRE(r.points.size() == 1);
     CHECK(r.points[0].converged);
     // Re-pinned 2026-10-19 for the hyper on E85 with knock model v3, unchanged under v4 (was 1378.5 N*m / 91184 rpm on E5 without a knock limit).
-    CHECK(r.points[0].torque_nm == Catch::Approx(1369.06).margin(0.1));
+    // Re-pinned 2026-10-20 (burn v3 / knock v6 and the 4-row Sketch grid, owner 2026-10-20: hyper is a guess, not
+    // tuned; was 1369.06 N*m / 91172.9 rpm, boost unchanged).
+    CHECK(r.points[0].torque_nm == Catch::Approx(1407.74).margin(0.1));
     CHECK(r.points[0].boost_bar == Catch::Approx(1.759).margin(0.001));
-    CHECK(r.points[0].turbo_rpm == Catch::Approx(91172.9).margin(2.0));
+    CHECK(r.points[0].turbo_rpm == Catch::Approx(91161.0).margin(2.0));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

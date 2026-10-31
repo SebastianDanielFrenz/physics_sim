@@ -361,7 +361,9 @@ TEST_CASE("A5: the resolved installation (vehicle override) reaches the generate
     REQUIRE(s.cycle->installation.has_value());
     REQUIRE(s.cycle->installation->intake.airbox_m3 == real(0.020));
     const EngineMapsPtr direct = generate_engine_maps(*s.cycle, s.fuels.front(), MapQuality::Preview, &pool);
-    CHECK(direct->generator_version == 4u); // engine garage P7d: ambient-fed pipe engine (was 3)
+    // Burn law 2026-10-19 (vault PHYS-079): the fixture JSON runs the standard burn law, pipe WOT generator v7 (was 4;
+    // engine garage P7d: ambient-fed pipe engine, was 3).
+    CHECK(direct->generator_version == kLawPipeWotGeneratorVersion);
     CHECK(s.maps.ve.values == direct->maps.ve.values);
     CHECK(s.maps.eta_i.values == direct->maps.eta_i.values);
 

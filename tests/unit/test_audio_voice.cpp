@@ -535,7 +535,6 @@ TieOut tie_point(const drivetrain::CycleModelDesc& live_desc, real rpm, real p_i
     ps_audio::LiveControl c;
     c.omega_rad_s = omega_of(rpm);
     c.p_intake_pa = p_im;
-    c.start_of_burn_deg_atdc = eng.mbt_start_of_burn_deg();
     std::array<real, ps_audio::kLiveMaxSources> out{};
     const std::int64_t settle = static_cast<std::int64_t>(1.0 * kFs);
     for (std::int64_t i = 0; i < settle; ++i) eng.step_sample(c, out.data());
@@ -591,8 +590,13 @@ TEST_CASE("A7 V11: same seed and script give identical PCM, another seed differs
     // ps_audio A8b (was 0xf6127b2e2ec390f8 / 0xf42b26f64d538437): the
     // catalyst monolith resistance (F1) and the reservoir face's inflow
     // branch (W2) change the fixture's exhaust and every port/volume face.
-    CHECK(a.pcm == 0xe4e8cf0d04b01008ull);
-    CHECK(a.state == 0xa798da1cb19bfb03ull);
+    // Re-pinned 2026-10-19 by burn law F (vault PHYS-079; was 0xe4e8cf0d04b01008
+    // / 0xa798da1cb19bfb03): the live engine's combustion events take the law's
+    // per-cycle burn duration and delay. Re-pinned 2026-10-20 by burn law v3
+    // (PHYS-079 phase 3, the burn's pressure exponent; was 0x53505fd4e74a8310 /
+    // 0x16deb877cc9f85c8).
+    CHECK(a.pcm == 0x65a9327a7fa5eb19ull);
+    CHECK(a.state == 0x385a6a93df29fb25ull);
     // The map generator's engine never sees a seed: a Preview CycleEngine
     // point's state hash is pinned (a generator call of the variation moves it).
     const drivetrain::CycleModelDesc& d = fixture();

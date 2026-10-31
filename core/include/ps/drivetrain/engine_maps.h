@@ -8,7 +8,7 @@
 // Point set (fixed per quality, index order = assembly order):
 //   [0, G)        the rpm x p_im grid (Full: CycleModelDesc::grid_rpm x
 //                 grid_p_im; Preview: at most 10 x 6 of them, picked by index
-//                 rounding; Sketch: at most 8 x 3, see below), lambda 1, MBT
+//                 rounding; Sketch: at most 8 x 4, see below), lambda 1, MBT
 //                 spark, cam schedule at the point;
 //   then          spark sweep: retard {-10,-5,0,2,5,10,15,20,30,40} deg from
 //                 MBT at 2000 rpm/50 kPa, 3000/80, 5000/100 (sweep-major)
@@ -19,9 +19,14 @@
 // Sketch (engine garage P1, A1) is a COMPLETE map set on a reduced grid for a
 // dyno preview while the player edits an engine; it runs Preview's step and
 // cycle settings, is keyed apart from Preview and Full, and is never meant to
-// drive a car. Its rows: the lowest p_im node, the node nearest ambient (the
-// middle node when that is the lowest or the top one), and the top node -
-// on a boosted grid that brackets ambient and the top. Its rpm axis is the
+// drive a car. Its rows (kSketchGridVersion 2, burn law phase 3, 2026-10-20):
+// the lowest p_im node, a part-load node (halfway by index to the next row),
+// the highest node at or below ambient (the node below the top when that is
+// the top one, the middle node when it is the lowest one), and the top node -
+// on a boosted grid that brackets ambient and the top. Version 1 took 3 rows
+// (lowest, nearest ambient, top); on the A25A's grid that left 58.6 -> 105 kPa
+// as one linear span and the steady torque dipped 4.2 % between two plate
+// steps at 1500 rpm, which the steady-table plate check refused. Its rpm axis is the
 // grid subsampled to at most 8 values (index rounding, both ends kept).
 // Every point runs at the ISA intake state (288.15 K, 101325 Pa exhaust),
 // the reference the runtime's default ambient uses, so the runtime
@@ -66,10 +71,17 @@ namespace ps::drivetrain {
 // top row of its p_im-axis tables (SimulatedEngineMapsDesc::wot_p_im_pa, read
 // through map_pressure_index); a compressor-fed pipe engine and an adaptive
 // one keep 3 (their maps are unchanged).
+// Burn law (design C, owner decision 2026-10-19): an engine on the law (CycleModelDesc::burn_law == Standard, every
+// cycle-block engine) generates per-cycle burn angles and a per-node theta_MBT, so each path has a law version -
+// lumped 5, compressor-fed/adaptive pipe 6, ambient-fed pipe with WOT rows 7 - and every law engine's .psmaps key
+// differs from its pre-law one. A Fixed-law desc (the "burn_law": "fixed" escape hatch) keeps 1/3/4 and its maps.
 inline constexpr std::uint32_t kLumpedGeneratorVersion = 1;
 inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kPipeWotGeneratorVersion = 4;
-inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // the newest path
+inline constexpr std::uint32_t kLawLumpedGeneratorVersion = 5;
+inline constexpr std::uint32_t kLawPipeGeneratorVersion = 6;
+inline constexpr std::uint32_t kLawPipeWotGeneratorVersion = 7;
+inline constexpr std::uint32_t kGeneratorVersion = kLawPipeWotGeneratorVersion; // the newest path
 
 // Engine garage P7d: true when the generator adds the wide-open-throttle rows
 // (pipe engine fed from ambient through its throttle, fixed p_im grid).
@@ -78,9 +90,10 @@ inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // 
 }
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    const std::uint32_t base = !desc.intake.has_value()            ? kLumpedGeneratorVersion
-                               : engine_map_generates_wot_rows(desc) ? kPipeWotGeneratorVersion
-                                                                     : kPipeGeneratorVersion;
+    const bool law = desc.burn_law == CycleModelDesc::BurnLawMode::Standard;
+    const std::uint32_t base = !desc.intake.has_value()              ? (law ? kLawLumpedGeneratorVersion : kLumpedGeneratorVersion)
+                               : engine_map_generates_wot_rows(desc) ? (law ? kLawPipeWotGeneratorVersion : kPipeWotGeneratorVersion)
+                                                                     : (law ? kLawPipeGeneratorVersion : kPipeGeneratorVersion);
     return base + (desc.pressure_sampling.enabled ? 259 : 0);
 }
 
@@ -88,6 +101,10 @@ inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // 
 // and the .psmaps header: never renumber, only append (Sketch = 2 was added by
 // engine garage P1 without moving any existing key or pin).
 enum class MapQuality { Preview = 0, Full = 1, Sketch = 2 };
+
+// Version of Sketch's grid choice (the p_im rows and rpm subsampling, not desc fields), folded into a Sketch key only.
+// 1: 3 p_im rows (engine garage P1); 2: 4 rows, a part-load node added (burn law phase 3, 2026-10-20).
+inline constexpr int kSketchGridVersion = 2;
 
 // Thrown by a map generation that observed its cancel flag (see
 // MapGenerationControl, ps::io::EngineMapOptions::cancel). ps::io re-exports
