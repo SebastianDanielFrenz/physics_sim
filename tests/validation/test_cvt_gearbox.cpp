@@ -382,7 +382,7 @@ TEST_CASE("DualClutch launch control: armed on brake + throttle, slip-controlled
     CHECK(lc.balance <= 5e-8);
 }
 
-TEST_CASE("CVT C1 / DCT launch control: 1 vs 10 workers identical state hash every tick", "[validation][vehicle][drivetrain][automatic][cvt][determinism]") {
+TEST_CASE("CVT C1 / DCT launch control: 1 vs 10 workers identical state hash every tick", "[validation][vehicle][drivetrain][automatic][cvt][determinism][long]") {
     const std::string racing = std::string(PS_SOURCE_DIR) + "/data/electronics/assist_unit_racing.json";
     io::VehicleLoadOptions opt;
     opt.electronics["assists"] = racing;

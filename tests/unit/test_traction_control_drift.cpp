@@ -138,7 +138,7 @@ TEST_CASE("TC speed estimate stays bounded through a power slide", "[traction_co
     check_bounded(r);
     CHECK(r.impact_max <= 0.25);
 }
-TEST_CASE("TC speed estimate stays bounded on a long crawl up and down a slope", "[traction_control][vehicle][drift]") {
+TEST_CASE("TC speed estimate stays bounded on a long crawl up and down a slope", "[traction_control][vehicle][drift][long]") {
     // grade < 0 climbs in +X; pedal pumped to pitch the body.
     for (real grade : {-0.12, 0.12}) {
         check_bounded(drive(grade < 0 ? "slope_up" : "slope_down", 20, grade, [](real t) {
