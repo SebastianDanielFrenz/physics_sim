@@ -191,18 +191,20 @@ const vehicle::VehicleDesc& tractor_desc() {
     return d;
 }
 
-void add_link(Rig& r) {
-    const Cfg& c = r.cfg;
-    if (c.method != Method::Spring) return;
+machine::CouplingDesc link_desc(const Rig& r) {
     machine::CouplingDesc d;
     d.towing = r.va;
     d.towed = r.vb;
     d.socket_towing_local = r.socket_a;
     d.socket_towed_local = r.socket_b;
-    d.hitch = c.hitch;
-    d.hitch.frequency_hz = c.frequency_hz;
-    d.hitch.damping_ratio = c.damping_ratio;
-    r.coupling = r.world->create_coupling(d);
+    d.hitch = r.cfg.hitch;
+    d.hitch.frequency_hz = r.cfg.frequency_hz;
+    d.hitch.damping_ratio = r.cfg.damping_ratio;
+    return d;
+}
+
+void add_link(Rig& r) {
+    if (r.cfg.method == Method::Spring) r.coupling = r.world->attach(link_desc(r));
 }
 
 // Towing vehicle at (x0, 0) facing +x, trailer behind it with the two sockets level and coincident.
@@ -311,7 +313,7 @@ Rig build_chain(const Cfg& cfg, real x0 = 0.0) {
     d.hitch = cfg.hitch;
     d.hitch.frequency_hz = cfg.frequency_hz;
     d.hitch.damping_ratio = cfg.damping_ratio;
-    r.coupling2 = r.world->create_coupling(d);
+    r.coupling2 = r.world->attach(d);
     return r;
 }
 
@@ -1218,6 +1220,309 @@ TEST_CASE("Coupling: a chain of two trailers shares one island", "[machine][vehi
     CHECK(scenario_chain_brake(more).err_max_mm == Catch::Approx(brake.err_max_mm).margin(2e-3));
 }
 
+namespace {
+
+// Tractor and a tandem trailer standing apart on their own wheels: a single axle would tip without the hitch.
+Cfg uncoupled_tandem() {
+    Cfg c;
+    c.method = Method::None;
+    c.tractor = true;
+    c.trailer_mass = 7500.0;
+    c.hitch = load_class("drawbar_pin");
+    return c;
+}
+
+// The trailer's nose stands where its wheels put it, a hand's width off the spawn height: its socket is chosen from
+// where the two stand now, `error` from the towing one.
+void place_socket(Rig& r, const Vec3& error) {
+    r.socket_b = r.world->get_pose(r.b).inverse().transform_point(r.world->get_pose(r.a).transform_point(r.socket_a) - error);
+}
+
+} // namespace
+
+TEST_CASE("Coupling: attach says what stands in the way, with the numbers", "[machine][vehicle]") {
+    using Catch::Matchers::ContainsSubstring;
+    Rig r = build_rig(uncoupled_tandem());
+    settle(r, 0.5);
+    place_socket(r, Vec3{0.25, 0.0, 0.0});
+    machine::CouplingDesc d = link_desc(r);
+
+    const machine::AttachCheck far = r.world->check_attach(d);
+    CHECK_FALSE(far.ok);
+    CHECK(far.error_m == Catch::Approx(0.25).margin(0.03));
+    CHECK_THAT(far.message, ContainsSubstring("m apart") && ContainsSubstring("drawbar_pin") && ContainsSubstring("0.100"));
+    CHECK_THROWS_WITH(r.world->attach(d), far.message);
+
+    // In reach of the hitch, but moving.
+    Pose pose = r.world->get_pose(r.b);
+    pose.position.x += 0.25;
+    r.world->backend().set_pose(r.b, pose);
+    r.world->backend().set_motion(r.b, Motion{Vec3{1.0, 0.0, 0.0}, Vec3::zero()});
+    const machine::AttachCheck fast = r.world->check_attach(d);
+    CHECK_FALSE(fast.ok);
+    CHECK(fast.speed_m_s == Catch::Approx(1.0).margin(0.01));
+    CHECK_THAT(fast.message, ContainsSubstring("m/s"));
+    r.world->backend().set_motion(r.b, Motion{});
+
+    // Turned past the class's limit, the sockets coincident.
+    const Pose towing = r.world->get_pose(r.a);
+    const Vec3 hitch_point = towing.transform_point(r.socket_a);
+    const real half = 0.5 * 90.0 * kPi / 180.0;
+    pose.orientation = Quat{0.0, 0.0, std::sin(half), std::cos(half)} * towing.orientation;
+    pose.position = hitch_point - pose.orientation.rotate(r.socket_b);
+    r.world->backend().set_pose(r.b, pose);
+    const machine::AttachCheck turned = r.world->check_attach(d);
+    CHECK_FALSE(turned.ok);
+    CHECK(turned.angle_rad[0] * 180.0 / kPi == Catch::Approx(90.0).margin(1.0));
+    CHECK_THAT(turned.message, ContainsSubstring("yaw") && ContainsSubstring("-75.00..75.00"));
+
+    // Who may tow whom.
+    machine::CouplingDesc who = d;
+    who.towed = VehicleId{99, 1};
+    CHECK_THAT(r.world->check_attach(who).message, ContainsSubstring("unknown vehicle"));
+    who.towed = who.towing;
+    CHECK_THAT(r.world->check_attach(who).message, ContainsSubstring("tow itself"));
+
+    machine::CouplingDesc bad = d;
+    bad.hitch.frequency_hz = 0.0;
+    CHECK_THROWS_AS(r.world->attach(bad), std::invalid_argument);
+
+    pose = r.world->get_pose(r.a);
+    pose.position += pose.orientation.rotate(r.socket_a - r.socket_b);
+    r.world->backend().set_pose(r.b, pose);
+    REQUIRE(r.world->check_attach(d).ok);
+    r.coupling = r.world->attach(d);
+    CHECK_THAT(r.world->check_attach(d).message, ContainsSubstring("already towed"));
+    machine::CouplingDesc back = d;
+    back.towing = d.towed;
+    back.towed = d.towing;
+    CHECK_THAT(r.world->check_attach(back).message, ContainsSubstring("loop"));
+}
+
+TEST_CASE("Coupling: a latch closes the real socket error without a jolt", "[machine][vehicle]") {
+    Rig r = build_rig(uncoupled_tandem());
+    settle(r, 1.0);
+    place_socket(r, Vec3{0.08, 0.0, 0.0});
+    r.cfg.method = Method::Spring;
+    const real e0 = hitch_error(r).length();
+    r.coupling = r.world->attach(link_desc(r));
+    CHECK(r.world->coupling_state(r.coupling).latch_progress == 0.0);
+
+    const real latch = r.cfg.hitch.latch_time_s;
+    const real dt = r.world->dt();
+    real first_force = -1.0, peak_force = 0.0, worst_track = 0.0;
+    for (int i = 0; i < static_cast<int>(latch / dt); ++i) {
+        r.world->step();
+        const machine::CouplingState& s = r.world->coupling_state(r.coupling);
+        const real force = s.mean_force_on_towing_world.length();
+        if (first_force < 0.0) first_force = force;
+        peak_force = std::max(peak_force, force);
+        const real u = (static_cast<real>(i) + 1.0) * dt / latch;
+        worst_track = std::max(worst_track, std::abs(hitch_error(r).length() - e0 * ((2.0 * u - 3.0) * u * u + 1.0)));
+    }
+    std::printf("latch from %.1f mm: first tick %.0f N, peak %.0f N, worst off the ramp %.3f mm\n", e0 * 1e3, first_force, peak_force, worst_track * 1e3);
+    CHECK(r.world->coupling_state(r.coupling).latch_progress == Catch::Approx(1.0).margin(0.02));
+    // The ramp starts at 6 e0 / T^2 = 1.9 m/s^2: 6400 N on the two vehicles' reduced mass.
+    CHECK(first_force < 3000.0);
+    CHECK(peak_force < 9000.0);
+    CHECK(worst_track < 3e-3);
+    const Metrics after = run(r, 1.0, {});
+    CHECK(r.world->coupling_state(r.coupling).latch_progress == 1.0);
+    CHECK(after.finite);
+    CHECK(after.err_final_mm < 0.2);
+}
+
+TEST_CASE("Coupling: a latch closes an angle on a locked hitch", "[machine][vehicle]") {
+    // Tilted about the socket the moment before it would drop, and hung up. Everything else is the same in both runs,
+    // the tractor's own first ticks on its springs included.
+    const auto hang = [](real tilt_deg) {
+        Cfg c;
+        c.method = Method::None;
+        c.hitch = load_class("three_point_locked");
+        Rig r = build_implement(c);
+        const Pose towing = r.world->get_pose(r.a);
+        const Vec3 hitch_point = towing.transform_point(r.socket_a);
+        const real half = 0.5 * tilt_deg * kPi / 180.0;
+        Pose pose = r.world->get_pose(r.b);
+        pose.orientation = Quat{0.0, std::sin(half), 0.0, std::cos(half)} * pose.orientation;
+        pose.position = hitch_point - pose.orientation.rotate(r.socket_b);
+        r.world->backend().set_pose(r.b, pose);
+        r.cfg.method = Method::Spring;
+        r.coupling = r.world->attach(link_desc(r));
+        return r;
+    };
+    Rig flat = hang(0.0);
+    flat.world->step();
+    const real flat_first = flat.world->coupling_state(flat.coupling).mean_force_on_towing_world.length();
+
+    Rig r = hang(3.0);
+    r.world->step();
+    const real first_force = r.world->coupling_state(r.coupling).mean_force_on_towing_world.length();
+    CHECK(std::abs(r.world->coupling_state(r.coupling).pitch_rad) * 180.0 / kPi == Catch::Approx(3.0).margin(0.1));
+    const Metrics m = run(r, 2.0, {});
+    std::printf("latch from 3 deg: first tick %.0f N (flat %.0f N), peak %.0f N, end %.3f mm %.3f deg\n", first_force, flat_first, m.force_peak_n, m.err_final_mm, r.world->coupling_state(r.coupling).pitch_rad * 180.0 / kPi);
+    CHECK(m.finite);
+    CHECK(first_force < 1.2 * flat_first);
+    CHECK(m.force_peak_n < 40000.0);
+    CHECK(m.err_final_mm < 0.3);
+    CHECK(std::abs(r.world->coupling_state(r.coupling).pitch_rad) < 1e-3);
+}
+
+TEST_CASE("Coupling: detach frees both vehicles and retires the id", "[machine][vehicle]") {
+    Cfg c;
+    c.trailer_mass = 7500.0;
+    Rig r = build_rig(c, -700.0);
+    settle(r, 0.5);
+    launch(r, 8.0);
+    ps_test::settle(*r.world, 0.25);
+    const HitchId old = r.coupling;
+    r.world->detach(old);
+    CHECK_FALSE(r.world->hitch_alive(old));
+    CHECK_THROWS_AS(r.world->coupling_state(old), std::invalid_argument);
+    CHECK_THROWS_AS(r.world->detach(old), std::invalid_argument);
+
+    r.elements.push_back(std::make_unique<SpeedHold>(Frame(r.a), 14.0, 8000.0, 8000.0));
+    const ForceElementId pull = r.world->add_force_element(r.elements.back().get());
+    for (int i = 0; i < 480; ++i) r.world->step();
+    CHECK(hitch_error(r).length() > 1.0);
+
+    // A reused slot does not bring the old id back.
+    r.world->remove_force_element(pull);
+    const Pose towing = r.world->get_pose(r.a);
+    r.world->backend().set_motion(r.a, Motion{});
+    r.world->backend().set_motion(r.b, Motion{});
+    Pose pose = towing;
+    pose.position += towing.orientation.rotate(r.socket_a - r.socket_b);
+    r.world->backend().set_pose(r.b, pose);
+    const HitchId fresh = r.world->attach(link_desc(r));
+    CHECK(fresh.index == old.index);
+    CHECK(fresh.generation != old.generation);
+    CHECK(r.world->hitch_alive(fresh));
+    CHECK_FALSE(r.world->hitch_alive(old));
+}
+
+TEST_CASE("Coupling: after detach the two bodies collide and the wheels see the partner again", "[machine][vehicle]") {
+    Cfg c;
+    c.drawbar_overlap = true;
+    Rig r = build_rig(c);
+    ps_test::settle(*r.world, 1.0);
+    const real jockey_coupled = r.world->wheel_telemetry(r.vb, 2).fz;
+    r.world->detach(r.coupling);
+    bool touched = false;
+    real jockey_free = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        r.world->step();
+        jockey_free = std::max(jockey_free, r.world->wheel_telemetry(r.vb, 2).fz);
+        for (const ContactEvent& e : r.world->last_contact_events()) {
+            touched = touched || (e.a == r.a && e.b == r.b) || (e.a == r.b && e.b == r.a);
+        }
+    }
+    CHECK(touched);
+    // A cast starting inside the car's box reports a hit at once, and the wheel reads full bump.
+    CHECK(jockey_free > 2.0 * jockey_coupled);
+}
+
+TEST_CASE("Coupling: a vehicle can be destroyed with its hitches alive", "[machine][vehicle]") {
+    Cfg c;
+    c.trailer_mass = 7500.0;
+    c.tractor = true;
+    c.hitch = load_class("drawbar_pin");
+    Rig r = build_chain(c);
+    settle(r, 0.5);
+    CHECK_THROWS_AS(r.world->destroy_body(r.b), std::logic_error);
+
+    r.world->destroy_vehicle(r.vb); // the one in the middle
+    CHECK_FALSE(r.world->hitch_alive(r.coupling));
+    CHECK_FALSE(r.world->hitch_alive(r.coupling2));
+    CHECK_THROWS_AS(r.world->destroy_vehicle(r.vb), std::invalid_argument);
+    CHECK_THROWS_AS(r.world->vehicle_air(r.vb), std::invalid_argument);
+    machine::CouplingDesc d = link_desc(r);
+    CHECK_FALSE(r.world->check_attach(d).ok);
+
+    r.world->step();
+    const WorldSnapshot& snap = r.world->snapshots().read();
+    REQUIRE(snap.vehicles.size() == 3);
+    CHECK(snap.vehicles[0].id == r.va);
+    CHECK_FALSE(snap.vehicles[1].id.valid());
+    CHECK(snap.vehicles[1].wheels.empty());
+    CHECK(snap.vehicles[2].id == r.vc);
+
+    r.world->destroy_body(r.b);
+    const real z_before = r.world->get_pose(r.a).position.z;
+    for (int i = 0; i < 120; ++i) r.world->step();
+    CHECK(std::abs(r.world->get_pose(r.a).position.z - z_before) < 0.02);
+    CHECK(r.world->wheel_telemetry(r.va, 0).fz > 1000.0);
+    CHECK(r.world->wheel_telemetry(r.vc, 0).fz > 1000.0);
+}
+
+TEST_CASE("Coupling: attach, detach and destroy are refused from inside a step", "[machine][vehicle]") {
+    Rig r = build_rig(uncoupled_tandem());
+    settle(r, 1.0);
+    place_socket(r, Vec3{});
+    const machine::CouplingDesc d = link_desc(r);
+    REQUIRE(r.world->check_attach(d).ok);
+    int refused = 0;
+    r.world->set_between_forces_and_backend_step_hook([&](World& w) {
+        // Caught by type: a valid desc leaves the "between steps" rule as the only reason to throw.
+        try { (void)w.attach(d); } catch (const std::logic_error&) { ++refused; }
+        try { w.destroy_vehicle(r.vb); } catch (const std::logic_error&) { ++refused; }
+        try { w.detach(HitchId{0, 1}); } catch (const std::logic_error&) { ++refused; }
+    });
+    r.world->step();
+    r.world->set_between_forces_and_backend_step_hook({});
+    CHECK(refused == 3);
+    CHECK(r.world->check_attach(d).ok);
+    CHECK_NOTHROW(r.world->wheel_telemetry(r.vb, 0));
+}
+
+TEST_CASE("Coupling: the state hash sees a hitch, and only a live one", "[machine][vehicle]") {
+    Rig r = build_rig(uncoupled_tandem());
+    settle(r, 1.0);
+    place_socket(r, Vec3{0.05, 0.0, 0.0});
+    const std::uint64_t plain = r.world->state_hash();
+    const machine::CouplingDesc d = link_desc(r);
+    const HitchId hitch = r.world->attach(d);
+    const std::uint64_t latching = r.world->state_hash();
+    CHECK(latching != plain);
+    r.world->detach(hitch);
+    CHECK(r.world->state_hash() == plain);
+
+    // The latch steers everything that follows, so it is state.
+    machine::CouplingDesc slower = d;
+    slower.hitch.latch_time_s = 2.0 * d.hitch.latch_time_s;
+    const HitchId other = r.world->attach(slower);
+    CHECK(r.world->state_hash() != latching);
+    r.world->detach(other);
+
+    r.world->step();
+    r.world->attach(d);
+    const std::uint64_t before = r.world->state_hash();
+    r.world->step();
+    CHECK(r.world->state_hash() != before);
+}
+
+TEST_CASE("Coupling: runtime attach, detach and destroy are worker-count independent", "[machine][vehicle]") {
+    const auto hashes = [](int workers) {
+        Cfg c = uncoupled_tandem();
+        c.workers = workers;
+        Rig r = build_rig(c);
+        settle(r, 0.5);
+        place_socket(r, Vec3{0.05, 0.0, 0.0});
+        std::vector<std::uint64_t> out;
+        HitchId hitch{};
+        for (int i = 0; i < 480; ++i) {
+            if (i == 0 || i == 240) hitch = r.world->attach(link_desc(r));
+            if (i == 200) r.world->detach(hitch);
+            if (i == 400) r.world->destroy_vehicle(r.vb);
+            r.world->set_control("steer", 0.05 * std::sin(2.0 * kPi * static_cast<real>(i) / 120.0));
+            r.world->step();
+            out.push_back(r.world->state_hash());
+        }
+        return out;
+    };
+    CHECK(hashes(1) == hashes(10));
+}
+
 TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {
     // The bar swings about the anchor for 10 s, a few full periods. -41.4 % of m g L in 60 s before the backend's step
     // was made to land on the shadow's end pose; a socket spring then fought the difference between the two paths.
@@ -1303,6 +1608,9 @@ TEST_CASE("Coupling: a coupled pair is worker-count independent and allocates no
     settle(r, 0.5);
     launch(r, k100KmH);
     ps_test::settle(*r.world, 0.5);
+    // The ticks below run with a latch ramping in.
+    r.world->detach(r.coupling);
+    r.coupling = r.world->attach(link_desc(r));
     jobs::debug_alloc::reset();
     jobs::debug_alloc::set_armed(true);
     for (int i = 0; i < 240; ++i) {

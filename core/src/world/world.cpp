@@ -308,6 +308,7 @@ void World::stage_freeze_tick_start_state() {
     const std::size_t n = vehicle_system_->count();
     for (std::size_t i = 0; i < n; ++i) {
         const VehicleId id{static_cast<id_index_t>(i), 1};
+        if (!vehicle_system_->contains(id)) continue;
         vehicle_air_[i] = environment_->sample_air(backend_->get_pose(vehicle_system_->at(id).chassis()).position);
     }
 }
@@ -427,8 +428,12 @@ void World::stage_snapshot() {
         const VehicleId id{static_cast<id_index_t>(vi), 1};
         const vehicle::VehicleInstance& vinst = vehicle_system_->at(id);
         VehicleSnapshot& vsnap = snap.vehicles[vi];
-        vsnap.id = id;
         vsnap.wheels.clear();
+        if (!vehicle_system_->contains(id)) {
+            vsnap.id = VehicleId{};
+            continue;
+        }
+        vsnap.id = id;
         const std::size_t wc = vinst.wheel_count();
         for (std::size_t w = 0; w < wc; ++w) vsnap.wheels.push_back(vinst.wheel_state(w));
         // PHYS-033 P4 I3 plan section 4.3 commit 5: default-constructed
@@ -455,6 +460,7 @@ void World::stage_snapshot() {
 }
 
 void World::step() {
+    in_step_ = true;
     job_system_->reset_worker_stats();
     const auto tick_t0 = std::chrono::steady_clock::now();
 
@@ -466,6 +472,7 @@ void World::step() {
     apply_contents_mass(false);
 
     pipeline_->run(*job_system_);
+    in_step_ = false;
 
     // Assists I7c: control-channel writes the vehicles queued during their step (a drive-mode change writes its TC /
     // launch-control default into the channel itself). Applied HERE - sequentially, on the sim thread, after every job
@@ -473,6 +480,7 @@ void World::step() {
     // the same (global) channel the later vehicle overwrites the earlier one. A set_control made before the next
     // step() therefore wins over the physics' write from the next tick on.
     for (std::size_t vi = 0; vi < vehicle_system_->count(); ++vi) {
+        if (!vehicle_system_->contains(VehicleId{static_cast<id_index_t>(vi), 1})) continue;
         for (const vehicle::PendingChannelWrite& w : vehicle_system_->at(VehicleId{static_cast<id_index_t>(vi), 1}).pending_channel_writes()) {
             control_channel_values_[w.index] = w.value;
         }
@@ -705,12 +713,30 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
     return articulation_system_->link_frame(id, link_index, local_offset);
 }
 
-HitchId World::create_coupling(const machine::CouplingDesc& desc) {
-    return vehicle_system_->create_coupling(desc, *backend_);
+machine::AttachCheck World::check_attach(const machine::CouplingDesc& desc) const {
+    return vehicle_system_->check_attach(desc, *backend_);
+}
+
+HitchId World::attach(const machine::CouplingDesc& desc) {
+    if (in_step_) throw std::logic_error("attach: only between steps");
+    return vehicle_system_->attach(desc, *backend_, config_.substep_rate_hz);
+}
+
+void World::detach(HitchId id) {
+    if (in_step_) throw std::logic_error("detach: only between steps");
+    vehicle_system_->detach(id, *backend_);
+}
+
+bool World::hitch_alive(HitchId id) const { return vehicle_system_->contains(id); }
+
+void World::destroy_vehicle(VehicleId id) {
+    if (in_step_) throw std::logic_error("destroy_vehicle: only between steps");
+    vehicle_system_->retire(id, *backend_);
+    if (id.index < contents_mass_.size()) contents_mass_[id.index].enabled = false;
 }
 
 const machine::CouplingState& World::coupling_state(HitchId id) const {
-    if (!vehicle_system_->contains(id)) throw std::invalid_argument("invalid coupling");
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("coupling_state: unknown hitch");
     return vehicle_system_->coupling_state(id);
 }
 
@@ -1177,6 +1203,7 @@ BodyId World::create_body(const BodyDesc& desc, const ShapeHandle& shape) {
 }
 
 void World::destroy_body(BodyId id) {
+    if (vehicle_system_->chassis_is_coupled(id)) throw std::logic_error("destroy_body: this chassis is coupled; detach it first");
     const bool was_static = terrain_manager_ && backend_->is_static(id);
     backend_->destroy_body(id);
     if (was_static) terrain_manager_->on_static_geometry_changed();

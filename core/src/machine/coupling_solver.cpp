@@ -30,10 +30,39 @@ struct Row {
     return {math::atan2(r(1, 0), r(0, 0)), math::asin(std::clamp(-r(2, 0), real(-1.0), real(1.0))), math::atan2(r(2, 1), r(2, 2))};
 }
 
+struct HitchBasis {
+    std::array<real, 3> angle{};
+    std::array<Vec3, 3> dual{};
+};
+
+[[nodiscard]] HitchBasis hitch_basis(const SocketBody& a, const SocketBody& b) {
+    HitchBasis out;
+    out.angle = cardan_angles((a.hitch_frame.conjugate() * b.hitch_frame).to_mat3());
+    const Vec3 e1 = a.hitch_frame.rotate(Vec3::unit_z());
+    const Vec3 e3 = b.hitch_frame.rotate(Vec3::unit_x());
+    const Vec3 e2 = cross(e1, e3).normalized();
+    const Vec3 c23 = cross(e2, e3);
+    const real volume = dot(e1, c23);
+    out.dual = {c23 / volume, cross(e3, e1) / volume, cross(e1, e2) / volume};
+    return out;
+}
+
 using Mat = drivetrain::SmallMat<kMaxRows, kMaxRows>;
 using Vec = drivetrain::SmallVec<kMaxRows>;
 
 } // namespace
+
+HitchMeasure measure_hitch(const SocketBody& a, const SocketBody& b, const HitchClassDesc& hitch) {
+    HitchMeasure m;
+    m.error = a.socket_position - b.socket_position;
+    m.error_rate = (a.linear + cross(a.angular, a.socket_offset)) - (b.linear + cross(b.angular, b.socket_offset));
+    if (has_rotational_rows(hitch)) {
+        const HitchBasis basis = hitch_basis(a, b);
+        m.angle = basis.angle;
+        for (std::size_t k = 0; k < 3; ++k) m.angle_rate[k] = dot(basis.dual[k], b.angular - a.angular);
+    }
+    return m;
+}
 
 SocketSolve solve_socket_coupling(const SocketBody& a, const SocketBody& b, const HitchClassDesc& hitch, real h, const LatchTarget& latch) {
     SocketSolve out;
@@ -54,13 +83,8 @@ SocketSolve solve_socket_coupling(const SocketBody& a, const SocketBody& b, cons
     }
 
     if (has_rotational_rows(hitch)) {
-        out.angle = cardan_angles((a.hitch_frame.conjugate() * b.hitch_frame).to_mat3());
-        const Vec3 e1 = a.hitch_frame.rotate(Vec3::unit_z());
-        const Vec3 e3 = b.hitch_frame.rotate(Vec3::unit_x());
-        const Vec3 e2 = cross(e1, e3).normalized();
-        const Vec3 c23 = cross(e2, e3);
-        const real volume = dot(e1, c23);
-        const std::array<Vec3, 3> dual = {c23 / volume, cross(e3, e1) / volume, cross(e1, e2) / volume};
+        const auto [angle, dual] = hitch_basis(a, b);
+        out.angle = angle;
         const Vec3 omega_rel = b.angular - a.angular;
         const std::array<const HitchAxis*, 3> axes = {&hitch.yaw, &hitch.pitch, &hitch.roll};
         for (std::size_t k = 0; k < 3; ++k) {

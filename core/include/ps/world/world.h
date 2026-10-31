@@ -310,10 +310,20 @@ public:
     // header). Always empty for every production caller.
     VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
                               const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
-    // Attachment spike A0: a socket coupling between two vehicles (ps/machine/coupling.h). Sim thread between steps,
-    // setup time. The two vehicles then step together in one job, substep by substep. Couplings are never destroyed.
-    HitchId create_coupling(const machine::CouplingDesc& desc);
+    // A hitch between two vehicles (ps/machine/coupling.h). attach, detach and destroy_vehicle run on the sim thread
+    // between steps and rebuild the islands there: the coupled vehicles then step together in one job. From inside a
+    // step they throw std::logic_error. attach measures the sockets as they are and ramps them together over the
+    // class's latch time, without a jump in force; check_attach says whether it would, and what stands in the way, so
+    // a caller can ask without catching. A refused attach throws std::invalid_argument with the same message.
+    [[nodiscard]] machine::AttachCheck check_attach(const machine::CouplingDesc& desc) const;
+    HitchId attach(const machine::CouplingDesc& desc);
+    void detach(HitchId id);
+    [[nodiscard]] bool hitch_alive(HitchId id) const;
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
+    // Takes a vehicle out of the simulation, detaching its hitches. Its chassis stays a plain body, for the caller to
+    // destroy or reuse; every other vehicle keeps its index and channels. Whatever checks a VehicleId refuses the stale
+    // one, and WorldSnapshot::vehicles keeps its slot with an invalid id and no wheels.
+    void destroy_vehicle(VehicleId id);
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the
@@ -512,6 +522,7 @@ private:
     WorldConfig config_;
     real dt_;
     std::uint64_t tick_ = 0;
+    bool in_step_ = false;
     real sim_time_ = 0.0;
     std::vector<aero::WakeSource> aero_wakes_;
     std::shared_ptr<environment::Environment> environment_; // weather plan W2; null == none installed

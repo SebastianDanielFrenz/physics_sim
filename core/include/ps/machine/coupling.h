@@ -15,6 +15,9 @@
 #include "ps/types.h"
 #include "ps/world/ids.h"
 
+#include <array>
+#include <string>
+
 namespace ps::machine {
 
 struct CouplingDesc {
@@ -28,6 +31,15 @@ struct CouplingDesc {
     HitchClassDesc hitch;
 };
 
+// What the hitch would see if it latched now.
+struct AttachCheck {
+    bool ok = false;
+    real error_m = 0.0;   // distance between the sockets
+    real speed_m_s = 0.0; // their relative speed
+    std::array<real, 3> angle_rad{}; // yaw, pitch, roll of the towed frame; zero for a class with every axis free
+    std::string message;  // why not, with the measured and allowed values; empty when ok
+};
+
 // Last tick's outcome (sim thread only, unhashed: everything in it is derived).
 struct CouplingState {
     Vec3 mean_force_on_towing_world{};
@@ -35,6 +47,7 @@ struct CouplingState {
     real max_error_m = 0.0; // largest socket separation in the shadows during the tick
     real yaw_rad = 0.0, pitch_rad = 0.0, roll_rad = 0.0; // at the last substep; 0 for a class with every axis free
     real work_j = 0.0;      // cumulative work the coupling did on the relative motion (negative = removed energy)
+    real latch_progress = 1.0; // 0 at attach, 1 once the rows hold the sockets themselves
 };
 
 } // namespace ps::machine

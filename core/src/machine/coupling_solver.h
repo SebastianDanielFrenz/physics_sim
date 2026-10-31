@@ -48,6 +48,14 @@ struct SocketBody {
     Mat3 inv_inertia_world = Mat3::zero();
 };
 
+// The rows' positions and rates between the two bodies; the rotational ones only for a class that has any.
+struct HitchMeasure {
+    Vec3 error{}, error_rate{};
+    std::array<real, 3> angle{}, angle_rate{}; // yaw, pitch, roll
+};
+
+[[nodiscard]] HitchMeasure measure_hitch(const SocketBody& a, const SocketBody& b, const HitchClassDesc& hitch);
+
 // What the rows are held to instead of zero while a latch ramps in.
 struct LatchTarget {
     Vec3 error{}, error_rate{};
