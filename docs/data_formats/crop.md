@@ -11,9 +11,9 @@ and the thermal time it produces move the crop.
 
 **Source tags** work as in `soil.md`: every number or boolean in a block needs an
 entry in that block's `source` object starting with `[C]`, `[D]`, `[M]` or
-`[AS]`. In the shipped wheat file only the FAO-56 Table 22 values are `[C]`;
-the AquaCrop defaults and the phenology are recalled and tagged `[AS]` on
-purpose.
+`[AS]`. In the shipped wheat file the AquaCrop v7.3 Annex I.10 values and the
+FAO-56 Table 12/22 values are `[C]` (document and section in each entry), the
+stage table is `[D]` from DWD phenology and DWD station data, the rest `[AS]`.
 
 | Block / key | Unit | Notes |
 |---|---|---|
@@ -21,7 +21,7 @@ purpose.
 | `extends`, `name`, `family` | | `family` groups crops for the pathogen/rotation hooks of later increments |
 | `thermal.t_base_c`, `t_upper_c` | degC | daily GDD = (clamp(Tmax) + clamp(Tmin))/2 - Tbase, both clamped to [Tbase, Tupper] |
 | `phenology.stages[]` | | ordered `{name, bbch, gdd}`: development units from sowing at which the stage starts, strictly ascending, first 0. Names the model needs: `emergence` (index >= 1), `flowering`, `senescence`, `maturity` in that order (`flowering <= senescence <= maturity`) |
-| `phenology.vernalisation_until` | | stage name; development is slowed before it. Present iff a `vernalisation` block exists |
+| `phenology.vernalisation_until` | | stage name; vernalisation accumulates from sowing until it, and the development of the emerged plant is slowed before it. Present iff a `vernalisation` block exists |
 | `vernalisation.t_min_c`, `t_opt_c`, `t_max_c` | degC | cardinal temperatures of the Wang & Engel response, rate = (2 a^alpha b^alpha - a^(2 alpha))/b^(2 alpha), 1 effective day per day at `t_opt_c`, 0 at/outside the limits |
 | `vernalisation.days_saturation` | day | effective days for the full development rate |
 | `vernalisation.min_rate_factor` | | development rate factor with no vernalisation, [0, 1]; the factor rises linearly to 1 |
@@ -37,8 +37,10 @@ purpose.
 | `water.sen_p_upper`, `sen_shape` | | Ks for early senescence |
 | `biomass.wp_star_g_m2` | g/m2 | normalised water productivity; biomass per day = WP* x Tr/ET0 x min(1, GDD/gdd_full) x stress factors |
 | `biomass.gdd_full` | GDD/day | thermal limit of biomass production (0 = off) |
-| `yield.hi0`, `hi_build_gdd` | | reference harvest index, development units after flowering over which it builds |
-| `yield.pollination_window_gdd`, `hi_water_stress_k`, `heat_pollination_lo_c`, `heat_pollination_up_c` | | HI is reduced by the mean (1 - Ks_sto) in the window (times k) and by the mean heat factor (Tmax between lo and up) |
+| `yield.hi0`, `hi_build_gdd` | | reference harvest index, development units after flowering over which it builds (also the yield-formation length) |
+| `yield.flowering_length_gdd`, `excess_fruits_pct`, `ppol` | GDD, %, | AquaCrop 3.12.5: share of flowers opening per day from the flowering distribution f(k) = 0.00558 k^0.63 - 0.000969 k - 0.00383 (k in % of the duration); f_pollination = min(1, (1 + excess/100) sum F_j Ks_pol,j) with the not-yet-open share counted as pollinated; Ks_pol,w linear from 1 at depletion `ppol` x TAW to 0 at TAW |
+| `yield.cold_t_c`, `cold_width_k`, `heat_t_c`, `heat_width_k`, `logistic_steepness` | degC, K | Ks_pol,c / Ks_pol,h: logistic curves (rescaled to 0..1) over `width` below Tmin = `cold_t_c` / above Tmax = `heat_t_c`; Ks_pol = min of the three |
+| `yield.sto_coefficient_b` | | AquaCrop 3.12.6 Eq. 3.12m/n: f_stomata = mean over the yield-formation days of 1 - (1 - Ks_sto^(1/10))/b, b in 1 (strong) .. 20 (small) |
 | `roots.zr_min_m`, `zr_max_m`, `gdd_full` | m, GDD | root depth, linear in development units from emergence to `gdd_full` (from sowing) |
 | `frost.kill_onset_c`, `kill_full_c` | degC | an emerged stand loses (onset - Tmin)/(onset - full) of its stand and canopy per day |
 | `frost.snow_insulation_swe_mm`, `snow_floor_c` | mm, degC | with at least this snow water equivalent the stand sees at most Tmin = floor |

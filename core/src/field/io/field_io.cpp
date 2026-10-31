@@ -207,10 +207,15 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         ObjectReader w(block_of(r, "yield", origin), "yield", origin);
         d.hi0 = w.number("hi0", true, 0.0);
         d.hi_build_gdd = w.number("hi_build_gdd", true, 0.0);
-        d.pollination_window_gdd = w.number("pollination_window_gdd", true, 0.0);
-        d.hi_water_stress_k = w.number("hi_water_stress_k", true, 0.0);
-        d.heat_pollination_lo_c = w.number("heat_pollination_lo_c", true, 0.0);
-        d.heat_pollination_up_c = w.number("heat_pollination_up_c", true, 0.0);
+        d.flowering_length_gdd = w.number("flowering_length_gdd", true, 0.0);
+        d.excess_fruits_pct = w.number("excess_fruits_pct", true, 0.0);
+        d.ppol = w.number("ppol", true, 0.0);
+        d.hi_sto_b = w.number("sto_coefficient_b", true, 0.0);
+        d.pol_cold_t_c = w.number("cold_t_c", true, 0.0);
+        d.pol_cold_width_k = w.number("cold_width_k", true, 0.0);
+        d.pol_heat_t_c = w.number("heat_t_c", true, 0.0);
+        d.pol_heat_width_k = w.number("heat_width_k", true, 0.0);
+        d.pol_logistic_steepness = w.number("logistic_steepness", true, 0.0);
         w.skip("source");
         w.finish();
     }

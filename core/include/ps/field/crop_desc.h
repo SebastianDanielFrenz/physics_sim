@@ -62,12 +62,21 @@ struct CropDesc {
     real wp_star_g_m2 = 0.0;             // normalised water productivity, g biomass per m2 per (Tr/ET0 mm/mm)
     real biomass_gdd_full = 0.0;         // GDD/day for unrestricted biomass; below it growth is proportional (0 = off)
 
-    // Harvest index.
+    // Harvest index (AquaCrop, Raes et al. reference manual ch. 3.12). HI at the end of
+    // yield formation = hi0 x f_pollination x f_stomata x build-up, where
+    //   f_pollination = min(1, (1 + excess_fruits/100) x sum_j F_j Ks_pol,j)   (Eq. 3.12i/j: F_j is the
+    //                   share of flowers opening on flowering day j, Ks_pol the min of the water,
+    //                   cold and heat pollination coefficients; the share not yet open counts as pollinated)
+    //   f_stomata     = mean over the yield-formation days of 1 - (1 - Ks_sto^(1/10)) / b   (Eq. 3.12m/n).
     real hi0 = 0.0;
-    real hi_build_gdd = 0.0;             // development units after flowering over which HI builds up
-    real pollination_window_gdd = 0.0;   // development units after flowering that count for the stress mean
-    real hi_water_stress_k = 0.0;        // HI loss per unit mean (1 - Ks_sto) in the window
-    real heat_pollination_lo_c = 0.0, heat_pollination_up_c = 0.0;  // Tmax at which pollination starts / fully fails
+    real hi_build_gdd = 0.0;             // development units after flowering over which HI builds up (also the yield-formation length)
+    real flowering_length_gdd = 0.0;     // length of the flowering stage in development units
+    real excess_fruits_pct = 0.0;        // excess of potential fruits, %
+    real ppol = 0.0;                     // depletion fraction of TAW at which pollination starts to fail (Ks_pol,w linear to 0 at TAW)
+    real hi_sto_b = 0.0;                 // coefficient b of the negative effect of stomatal closure, 1 (strong) .. 20 (small)
+    real pol_cold_t_c = 0.0, pol_cold_width_k = 0.0;   // Tmin below which pollination fails, and the width to full failure
+    real pol_heat_t_c = 0.0, pol_heat_width_k = 0.0;   // Tmax above which pollination fails, and the width to full failure
+    real pol_logistic_steepness = 0.0;   // steepness of the logistic Ks curve of the temperature stresses
 
     // Roots (linear in development units from emergence).
     real zr_min_m = 0.0, zr_max_m = 0.0;

@@ -6,25 +6,61 @@
     "t_base_c": 0.0,
     "t_upper_c": 26.0,
     "source": {
-      "t_base_c": "[AS] AquaCrop wheat default, recalled from the reference manual (not re-read this session).",
-      "t_upper_c": "[AS] AquaCrop wheat default upper threshold, recalled (not re-read this session)."
+      "t_base_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.1: Tbase 0.0 degC.",
+      "t_upper_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.1: Tupper 26.0 degC."
     }
   },
   "phenology": {
     "stages": [
-      { "name": "sown", "bbch": 0, "gdd": 0 },
-      { "name": "emergence", "bbch": 10, "gdd": 140 },
-      { "name": "tillering", "bbch": 25, "gdd": 450 },
-      { "name": "stem_elongation", "bbch": 30, "gdd": 800 },
-      { "name": "booting", "bbch": 45, "gdd": 1250 },
-      { "name": "flowering", "bbch": 65, "gdd": 1600 },
-      { "name": "senescence", "bbch": 77, "gdd": 1900 },
-      { "name": "maturity", "bbch": 89, "gdd": 2350 },
-      { "name": "overripe", "bbch": 92, "gdd": 2500 }
+      {
+        "name": "sown",
+        "bbch": 0,
+        "gdd": 0
+      },
+      {
+        "name": "emergence",
+        "bbch": 10,
+        "gdd": 155
+      },
+      {
+        "name": "stem_elongation",
+        "bbch": 31,
+        "gdd": 1110
+      },
+      {
+        "name": "heading",
+        "bbch": 51,
+        "gdd": 1620
+      },
+      {
+        "name": "flowering",
+        "bbch": 65,
+        "gdd": 1760
+      },
+      {
+        "name": "senescence",
+        "bbch": 71,
+        "gdd": 1900
+      },
+      {
+        "name": "milk_ripe",
+        "bbch": 75,
+        "gdd": 2160
+      },
+      {
+        "name": "maturity",
+        "bbch": 87,
+        "gdd": 2480
+      },
+      {
+        "name": "overripe",
+        "bbch": 92,
+        "gdd": 2815
+      }
     ],
     "vernalisation_until": "stem_elongation",
     "source": {
-      "stages": "[AS] cumulative development units (thermal time above 0 degC, scaled by the vernalisation factor before stem elongation) from sowing. Chosen so that a mid-October sowing in the Rhein-Main climate flowers in early-mid June and ripens in July, as German winter wheat does (DWD phenology: heading late May, yellow ripeness mid-late July; recalled, not re-read). BBCH codes are the standard scale."
+      "stages": "[D] emergence 155, stem_elongation 1110, heading 1620, milk_ripe 2160, maturity 2480, overripe 2815 are the development units (thermal time 0-26 degC scaled by the vernalisation factor after emergence) accumulated by the model's own functions along the Frankfurt/Main daily Tmin/Tmax record (DWD station 01420, 1992-2024) from the sowing date to the date of DWD phase 12 (Auflaufen, BBCH 10), 15 (Schossen Beginn, BBCH 31), 18 (Aehrenschieben, BBCH 51), 19 (Milchreife, BBCH 75), 21 (Gelbreife, BBCH 87) and 24 (Ernte), each phase date the mean of the year's winter-wheat annual reporters within 100 km of Frankfurt (DWD CDC opendata phenology/annual_reporters/crops, phase definitions in PH_Beschreibung_Phasendefinition_Jahresmelder_Landwirtschaft_Kulturpflanze.txt), averaged over 31 seasons. Result 155/1111/1622/2161/2478/2814 (sd 12/81/85/103/100/98 units); rounded. National means 1992-2024: sowing doy 280.1, BBCH 10 294.3, 31 116.3, 51 151.6, 75 183.1, 87 199.8, harvest 216.7. flowering 1760 [AS] (BBCH 65 is not observed by DWD; about 10 days after heading at 14 units/day); senescence 1900 [AS]: start of canopy decline, inside the AquaCrop range emergence+1000..2000 and chosen so that the green canopy is about half gone at maturity with the CDC below. The BBCH 71 code is a label. BBCH codes are the standard scale. The AquaCrop flowering range (emergence + 1000-1300 GDD) applies to spring wheat or winter wheat without a cold period (Annex I.10 note) and is not used for a German winter wheat."
     }
   },
   "vernalisation": {
@@ -34,11 +70,11 @@
     "days_saturation": 50.0,
     "min_rate_factor": 0.3,
     "source": {
-      "t_min_c": "[AS] cardinal temperatures of the Wang & Engel (1998) vernalisation response for wheat as used by Streck et al. (2003), recalled from memory.",
+      "t_min_c": "[AS] cardinal temperatures of the Wang & Engel (1998) vernalisation response for wheat as used by Streck et al. (2003, Agron. J. 95), recalled; a search this session could not confirm the three values (-1.3, 4.9, 15.7).",
       "t_opt_c": "[AS] see t_min_c.",
       "t_max_c": "[AS] see t_min_c.",
-      "days_saturation": "[AS] effective vernalisation days for the full development rate of a winter wheat; the literature spans roughly 30-60 days.",
-      "min_rate_factor": "[AS] relative development rate of an unvernalised winter wheat before stem elongation."
+      "days_saturation": "[AS] effective vernalisation days for the full development rate of a winter wheat; the literature spans roughly 30-60 days. With the DWD-calibrated stage table the vernalisation completes in January in every season of the Frankfurt record, so the value has little effect on the dates.",
+      "min_rate_factor": "[AS] relative development rate of an unvernalised emerged winter wheat before stem elongation (the model slows development only after emergence)."
     }
   },
   "canopy": {
@@ -46,70 +82,80 @@
     "plant_density_per_ha": 2500000,
     "ccx": 0.96,
     "cgc_per_gdd": 0.0055,
-    "cdc_per_gdd": 0.0052,
+    "cdc_per_gdd": 0.004,
     "senescence_acceleration": 0.5,
     "source": {
-      "cc0_cm2_per_plant": "[AS] AquaCrop wheat default canopy size per seedling, recalled.",
-      "plant_density_per_ha": "[AS] established plants in German practice (250-400 seeds per m2 drilled, roughly 80 % emerging).",
-      "ccx": "[AS] AquaCrop wheat default maximum canopy cover, recalled.",
-      "cgc_per_gdd": "[AS] inside the 0.004-0.007 per GDD range that winter-wheat AquaCrop studies report as recommended (Agronomy 11, 2265, 2021); the point value is chosen here.",
-      "cdc_per_gdd": "[AS] same source and range as cgc_per_gdd (0.004-0.007).",
-      "senescence_acceleration": "[AS] extra senescence progress per unit of senescence stress (1 - Ks_sen)."
+      "cc0_cm2_per_plant": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: soil surface covered by an individual seedling 1.50 cm2/plant.",
+      "plant_density_per_ha": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: 2 000 000 - 7 000 000 plants per hectare (management); 2.5 million is the value for German practice (250-400 seeds/m2 drilled, about 80 % emerging), inside the range.",
+      "ccx": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: maximum canopy cover 80-99 % (management); 0.96 inside the range.",
+      "cgc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: canopy growth coefficient 0.005-0.007 per GDD; 0.0055 inside the range.",
+      "cdc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: canopy decline coefficient 0.004 per GDD (was 0.0052 [AS] in F1a).",
+      "senescence_acceleration": "[AS] extra senescence progress per unit of senescence stress (1 - Ks_sen); the model's own device (AquaCrop shifts the senescence start instead)."
     }
   },
   "water": {
-    "kc_tr_x": 1.10,
+    "kc_tr_x": 1.1,
     "height_max_m": 1.0,
     "p_depletion": 0.55,
     "p_adjust_for_etc": true,
-    "exp_p_upper": 0.20,
+    "exp_p_upper": 0.2,
     "exp_p_lower": 0.65,
     "exp_shape": 5.0,
-    "sen_p_upper": 0.70,
+    "sen_p_upper": 0.7,
     "sen_shape": 2.5,
     "source": {
-      "kc_tr_x": "[AS] AquaCrop crop transpiration coefficient at full canopy, 1.10 for wheat, recalled.",
-      "height_max_m": "[AS] FAO-56 Table 12 wheat height 1 m, recalled.",
-      "p_depletion": "[C] FAO-56 Table 22 (Allen et al. 1998, ch. 8): winter wheat p = 0.55 at ETc ~ 5 mm/day, maximum root depth 1.5-1.8 m.",
+      "kc_tr_x": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 2: KcTr,x 1.10.",
+      "height_max_m": "[C] FAO-56 Table 12 (fao.org/4/x0490e/x0490e0b.htm): winter wheat maximum crop height 1 m.",
+      "p_depletion": "[C] FAO-56 Table 22 (Allen et al. 1998, ch. 8): winter wheat p = 0.55 at ETc ~ 5 mm/day, maximum root depth 1.5-1.8 m. This is the FAO-56 linear stomatal stress; AquaCrop's own psto is 0.65 with shape factor 2.5 (Annex I.10 section 4.1), a different curve that this model does not use.",
       "p_adjust_for_etc": "[C] FAO-56 Table 22 note: p = p_table + 0.04 (5 - ETc), limited to 0.1-0.8 (the limits are in the code as the note's own range).",
-      "exp_p_upper": "[AS] AquaCrop wheat canopy-expansion stress threshold, recalled.",
-      "exp_p_lower": "[AS] AquaCrop wheat canopy-expansion stress limit, recalled.",
-      "exp_shape": "[AS] AquaCrop stress curve shape, recalled.",
-      "sen_p_upper": "[AS] AquaCrop wheat early-senescence stress threshold, recalled.",
-      "sen_shape": "[AS] AquaCrop stress curve shape, recalled."
+      "exp_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.20 (the annex labels it 'pexp,lower ... Upper threshold').",
+      "exp_p_lower": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.65.",
+      "exp_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy expansion 5.0.",
+      "sen_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy senescence psen 0.70.",
+      "sen_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy senescence 2.5."
     }
   },
   "biomass": {
     "wp_star_g_m2": 15.0,
     "gdd_full": 14.0,
     "source": {
-      "wp_star_g_m2": "[AS] AquaCrop normalised biomass water productivity of C3 crops, 15 g/m2 (Steduto et al. 2007; Raes et al. 2012), recalled.",
-      "gdd_full": "[AS] growing degree days per day at which biomass production is unrestricted by cold (AquaCrop 'minimum GDD for full biomass'), recalled."
+      "wp_star_g_m2": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.1: WP* 15.0 g/m2.",
+      "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum growing degrees required for full biomass production 13.0-15.0 degC day (estimated); 14 is the midpoint."
     }
   },
   "yield": {
     "hi0": 0.46,
-    "hi_build_gdd": 700,
-    "pollination_window_gdd": 200,
-    "hi_water_stress_k": 0.4,
-    "heat_pollination_lo_c": 32.0,
-    "heat_pollination_up_c": 38.0,
+    "hi_build_gdd": 720,
     "source": {
-      "hi0": "[AS] reference harvest index; AquaCrop winter-wheat studies report 0.42-0.48.",
-      "hi_build_gdd": "[AS] harvest index builds up over about 700 GDD after flowering.",
-      "pollination_window_gdd": "[AS] development units after flowering whose stress counts for the harvest index.",
-      "hi_water_stress_k": "[AS] harvest index loss per unit mean (1 - Ks_sto) during the window. FITTED: 0.2 left the simulated yield response milder than FAO-33 winter wheat (seasonal Ky 1.00, FAO table at fao.org/4/y3655e/y3655e04.htm) by up to 0.12 in relative yield; 0.4 brings the worst deviation over 45 season runs to 0.097 (test C10). The value is calibrated against that reference, so C10 guards the calibration; it is not an independent check.",
-      "heat_pollination_lo_c": "[AS] Tmax at which heat starts to fail pollination.",
-      "heat_pollination_up_c": "[AS] Tmax at which pollination fails completely."
-    }
+      "hi0": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2: reference harvest index 45-50 % (cultivar); 0.46 inside the range.",
+      "hi_build_gdd": "[D] development units from the flowering stage to maturity of the stage table (2480 - 1760 = 720); also the length of yield formation over which the stomatal-closure effect is averaged.",
+      "flowering_length_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.3: length of the flowering stage 150-280 GDD; 200 inside the range.",
+      "excess_fruits_pct": "[AS] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2 lists 'medium' without a number; 50 % is the value of the manual's own worked example (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Fig. 3.12i).",
+      "ppol": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: pollination fails above a depletion of 0.85 of TAW (estimate); Ks_pol,w falls linearly to 0 at TAW (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12).",
+      "sto_coefficient_b": "[AS] coefficient b of the negative effect of stomatal closure during yield formation (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Eq. 3.12m/n: 1 = strong effect .. 20 = small effect); Annex I.10 section 3.2 gives only 'moderate' for wheat. 7 (recalled default crop file) is inside the range. The functional form (HI factor = mean of 1 - (1 - Ks_sto^(1/10))/b) is [C]; this is the model's drought response of the harvest index and replaces the fitted hi_water_stress_k of F1a.",
+      "cold_t_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum air temperature below which pollination starts to fail 5.0 degC (estimate).",
+      "cold_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: cold pollination coefficient reaches 0 five degrees below the threshold.",
+      "heat_t_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: maximum air temperature above which pollination starts to fail 35.0 degC (estimate); F1a had 32 [AS].",
+      "heat_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: heat pollination coefficient reaches 0 five degrees above the threshold (F1a had a 6 K width).",
+      "logistic_steepness": "[AS] the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits."
+    },
+    "flowering_length_gdd": 200,
+    "excess_fruits_pct": 50,
+    "ppol": 0.85,
+    "sto_coefficient_b": 7.0,
+    "cold_t_c": 5.0,
+    "cold_width_k": 5.0,
+    "heat_t_c": 35.0,
+    "heat_width_k": 5.0,
+    "logistic_steepness": 10.0
   },
   "roots": {
     "zr_min_m": 0.3,
     "zr_max_m": 1.5,
     "gdd_full": 1500,
     "source": {
-      "zr_min_m": "[AS] AquaCrop wheat minimum effective rooting depth, recalled.",
-      "zr_max_m": "[C] FAO-56 Table 22: winter wheat maximum rooting depth 1.5-1.8 m (lower end).",
+      "zr_min_m": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.4: minimum effective rooting depth 0.30 m.",
+      "zr_max_m": "[C] FAO-56 Table 22: winter wheat maximum rooting depth 1.5-1.8 m (lower end); AquaCrop's own limit is 'up to 2.40 m' (management). The root zone grows linearly in development units; AquaCrop uses a shape factor of 1.5, not modelled.",
       "gdd_full": "[AS] development units from sowing at which the maximum depth is reached (before flowering)."
     }
   },
@@ -133,5 +179,5 @@
       "shed_rate_per_day": "[AS] fraction of the remaining grain lost per day afterwards."
     }
   },
-  "source": "F1a winter wheat. Most AquaCrop defaults are recalled from the reference manual and published calibrations, not re-read in this session, and are tagged [AS] on purpose; only values read this session are tagged [C]."
+  "source": "F1b winter wheat. Annex I.10 values of the AquaCrop reference manual v7.3 and FAO-56 Table 12/22 are [C] (document, section in each entry); the stage table is [D] from DWD phenology and DWD Frankfurt station data; what remains [AS]: vernalisation cardinals, frost kill, ripeness/shedding, root depth timing, excess of fruits, HI coefficient b, logistic steepness, flowering and senescence stage placement, senescence_acceleration."
 }

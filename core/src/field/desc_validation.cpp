@@ -100,10 +100,14 @@ std::string crop_validation_error(const CropDesc& d) {
     c.nonneg("biomass_gdd_full", d.biomass_gdd_full);
     c.frac("hi0", d.hi0);
     c.pos("hi_build_gdd", d.hi_build_gdd);
-    c.pos("pollination_window_gdd", d.pollination_window_gdd);
-    c.nonneg("hi_water_stress_k", d.hi_water_stress_k);
-    c.fail_if(!(fin(d.heat_pollination_lo_c) && fin(d.heat_pollination_up_c) && d.heat_pollination_lo_c < d.heat_pollination_up_c),
-              "heat pollination needs lo < up");
+    c.pos("flowering_length_gdd", d.flowering_length_gdd);
+    c.nonneg("excess_fruits_pct", d.excess_fruits_pct);
+    c.fail_if(!(fin(d.ppol) && d.ppol > 0.0 && d.ppol < 1.0), "ppol must be in (0, 1)");
+    c.fail_if(!(fin(d.hi_sto_b) && d.hi_sto_b >= 1.0), "hi_sto_b must be >= 1");
+    c.pos("pol_cold_width_k", d.pol_cold_width_k);
+    c.pos("pol_heat_width_k", d.pol_heat_width_k);
+    c.fail_if(!fin(d.pol_cold_t_c) || !fin(d.pol_heat_t_c), "pollination temperatures must be finite");
+    c.pos("pol_logistic_steepness", d.pol_logistic_steepness);
     c.pos("zr_min_m", d.zr_min_m);
     c.fail_if(!(fin(d.zr_max_m) && d.zr_max_m >= d.zr_min_m), "zr_max_m must be >= zr_min_m");
     c.fail_if(d.stage_emergence >= 1 && d.stage_emergence < n && fin(d.root_gdd_full) &&

@@ -72,10 +72,10 @@ TEST_CASE("I1 the shipped soils, crop and climate load", "[field][io]") {
     CHECK(wheat.name == "winter_wheat");
     CHECK(wheat.stage_count() == 9);
     CHECK(wheat.stage_emergence == 1);
-    CHECK(wheat.stage_flowering == 5);
-    CHECK(wheat.stage_senescence == 6);
+    CHECK(wheat.stage_flowering == 4);
+    CHECK(wheat.stage_senescence == 5);
     CHECK(wheat.stage_maturity == 7);
-    CHECK(wheat.stage_vernalisation_end == 3);
+    CHECK(wheat.stage_vernalisation_end == 2);
     CHECK(wheat.vernalises);
     CHECK_THAT(wheat.p_depletion, WithinAbs(0.55, 1e-15));
     CHECK(wheat.p_adjust_for_etc);

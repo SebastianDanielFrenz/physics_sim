@@ -49,6 +49,21 @@ real ks_curve(real dep_frac, real p_upper, real p_lower, real shape) {
     return 1.0 - (ps::math::exp(shape * drel) - 1.0) / (ps::math::exp(shape) - 1.0);
 }
 
+// AquaCrop flowering distribution (Eq. 3.12i): f(k) = 0.00558 k^0.63 - 0.000969 k - 0.00383, k = % of the
+// flowering duration. flowering_cdf is its integral from 0 to k, normalised to 1 at k = 100 (the raw
+// integral is 1.001).
+real flowering_cdf(real k) {
+    if (k <= 0.0) return 0.0;
+    const auto raw = [](real x) { return 0.00558 * ps::math::pow(x, 1.63) / 1.63 - 0.000969 * x * x / 2.0 - 0.00383 * x; };
+    return raw(k) / raw(100.0);
+}
+
+// Logistic stress curve on x in [0, 1], rescaled to hit exactly 0 at 0 and 1 at 1.
+real logistic_s(real x, real steep) {
+    const auto l = [steep](real t) { return 1.0 / (1.0 + ps::math::exp(-steep * (t - 0.5))); };
+    return (l(x) - l(0.0)) / (l(1.0) - l(0.0));
+}
+
 // SCS runoff for one day (mm), curve number cn.
 real scs_runoff(real liquid, real cn, real ia_ratio) {
     if (liquid <= 0.0) return 0.0;
@@ -121,7 +136,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     auto fill = [n](std::vector<real>& v, real x) { v.assign(n, x); };
     for (auto* v : {&s_.swe, &s_.d_root, &s_.d_sub, &s_.d_evap, &s_.zr, &s_.gdd_sow, &s_.gdd_em, &s_.vern_days,
                     &s_.cc, &s_.cc_peak, &s_.t_sen, &s_.biomass, &s_.grain, &s_.hi_gdd, &s_.pol_sum, &s_.pol_n,
-                    &s_.heat_sum, &s_.days_ripe, &s_.last_tr, &s_.last_e, &s_.last_runoff, &s_.last_drain,
+                    &s_.sto_sum, &s_.sto_n, &s_.days_ripe, &s_.last_tr, &s_.last_e, &s_.last_runoff, &s_.last_drain,
                     &s_.cum_precip, &s_.cum_runoff, &s_.cum_evap, &s_.cum_tr, &s_.cum_drain, &s_.cum_irrig,
                     &s_.initial_storage})
         fill(*v, 0.0);
@@ -209,14 +224,13 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         }
         real dev = gdd;
         if (cr->vernalises) {
-            const bool slowed = st < cr->stage_vernalisation_end;
-            if (slowed) {
+            if (st < cr->stage_vernalisation_end) {   // vernalising seeds and plants; only the emerged plant is slowed
                 s.vern_days[c] = std::min(cr->vern_days_saturation,
                                           s.vern_days[c] + vernalisation_rate(w.tmean_c, cr->vern_t_min_c,
                                                                               cr->vern_t_opt_c, cr->vern_t_max_c));
                 const real vf = cr->vern_min_rate_factor +
                                 (1.0 - cr->vern_min_rate_factor) * clamp01(s.vern_days[c] / cr->vern_days_saturation);
-                dev = gdd * vf;
+                if (st >= cr->stage_emergence) dev = gdd * vf;
             }
         }
         const int prev = st;
@@ -353,16 +367,29 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                 s.biomass[c] += cr->wp_star_g_m2 * (tr / et0) * ft * f_stress;
             }
             if (st >= cr->stage_flowering) {
+                // Harvest index (AquaCrop ch. 3.12): pollination during the flowering distribution, then
+                // the stomatal-closure effect over the yield-formation days.
+                const real k0 = clampr(100.0 * s.hi_gdd[c] / cr->flowering_length_gdd, 0.0, 100.0);
                 s.hi_gdd[c] += gdd;
-                if (s.hi_gdd[c] <= cr->pollination_window_gdd) {
-                    s.pol_sum[c] += 1.0 - ks_sto;
-                    s.heat_sum[c] += clamp01((w.tmax_c - cr->heat_pollination_lo_c) /
-                                             (cr->heat_pollination_up_c - cr->heat_pollination_lo_c));
-                    s.pol_n[c] += 1.0;
+                const real k1 = clampr(100.0 * s.hi_gdd[c] / cr->flowering_length_gdd, 0.0, 100.0);
+                if (k1 > k0) {
+                    const real fj = flowering_cdf(k1) - flowering_cdf(k0);
+                    const real ks_w = dep_frac <= cr->ppol ? 1.0 : std::max(0.0, (1.0 - dep_frac) / (1.0 - cr->ppol));
+                    const real ks_c = 1.0 - logistic_s(clamp01((cr->pol_cold_t_c - w.tmin_c) / cr->pol_cold_width_k),
+                                                       cr->pol_logistic_steepness);
+                    const real ks_h = 1.0 - logistic_s(clamp01((w.tmax_c - cr->pol_heat_t_c) / cr->pol_heat_width_k),
+                                                       cr->pol_logistic_steepness);
+                    s.pol_sum[c] += fj * std::min(ks_w, std::min(ks_c, ks_h));
+                    s.pol_n[c] += fj;
                 }
-                const real n = std::max(1.0, s.pol_n[c]);
-                const real hi = cr->hi0 * (1.0 - std::min(1.0, cr->hi_water_stress_k * s.pol_sum[c] / n)) *
-                                (1.0 - s.heat_sum[c] / n) * clamp01(s.hi_gdd[c] / cr->hi_build_gdd);
+                if (s.hi_gdd[c] <= cr->hi_build_gdd) {
+                    const real r10 = ks_sto > 0.0 ? ps::math::pow(ks_sto, 0.1) : 0.0;
+                    s.sto_sum[c] += 1.0 - (1.0 - r10) / cr->hi_sto_b;
+                    s.sto_n[c] += 1.0;
+                }
+                const real f_pol = std::min(1.0, (1.0 + cr->excess_fruits_pct / 100.0) * (s.pol_sum[c] + (1.0 - s.pol_n[c])));
+                const real f_sto = s.sto_n[c] > 0.0 ? s.sto_sum[c] / s.sto_n[c] : 1.0;
+                const real hi = cr->hi0 * f_pol * f_sto * clamp01(s.hi_gdd[c] / cr->hi_build_gdd);
                 s.grain[c] = s.biomass[c] * hi;
             }
         } else {
@@ -419,7 +446,8 @@ void Field::sow(int cell, int crop_id, real density_scale) {
     s_.hi_gdd[c] = 0.0;
     s_.pol_sum[c] = 0.0;
     s_.pol_n[c] = 0.0;
-    s_.heat_sum[c] = 0.0;
+    s_.sto_sum[c] = 0.0;
+    s_.sto_n[c] = 0.0;
     s_.days_ripe[c] = 0.0;
     set_root_depth(c, cr.zr_min_m);
 }
@@ -441,7 +469,7 @@ HarvestResult Field::harvest(int cell) {
     s_.crop[c] = 0;
     s_.stage[c] = 0;
     s_.gdd_sow[c] = s_.gdd_em[c] = s_.vern_days[c] = s_.cc[c] = s_.cc_peak[c] = s_.t_sen[c] = 0.0;
-    s_.biomass[c] = s_.grain[c] = s_.hi_gdd[c] = s_.pol_sum[c] = s_.pol_n[c] = s_.heat_sum[c] = s_.days_ripe[c] = 0.0;
+    s_.biomass[c] = s_.grain[c] = s_.hi_gdd[c] = s_.pol_sum[c] = s_.pol_n[c] = s_.sto_sum[c] = s_.sto_n[c] = s_.days_ripe[c] = 0.0;
     s_.stand[c] = 1.0;
     set_root_depth(c, soil_of(c).fallow_root_depth_m);
     return r;
@@ -566,7 +594,7 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
     h = fnv_bytes(h, &s_.last_day, sizeof s_.last_day);
     for (const auto* v : {&s_.swe, &s_.d_root, &s_.d_sub, &s_.d_evap, &s_.zr, &s_.gdd_sow, &s_.gdd_em, &s_.vern_days,
                           &s_.cc, &s_.cc_peak, &s_.t_sen, &s_.biomass, &s_.grain, &s_.stand, &s_.hi_gdd, &s_.pol_sum,
-                          &s_.pol_n, &s_.heat_sum, &s_.days_ripe, &s_.stress_n, &s_.stress_pk, &s_.stress_ph,
+                          &s_.pol_n, &s_.sto_sum, &s_.sto_n, &s_.days_ripe, &s_.stress_n, &s_.stress_pk, &s_.stress_ph,
                           &s_.stress_weed, &s_.stress_rotation, &s_.residue_evap_factor, &s_.cum_precip,
                           &s_.cum_runoff, &s_.cum_evap, &s_.cum_tr, &s_.cum_drain, &s_.cum_irrig, &s_.initial_storage})
         h = fold_vec(h, *v);

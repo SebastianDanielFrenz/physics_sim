@@ -108,7 +108,7 @@ struct FieldState {
     // crop
     std::vector<std::uint8_t> crop, stage;
     std::vector<real> gdd_sow, gdd_em, vern_days, cc, cc_peak, t_sen, biomass, grain, stand;
-    std::vector<real> hi_gdd, pol_sum, pol_n, heat_sum, days_ripe;
+    std::vector<real> hi_gdd, pol_sum, pol_n, sto_sum, sto_n, days_ripe;   // pol_*: pollination sums, sto_*: stomatal HI factor sums
     // hooks
     std::vector<real> stress_n, stress_pk, stress_ph, stress_weed, stress_rotation, residue_evap_factor;
     // last-step diagnostics (not model state, but kept so a restore reproduces CSV rows)
