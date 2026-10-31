@@ -723,6 +723,15 @@ HitchId World::attach(const machine::CouplingDesc& desc) {
     if (link && link->kind == machine::TowBrakeKind::Channel) {
         vehicle_system_->set_tow_brake_channel(id, ensure_control_channel_index(vehicle_channel(desc.towing, link->channel)));
     }
+    if (desc.linkage) {
+        const machine::LinkageDesc& lift = desc.linkage_lift;
+        const std::size_t position = ensure_control_channel_index(vehicle_channel(desc.towing, lift.position_channel));
+        const std::size_t mode = ensure_control_channel_index(vehicle_channel(desc.towing, lift.mode_channel));
+        const std::size_t draft = ensure_control_channel_index(vehicle_channel(desc.towing, lift.draft_channel));
+        vehicle_system_->set_lift_channels(id, position, mode, draft);
+        set_control(vehicle_channel(desc.towing, lift.position_channel), vehicle_system_->coupling_state(id).linkage.position);
+        set_control(vehicle_channel(desc.towing, lift.mode_channel), static_cast<real>(machine::LiftMode::Position));
+    }
     return id;
 }
 
@@ -760,6 +769,43 @@ void World::detach(HitchId id) {
 }
 
 bool World::hitch_alive(HitchId id) const { return vehicle_system_->contains(id); }
+
+machine::PtoCheck World::check_pto(HitchId id) const { return vehicle_system_->check_pto(id); }
+
+void World::connect_pto(HitchId id) {
+    if (in_step_) throw std::logic_error("connect_pto: only between steps");
+    vehicle_system_->connect_pto(id);
+}
+
+void World::disconnect_pto(HitchId id) {
+    if (in_step_) throw std::logic_error("disconnect_pto: only between steps");
+    if (vehicle_system_->contains(id)) vehicle_system_->disconnect_pto(id);
+}
+
+bool World::pto_connected(HitchId id) const { return vehicle_system_->contains(id) && vehicle_system_->pto_connected(id); }
+
+void World::set_soil_source(std::shared_ptr<const machine::ISoilSource> soil) {
+    if (in_step_) throw std::logic_error("set_soil_source: only between steps");
+    vehicle_system_->set_soil_source(std::move(soil));
+}
+
+std::size_t World::vehicle_tool_count(VehicleId id) const { return vehicle_system_->tool_count(id); }
+
+const machine::ToolDesc& World::tool_desc(VehicleId id, std::size_t tool) const { return vehicle_system_->tool_desc(id, tool); }
+
+const machine::ToolState& World::tool_state(VehicleId id, std::size_t tool) const { return vehicle_system_->tool_state(id, tool); }
+
+void World::set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) {
+    if (in_step_) throw std::logic_error("set_tool_gauge_depth: only between steps");
+    vehicle_system_->set_tool_gauge_depth(id, tool, depth_m);
+}
+
+void World::drain_work(std::vector<machine::WorkQuad>& out) {
+    if (in_step_) throw std::logic_error("drain_work: only between steps");
+    vehicle_system_->drain_work(out);
+}
+
+std::uint64_t World::work_dropped() const { return vehicle_system_->work_dropped(); }
 
 void World::destroy_vehicle(VehicleId id) {
     if (in_step_) throw std::logic_error("destroy_vehicle: only between steps");

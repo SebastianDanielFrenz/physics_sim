@@ -28,7 +28,16 @@
       "max_towed_mass_kg": 14000.0, "max_tongue_load_n": 20000.0 },
     { "name": "socket_3pt", "class": "../hitch_classes/three_point_locked.json", "role": "towing",
       "sockets": { "socket_3pt_top": [-2.12, 0.0, -0.04], "socket_3pt_L": [-2.04, 0.5, -0.68], "socket_3pt_R": [-2.04, -0.5, -0.68] },
-      "max_tongue_load_n": 30000.0 }
+      "max_tongue_load_n": 30000.0,
+      "linkage": {
+        "source": "[D] pivots and stops from data/models/tractor/tractor.rig.json: lower_link pivot rig [-1.58, 0, 0.52], top_link pivot rig [-1.99, 0, 1.2], rig to chassis x + 0.42, z - 1.28; lower_link limits -0.349..0.436 rad, -20 and +25 deg here. [AS] lift force, stroke and draft control: nothing cited; 40 kN at the lower pins is about 4 t lifted, a usual figure for a 6 t tractor, and an SAE J283 measurement of this tractor does not exist.",
+        "lower_pivot": [-1.16, 0.0, -0.76],
+        "top_pivot": [-1.57, 0.0, -0.08],
+        "min_deg": -20.0,
+        "max_deg": 25.0,
+        "lift": { "max_force_n": 40000.0, "full_stroke_s": 3.0, "follow_slack_deg": 2.0 },
+        "draft": { "gain_per_s": 1.0, "filter_s": 0.3, "band": 0.05 }
+      } }
   ],
   "aero": { "drag_area_m2": 4.0 },
   "powertrain": {

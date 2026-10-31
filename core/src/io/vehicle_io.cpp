@@ -3,6 +3,7 @@
 #include <cstring>
 #include <sstream>
 #include "ps/io/vehicle_io.h"
+#include "ps/io/machine_io.h"
 #include "aero_io.h"
 #include "nitrous_components.h"
 #include "engine_parts.h"
@@ -366,10 +367,70 @@ machine::TowBrakeDesc read_tow_brake(const json& j, const std::string& path) {
     return d;
 }
 
+machine::LinkageDesc read_linkage(const json& j, const std::string& ctx_in) {
+    const std::string ctx = ctx_in + ": linkage";
+    if (!j.is_object()) throw std::runtime_error(ctx + " must be an object");
+    const auto only = [](const json& o, const std::set<std::string>& keys, const std::string& where) {
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            if (keys.count(it.key()) == 0) throw std::runtime_error(where + ": unknown field '" + it.key() + "'");
+        }
+    };
+    const auto number = [](const json& o, const char* key, const std::string& where) {
+        if (!o.contains(key) || !o.at(key).is_number()) throw std::runtime_error(where + ": '" + key + "' is required and must be a number");
+        return o.at(key).get<real>();
+    };
+    const auto block = [](const json& o, const char* key, const std::string& where) -> const json& {
+        if (!o.contains(key) || !o.at(key).is_object()) throw std::runtime_error(where + ": '" + key + "' is required and must be an object");
+        return o.at(key);
+    };
+    only(j, {"source", "lower_pivot", "top_pivot", "min_deg", "max_deg", "lift", "draft", "channels"}, ctx);
+    constexpr real kDegToRad = 3.14159265358979323846 / 180.0;
+    machine::LinkageDesc d;
+    d.source = j.value("source", std::string());
+    if (!j.contains("lower_pivot") || !j.contains("top_pivot")) throw std::runtime_error(ctx + ": 'lower_pivot' and 'top_pivot' are required");
+    d.lower_pivot_local = read_vec3(j.at("lower_pivot"), Vec3::zero());
+    d.top_pivot_local = read_vec3(j.at("top_pivot"), Vec3::zero());
+    d.min_angle_rad = number(j, "min_deg", ctx) * kDegToRad;
+    d.max_angle_rad = number(j, "max_deg", ctx) * kDegToRad;
+    const json& lift = block(j, "lift", ctx);
+    only(lift, {"max_force_n", "full_stroke_s", "follow_slack_deg"}, ctx + ": lift");
+    d.max_lift_force_n = number(lift, "max_force_n", ctx + ": lift");
+    d.full_stroke_s = number(lift, "full_stroke_s", ctx + ": lift");
+    d.follow_slack_rad = number(lift, "follow_slack_deg", ctx + ": lift") * kDegToRad;
+    const json& draft = block(j, "draft", ctx);
+    only(draft, {"gain_per_s", "filter_s", "band"}, ctx + ": draft");
+    d.draft_gain_per_s = number(draft, "gain_per_s", ctx + ": draft");
+    d.draft_filter_s = number(draft, "filter_s", ctx + ": draft");
+    d.draft_band = number(draft, "band", ctx + ": draft");
+    if (j.contains("channels")) {
+        const json& channels = block(j, "channels", ctx);
+        only(channels, {"position", "mode", "draft"}, ctx + ": channels");
+        d.position_channel = channels.value("position", d.position_channel);
+        d.mode_channel = channels.value("mode", d.mode_channel);
+        d.draft_channel = channels.value("draft", d.draft_channel);
+    }
+    machine::validate_linkage(d);
+    return d;
+}
+
+machine::MachineDesc read_machine(const json& j, const std::string& base_dir, const std::string& path) {
+    const std::string ctx = "vehicle " + path + ": machine";
+    if (!j.is_object()) throw std::runtime_error(ctx + " must be an object");
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.key() != "ref" && it.key() != "sockets") throw std::runtime_error(ctx + ": unknown field '" + it.key() + "'");
+    }
+    if (!j.contains("ref") || !j.at("ref").is_string()) throw std::runtime_error(ctx + ": 'ref' must be a path to a machine part");
+    if (!j.contains("sockets") || !j.at("sockets").is_object()) throw std::runtime_error(ctx + ": 'sockets' must give the model's sockets in chassis axes");
+    MachineSockets sockets;
+    const json& list = j.at("sockets");
+    for (auto it = list.begin(); it != list.end(); ++it) sockets[it.key()] = read_vec3(it.value(), Vec3::zero());
+    return load_machine_json((std::filesystem::path(base_dir) / j.at("ref").get<std::string>()).string(), sockets);
+}
+
 std::vector<machine::HitchPointDesc> read_hitch_points(const json& j, const std::string& base_dir, const std::string& path) {
     const std::string list_ctx = "vehicle " + path + ": hitch_points";
     if (!j.is_array()) throw std::runtime_error(list_ctx + " must be an array");
-    const std::set<std::string> known = {"name", "class", "role", "position", "sockets", "max_towed_mass_kg", "max_tongue_load_n"};
+    const std::set<std::string> known = {"name", "class", "role", "position", "sockets", "max_towed_mass_kg", "max_tongue_load_n", "linkage"};
     std::vector<machine::HitchPointDesc> out;
     for (const json& p : j) {
         if (!p.is_object() || !p.contains("name") || !p.at("name").is_string()) throw std::runtime_error(list_ctx + ": every point needs a 'name'");
@@ -395,11 +456,30 @@ std::vector<machine::HitchPointDesc> read_hitch_points(const json& j, const std:
         } else {
             const json& sockets = p.at("sockets");
             if (!sockets.is_object() || sockets.size() < 2) throw std::runtime_error(ctx + ": 'sockets' must name at least two rig sockets with their positions");
+            // Three sockets with one on the top link: the set a linkage takes.
+            Vec3 lower{};
+            bool has_top = false;
             for (auto it = sockets.begin(); it != sockets.end(); ++it) {
-                d.position_local += read_vec3(it.value(), Vec3::zero());
+                const Vec3 socket = read_vec3(it.value(), Vec3::zero());
+                d.position_local += socket;
                 d.rig_sockets.push_back(it.key());
+                const std::string& key = it.key();
+                if (key.size() >= 4 && key.compare(key.size() - 4, 4, "_top") == 0) {
+                    has_top = true;
+                    d.top_pin_local = socket;
+                } else {
+                    lower += socket;
+                }
             }
             d.position_local = d.position_local * (real(1) / static_cast<real>(sockets.size()));
+            if (sockets.size() == 3 && has_top) {
+                d.three_point = true;
+                d.lower_pin_local = lower * real(0.5);
+            }
+        }
+        if (p.contains("linkage")) {
+            if (d.role != machine::HitchRole::Towing || !d.three_point) throw std::runtime_error(ctx + ": a linkage belongs on a towing point with three sockets, one of them '*_top'");
+            d.linkage = read_linkage(p.at("linkage"), ctx);
         }
 
         d.max_towed_mass_kg = p.value("max_towed_mass_kg", d.max_towed_mass_kg);
@@ -4011,7 +4091,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                   "(physics_sim.vehicle/2) - see 'brake_system' (PHYS-033 Q7)");
     }
 
-    if (!j.contains("wheels") || !j.at("wheels").is_array() || j.at("wheels").empty()) {
+    // Only a machine goes without wheels: an implement carried by a linkage.
+    if (!j.contains("wheels") || !j.at("wheels").is_array() || (j.at("wheels").empty() && !j.contains("machine"))) {
         throw std::runtime_error("vehicle " + path + " has no 'wheels' array");
     }
     // Injected tyres (VehicleLoadOptions::tyres): every key must name a wheel of this file (typo guard); a wheel with
@@ -4043,6 +4124,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
         if (v.brake_system.corners.empty()) throw std::runtime_error("vehicle " + path + ": tow_brake needs a brake_system with corners");
     }
     if (j.contains("hitch_points")) v.hitch_points = read_hitch_points(j.at("hitch_points"), base_dir, path);
+    if (j.contains("machine")) v.machine = read_machine(j.at("machine"), base_dir, path);
 
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if(j.contains("traction_control")) {

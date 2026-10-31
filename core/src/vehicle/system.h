@@ -18,6 +18,7 @@
 #include "ps/world/ids.h"
 
 #include "../machine/coupling_solver.h"
+#include "../machine/tool_runtime.h"
 
 #include <array>
 #include <cstdint>
@@ -65,6 +66,7 @@ public:
     HitchId attach(const machine::CouplingDesc& desc, IRigidBackend& backend, real substep_rate_hz); // std::invalid_argument
     void detach(HitchId id, IRigidBackend& backend);
     void set_tow_brake_channel(HitchId id, std::size_t channel_index) { couplings_[id.index].brake_channel = channel_index; }
+    void set_lift_channels(HitchId id, std::size_t position, std::size_t mode, std::size_t draft);
     // The coupling two named hitch points make; `problem` says why they do not mate, and then the desc means nothing.
     [[nodiscard]] machine::CouplingDesc mate_points(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point,
                                                     std::string& problem) const;
@@ -74,6 +76,24 @@ public:
     [[nodiscard]] bool contains(HitchId id) const { return id.index < couplings_.size() && couplings_[id.index].alive && couplings_[id.index].generation == id.generation; }
     [[nodiscard]] bool chassis_is_coupled(BodyId chassis) const;
     void set_coupling_passes(int passes) { coupling_passes_ = passes; }
+
+    // A PTO shaft across a live hitch, from the towing vehicle's pto.out into the towed vehicle's first PTO tool. Its
+    // load goes on the tractor's own shaft network; detaching the hitch pulls the shaft off with it.
+    [[nodiscard]] machine::PtoCheck check_pto(HitchId id) const;
+    void connect_pto(HitchId id); // std::invalid_argument
+    void disconnect_pto(HitchId id);
+    [[nodiscard]] bool pto_connected(HitchId id) const { return couplings_[id.index].pto_tool != kNoTool; }
+
+    // Tools. The soil source is read from jobs, concurrently, and may be replaced between steps; without one no tool
+    // has soil under it. The vehicles of a World with a tool step through the island path.
+    void set_soil_source(std::shared_ptr<const machine::ISoilSource> soil) { soil_ = std::move(soil); }
+    [[nodiscard]] std::size_t tool_count(VehicleId id) const { return tools_[id.index].size(); }
+    [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).desc(); }
+    [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).state(); }
+    void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) { tools_[id.index].at(tool).set_gauge_depth(depth_m); }
+    // Appends every buffered quad to `out` in (tick, vehicle, tool) order. Between steps; allocates.
+    void drain_work(std::vector<machine::WorkQuad>& out);
+    [[nodiscard]] std::uint64_t work_dropped() const;
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
 
     // Called by World right before the backend steps, sequential: see VehicleInstance::align_backend_with_shadow.
@@ -134,6 +154,13 @@ private:
         std::array<real, 3> latch_angle{}, latch_angle_rate{}; // locked axes
         std::size_t brake_channel = 0; // a tow_brake channel link: resolved in the towing vehicle's scope
         real brake_state = 0.0;
+        // The lift, on a linkage. Target and sensed draft carry over ticks; the rest is rebuilt each tick.
+        std::size_t lift_position_channel = 0, lift_mode_channel = 0, lift_draft_channel = 0;
+        real lift_target = 0.0, lift_target_rate = 0.0;
+        real lift_sensed_n = 0.0;
+        machine::LiftCommand lift_command{};
+        machine::LinkageSolve linkage_last{};
+        std::size_t pto_tool = kNoTool; // the towed vehicle's tool on the shaft
         // This substep's wrench so far: a later pass replaces it, it does not add to it.
         Vec3 force{}, torque_towing{}, torque_towed{};
         machine::SocketSolve last{};
@@ -142,12 +169,16 @@ private:
     struct Island {
         std::vector<std::size_t> vehicles;
         std::vector<std::size_t> couplings;
+        std::vector<BodyId> chassis; // of vehicles: a tool looking for the ground does not see them
     };
+    static constexpr std::size_t kNoTool = static_cast<std::size_t>(-1);
 
     void rebuild_islands();
     void apply_collision_pairs(IRigidBackend& backend);
     void kill_coupling(Coupling& c);
     void update_tow_brakes(const Island& island, const IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt);
+    void update_lifts(const Island& island, const std::vector<real>& channel_values, real tick_dt);
+    void update_pto_shafts(const Island& island);
     [[nodiscard]] machine::LatchTarget latch_target(const Coupling& c, const VehicleTickWork& towing, real h) const;
     void step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                      real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air);
@@ -159,6 +190,11 @@ private:
     std::vector<unsigned char> retired_; // one per instance
     std::vector<real> tow_brake_demand_; // one per instance; each entry touched by its island's job only
     int coupling_passes_ = 2;
+    // One entry per instance, empty for a vehicle without a machine. tool_vehicles_ counts the ones with tools.
+    std::vector<std::vector<machine::ToolRuntime>> tools_;
+    std::size_t tool_vehicles_ = 0;
+    std::shared_ptr<const machine::ISoilSource> soil_;
+    std::uint64_t work_tick_ = 0;
     std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
     std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only
     std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs
