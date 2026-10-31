@@ -24,11 +24,11 @@
 namespace ps::io {
 
 struct FieldOperationRule {
-    std::string op;              // "sow", "harvest" or "apply"
+    std::string op;              // "sow", "harvest", "apply" or "operation" (a physics_sim.operation/1 record, F1c)
     int crop_id = 0;             // sow only (1-based palette index)
     ps::real density_scale = 1.0;
     ps::real straw_removed = 1.0;    // harvest only
-    field::OperationEffect effect;   // apply only (the deposit, resolved against the scenario's palettes)
+    field::OperationEffect effect;   // apply / operation (resolved against the scenario's palettes)
     int doy = 1;                 // real day of year
     int first_year = 0;
     int last_year = 1 << 30;
@@ -55,6 +55,10 @@ struct HarvestEvent {
 struct FieldRunSummary {
     std::vector<HarvestEvent> harvests;
     ps::real max_balance_residual_mm = 0.0;  // worst cell
+    std::vector<ps::real> drainage_by_year_mm;   // field mean, per game year
+    ps::real max_c_residual = 0.0;           // worst cell, residue carbon (management only)
+    ps::real weed_biomass_max_g_m2 = 0.0;    // field mean of the summed weed biomass, highest day
+    ps::real weed_seedbank_end_m2 = 0.0;     // field mean seeds per m2 at the end (all groups, all layers)
     // Nutrient ledgers, worst cell (kg/ha; zero without nutrients)
     ps::real max_n_residual = 0.0, max_p_residual = 0.0, max_k_residual = 0.0, max_cao_residual = 0.0;
     ps::real total_precip_mm = 0.0;          // cell 0 ledger

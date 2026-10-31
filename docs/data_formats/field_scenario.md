@@ -45,3 +45,15 @@ Rejections: wrong `format`; unknown key; an unknown `op`; `doy` outside [1, 366]
 `every_years` < 1; a sow naming no crop of the scenario or without one;
 `soil_pattern` entries that are not soil indices; `years` < 1; an apply naming no material or method, with none or several rates, or a negative rate; `straw_removed` outside [0, 1].
 `tests/unit/test_field_io.cpp` I6, I7.
+
+## Management (F1c)
+
+Optional top-level keys: `"management": true` (needs `"nutrients": true`; every soil and crop then needs its `management` block, see
+soil.md and crop.md), `"weeds": [files]` (weed_group.md), `"herbicides": [files]` (herbicide.md). New operation rule
+`{"op": "operation", "file": "<physics_sim.operation/1 file>", "doy": N, ...}` with the usual `first_year`/`last_year`/`every_years`
+and the optional overrides `coverage`, `seeds_per_m2`, `depth_m`, `dose`, `straw_carried`, `straw_chopped` (operation.md); it needs
+`"management": true`. A harvest effect of such a record is reported like an `"harvest"` rule. The summary gains
+`drainage_by_year_mm`, `max_c_residual`, `weed_biomass_max_g_m2` and `weed_seedbank_end_m2`; the CSV gains the management columns
+(residue, cover, loosening, seedbed, crop plants, weed factor/plants/biomass/seeds, humus carbon, per-group plants and seeds).
+Scenarios: data/field_scenarios/wheat_managed_11y.json (combine with chopped straw, stubble cultivator, plough, seedbed harrow, drill,
+autumn grass herbicide, spring broadleaf herbicide, fertiliser plan) and wheat_unmanaged_11y.json (no plough, no spray).

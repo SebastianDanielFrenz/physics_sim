@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "ps/field/management_desc.h"
 #include "ps/field/nutrient_desc.h"
 #include "ps/types.h"
 
@@ -62,6 +63,8 @@ struct CropDesc {
     // Biomass.
     real wp_star_g_m2 = 0.0;             // normalised water productivity, g biomass per m2 per (Tr/ET0 mm/mm)
     real biomass_gdd_full = 0.0;         // GDD/day for unrestricted biomass; below it growth is proportional (0 = off)
+    real biomass_rue_g_mj = 0.0;         // radiation-use cap on the daily biomass gain: at most rue x Rs x canopy cover g/m2/day (0 = off)
+    real biomass_rs_ref_mj_m2 = 0.0;     // daily global radiation (MJ/m2) at and above which biomass growth is unrestricted; below it proportional (0 = off)
 
     // Harvest index (AquaCrop, Raes et al. reference manual ch. 3.12). HI at the end of
     // yield formation = hi0 x f_pollination x f_stomata x build-up, where
@@ -71,6 +74,7 @@ struct CropDesc {
     //   f_stomata     = mean over the yield-formation days of 1 - (1 - Ks_sto^(1/10)) / b   (Eq. 3.12m/n).
     real hi0 = 0.0;
     real hi_build_gdd = 0.0;             // development units after flowering over which HI builds up (also the yield-formation length)
+    real straw_harvest_fraction = 1.0;   // share of the non-grain aboveground biomass a harvest can carry off (cutting height, chaff, leaf litter stay as stubble)
     real flowering_length_gdd = 0.0;     // length of the flowering stage in development units
     real excess_fruits_pct = 0.0;        // excess of potential fruits, %
     real ppol = 0.0;                     // depletion fraction of TAW at which pollination starts to fail (Ks_pol,w linear to 0 at TAW)
@@ -95,6 +99,10 @@ struct CropDesc {
     // Optional nutrient block (F1b); required when the field runs with nutrients.
     bool has_nutrients = false;
     CropNutrientDesc nutrients;
+
+    // Optional management block (F1c); required when the field runs with management_enabled.
+    bool has_management = false;
+    CropManagementDesc management;
 
     int stage_count() const { return static_cast<int>(stages.size()); }
     // Canopy cover at emergence for a given density scale.

@@ -53,6 +53,10 @@ struct DailyWeather {
     real ea_kpa = 0.0;
     real daylight_h = 0.0;
     real et0_mm = 0.0;
+    // Energy-limited evaporation of a wet, unshaded soil surface (mm/day): Priestley-Taylor, alpha 1.26 x
+    // Delta/(Delta+gamma) x Rn/lambda, Rn floored at 0 (F1c fix A). Negative = not provided (hand-made
+    // weather in tests): the soil evaporation is then limited by the dual crop coefficient alone.
+    real e_wet_mm = -1.0;
 
     real precip_mm() const { return rain_mm + snow_mm; }
 };

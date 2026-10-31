@@ -122,6 +122,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         const std::string e = crop_validation_error(cr);
         if (!e.empty()) throw std::invalid_argument("Field: " + e);
     }
+    if (cfg_.management_enabled && !cfg_.nutrients_enabled) throw std::invalid_argument("Field: management_enabled needs nutrients_enabled");
     if (cfg_.nutrients_enabled) {
         for (const SoilDesc& so : cfg_.soils)
             if (!so.has_nutrients) throw std::invalid_argument("Field: soil " + so.name + " has no nutrient block");
@@ -159,6 +160,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         fill(*v, 1.0);
     s_.crop.assign(n, 0);
     s_.stage.assign(n, 0);
+    s_.weed_f.assign(n, 1.0);
     for (std::size_t c = 0; c < n; ++c) {
         const SoilDesc& so = soil_of(c);
         s_.zr[c] = so.fallow_root_depth_m;
@@ -168,6 +170,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         s_.d_evap[c] = f * so.tew_mm();
         s_.initial_storage[c] = storage_mm(static_cast<int>(c));
     }
+    if (cfg_.management_enabled) init_management();   // before the nutrients: their initial N includes the weeds'
     if (cfg_.nutrients_enabled) init_nutrients();
 }
 
@@ -225,6 +228,8 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         s.d_evap[c] = 0.0;
     }
 
+    const bool mgmt = cfg_.management_enabled;
+    if (mgmt) manage_prestep(c, w);
     const bool has_crop = s.crop[c] != 0;
     const CropDesc* cr = has_crop ? &cfg_.crops[static_cast<std::size_t>(s.crop[c] - 1)] : nullptr;
     const real et0 = w.et0_mm;
@@ -258,17 +263,28 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                 if (st >= cr->stage_emergence) dev = gdd * vf;
             }
         }
+        if (mgmt && s.sow_seeds[c] > 0.0 && st < cr->stage_emergence) {   // a sown seed needs a moist seed layer
+            const CropManagementDesc& cm = cr->management;
+            const real tew_s = so.tew_mm();
+            const real wet = tew_s > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew_s) : 1.0;
+            dev *= clamp01((wet - cm.germ_wet_min) / (cm.germ_wet_full - cm.germ_wet_min));
+            if (wet < cm.germ_wet_min) s.sow_viab[c] *= 1.0 - cm.dry_hazard_per_day;
+        }
         const int prev = st;
         s.gdd_sow[c] += dev;
         st = stage_of(*cr, s.gdd_sow[c]);
         s.stage[c] = static_cast<std::uint8_t>(st);
         emerged = st >= cr->stage_emergence;
         if (emerged) {
-            if (prev < cr->stage_emergence) s.cc_peak[c] = s.cc[c];   // sow() stored the seedling canopy in cc
+            if (prev < cr->stage_emergence) {
+                if (mgmt) establish(c, *cr);   // plants from the seeds sown (sow() stored the full stand otherwise)
+                s.cc_peak[c] = s.cc[c];
+            }
             else s.gdd_em[c] += gdd;
             const real t_em = cr->stages[static_cast<std::size_t>(cr->stage_emergence)].gdd;
             const real frac = clamp01((s.gdd_sow[c] - t_em) / (cr->root_gdd_full - t_em));
-            const real zt = cr->zr_min_m + (cr->zr_max_m - cr->zr_min_m) * frac;
+            real zt = cr->zr_min_m + (cr->zr_max_m - cr->zr_min_m) * frac;
+            if (mgmt) zt *= 1.0 - so.management.damage_root_penalty * s.damage[c];
             if (zt > s.zr[c]) set_root_depth(c, zt);
         }
     }
@@ -309,7 +325,8 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     const real liquid = w.rain_mm + melt;
     real runoff = 0.0;
     if (liquid > 0.0) {
-        const real cn2 = so.curve_number_ii;
+        real cn2 = so.curve_number_ii;
+        if (mgmt) cn2 = std::max(30.0, std::min(98.0, cn2 + so.management.damage_cn_increase * s.damage[c] - so.management.loose_cn_decrease * s.loose[c]));
         const real cn1 = cn2 / (2.281 - 0.01281 * cn2);
         const real cn3 = cn2 / (0.427 + 0.00573 * cn2);
         const real wet = taw1 > 0.0 ? clamp01(1.0 - s.d_root[c] / taw1) : 1.0;
@@ -327,13 +344,17 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     const real kc_max = std::max(
         1.2 + (0.04 * (w.wind2_m_s - 2.0) - 0.004 * (w.rh_min * 100.0 - 45.0)) * ps::math::pow(height / 3.0, 0.3),
         kcb + 0.05);
-    const real few = 1.0 - cc;
+    const real few = 1.0 - cc_star;
     real de_a = s.d_evap[c] - infil;
     if (de_a < 0.0) de_a = 0.0;
-    const real kr = de_a <= so.rew_mm ? 1.0 : std::max(0.0, (tew - de_a) / (tew - so.rew_mm));
+    real kr = de_a <= so.rew_mm ? 1.0 : std::max(0.0, (tew - de_a) / (tew - so.rew_mm));
+    if (mgmt && kr < 1.0) kr *= s.tilth_e2[c];   // loose, dry surface soil is a mulch against stage-2 evaporation
     real ke = std::min(kr * std::max(0.0, kc_max - kcb), few * kc_max);
     if (s.swe[c] > 0.0) ke = 0.0;
     real evap = ke * et0 * s.residue_evap_factor[c];
+    // Wet soil evaporates at most at the energy-limited rate; in the cold season the aerodynamic share of the
+    // reference evapotranspiration is not available to the soil (F1c fix A). Stage 2 scales like stage 1.
+    if (w.e_wet_mm >= 0.0) evap = std::min(evap, kr * few * w.e_wet_mm * s.residue_evap_factor[c]);
     if (few > 1.0e-9) evap = std::min(evap, few * (tew - de_a));
     else evap = 0.0;
     evap = std::max(0.0, evap);
@@ -384,6 +405,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
 
     // --- biomass, harvest index, ripeness ------------------------------------------------
     const real bio_before = s.biomass[c];
+    real shed_g = 0.0;
     real nf_n = 1.0, nf_pk = 1.0, nf_ph = 1.0;
     if (cfg_.nutrients_enabled) {
         nutrient_growth_factors(c, st, emerged, nf_n, nf_pk, nf_ph);
@@ -398,7 +420,11 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                 const real f_stress = std::min(std::min(s.stress_n[c] * nf_n, s.stress_pk[c] * nf_pk),
                                                std::min(s.stress_ph[c] * nf_ph, s.stress_weed[c])) *
                                       s.stress_rotation[c];
-                s.biomass[c] += cr->wp_star_g_m2 * (tr / et0) * ft * f_stress;
+                const real f_rad = cr->biomass_rs_ref_mj_m2 > 0.0 ? clamp01(w.rs_mj_m2 / cr->biomass_rs_ref_mj_m2) : 1.0;
+                real gain = cr->wp_star_g_m2 * (tr / et0) * ft * f_rad * f_stress * s.weed_f[c];
+                // radiation-use cap: AquaCrop's WP* x Tr/ET0 does not see how little light a cold, short day offers
+                if (cr->biomass_rue_g_mj > 0.0) gain = std::min(gain, cr->biomass_rue_g_mj * w.rs_mj_m2 * cc);
+                s.biomass[c] += gain;
             }
             if (st >= cr->stage_flowering) {
                 // Harvest index (AquaCrop ch. 3.12): pollination during the flowering distribution, then
@@ -428,7 +454,10 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             }
         } else {
             s.days_ripe[c] += 1.0;
-            if (s.days_ripe[c] > cr->harvest_window_days) s.grain[c] *= (1.0 - cr->shed_rate_per_day);
+            if (s.days_ripe[c] > cr->harvest_window_days) {
+                shed_g = s.grain[c] * cr->shed_rate_per_day;
+                s.grain[c] *= (1.0 - cr->shed_rate_per_day);
+            }
         }
     }
 
@@ -441,8 +470,15 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         fl.bbch = cr ? bbch_of(*cr, s.gdd_sow[c]) : 0.0;
         fl.stage = st;
         fl.emerged = emerged;
+        fl.shed_g_m2 = shed_g;
         step_nutrients(c, w, fl);
+        if (mgmt) manage_poststep(c, w, fl);
     }
+}
+
+real Field::crop_bbch(std::size_t c) const {
+    if (s_.crop[c] == 0) return 0.0;
+    return bbch_of(cfg_.crops[static_cast<std::size_t>(s_.crop[c] - 1)], s_.gdd_sow[c]);
 }
 
 void Field::step_cells(int begin, int end, const DailyWeather& w) {
@@ -478,7 +514,11 @@ void Field::sow(int cell, int crop_id, real density_scale) {
     if (!(density_scale > 0.0)) throw std::invalid_argument("Field::sow: density_scale must be > 0");
     const std::size_t c = static_cast<std::size_t>(cell);
     const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(crop_id - 1)];
-    if (cfg_.nutrients_enabled && s_.crop[c] != 0) drop_crop_nutrients(c);   // sown over: the old stand is ploughed in
+    if (cfg_.management_enabled) {
+        if (s_.crop[c] != 0) crop_to_residue(c, 1.0, false);   // sown over: the old stand lies as residue
+    } else if (cfg_.nutrients_enabled && s_.crop[c] != 0) {
+        drop_crop_nutrients(c);   // sown over: the old stand is ploughed in
+    }
     s_.crop[c] = static_cast<std::uint8_t>(crop_id);
     s_.stage[c] = 0;
     s_.gdd_sow[c] = 0.0;
@@ -497,6 +537,12 @@ void Field::sow(int cell, int crop_id, real density_scale) {
     s_.sto_n[c] = 0.0;
     s_.days_ripe[c] = 0.0;
     set_root_depth(c, cr.zr_min_m);
+    if (cfg_.management_enabled) {   // a full stand by construction, no establishment from seed
+        s_.sow_seeds[c] = -1.0;
+        s_.sow_fe[c] = 1.0;
+        s_.sow_viab[c] = 1.0;
+        s_.plants[c] = cr.plant_density_per_ha * 1.0e-4 * density_scale;
+    }
 }
 
 void Field::sow_all(int crop_id, real density_scale) {
@@ -509,10 +555,21 @@ HarvestResult Field::harvest(int cell, real straw_removed) {
     const std::size_t c = static_cast<std::size_t>(cell);
     HarvestResult r;
     if (s_.crop[c] == 0) return r;
+    if (cfg_.management_enabled) {   // the same path as a harvest operation: straw lies chopped or leaves, the rest is residue
+        OperationEffect e;
+        e.harvest.harvest = true;
+        e.harvest.straw_carried = straw_removed;
+        e.harvest.straw_chopped = 0.5;
+        apply(cell, e, &r);
+        return r;
+    }
     const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(s_.crop[c] - 1)];
     r.crop_id = s_.crop[c];
     r.grain_dm_t_ha = s_.grain[c] * 0.01;
-    r.straw_dm_t_ha = std::max(0.0, s_.biomass[c] - s_.grain[c]) * 0.01;
+    const real ng = std::max(0.0, s_.biomass[c] - s_.grain[c]);
+    const real share_h = cr.straw_harvest_fraction;   // harvestable share of the non-grain biomass; the rest is stubble
+    r.straw_dm_t_ha = ng * share_h * 0.01;
+    r.stubble_dm_t_ha = ng * (1.0 - share_h) * 0.01;
     r.bbch = bbch_of(cr, s_.gdd_sow[c]);
     if (cfg_.nutrients_enabled) {
         const CropNutrientDesc& cn = cr.nutrients;
@@ -524,12 +581,13 @@ HarvestResult Field::harvest(int cell, real straw_removed) {
         r.k2o_grain_kg_ha = cn.k2o_grain_share * s_.k_crop[c];
         r.k2o_straw_kg_ha = s_.k_crop[c] - r.k2o_grain_kg_ha;
         r.lodging_loss = s_.lodge[c];
-        s_.l_n_rem[c] += r.n_grain_kg_ha + straw_removed * r.n_straw_kg_ha;
-        s_.l_p_rem[c] += r.p2o5_grain_kg_ha + straw_removed * r.p2o5_straw_kg_ha;
-        s_.l_k_rem[c] += r.k2o_grain_kg_ha + straw_removed * r.k2o_straw_kg_ha;
-        s_.org_fresh[c] += (1.0 - straw_removed) * r.n_straw_kg_ha + s_.n_root[c];
-        s_.p_av[c] += (1.0 - straw_removed) * r.p2o5_straw_kg_ha;
-        s_.k_av[c] += (1.0 - straw_removed) * r.k2o_straw_kg_ha;
+        const real taken = straw_removed * share_h;   // share of the straw nutrients that leave
+        s_.l_n_rem[c] += r.n_grain_kg_ha + taken * r.n_straw_kg_ha;
+        s_.l_p_rem[c] += r.p2o5_grain_kg_ha + taken * r.p2o5_straw_kg_ha;
+        s_.l_k_rem[c] += r.k2o_grain_kg_ha + taken * r.k2o_straw_kg_ha;
+        s_.org_fresh[c] += (1.0 - taken) * r.n_straw_kg_ha + s_.n_root[c];
+        s_.p_av[c] += (1.0 - taken) * r.p2o5_straw_kg_ha;
+        s_.k_av[c] += (1.0 - taken) * r.k2o_straw_kg_ha;
         s_.n_crop[c] = s_.n_root[c] = s_.p_crop[c] = s_.k_crop[c] = s_.lodge[c] = 0.0;
     }
     s_.crop[c] = 0;
@@ -550,6 +608,7 @@ HarvestResult Field::harvest_all(real straw_removed) {
         m.crop_id = r.crop_id;
         m.grain_dm_t_ha += r.grain_dm_t_ha;
         m.straw_dm_t_ha += r.straw_dm_t_ha;
+        m.stubble_dm_t_ha += r.stubble_dm_t_ha;
         m.bbch += r.bbch;
         m.n_grain_kg_ha += r.n_grain_kg_ha;
         m.n_straw_kg_ha += r.n_straw_kg_ha;
@@ -562,7 +621,7 @@ HarvestResult Field::harvest_all(real straw_removed) {
         ++n;
     }
     if (n > 0) {
-        for (real* x : {&m.grain_dm_t_ha, &m.straw_dm_t_ha, &m.bbch, &m.n_grain_kg_ha, &m.n_straw_kg_ha, &m.n_root_kg_ha,
+        for (real* x : {&m.grain_dm_t_ha, &m.straw_dm_t_ha, &m.stubble_dm_t_ha, &m.bbch, &m.n_grain_kg_ha, &m.n_straw_kg_ha, &m.n_root_kg_ha,
                         &m.p2o5_grain_kg_ha, &m.p2o5_straw_kg_ha, &m.k2o_grain_kg_ha, &m.k2o_straw_kg_ha, &m.lodging_loss})
             *x /= n;
     }
@@ -681,6 +740,17 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
                               &s_.l_n_fmin, &s_.l_n_forg, &s_.l_n_dep, &s_.l_n_fix, &s_.l_n_rem, &s_.l_n_leach, &s_.l_n_nh3,
                               &s_.l_n_den, &s_.l_n_min, &s_.l_p_init, &s_.l_p_app, &s_.l_p_rem, &s_.l_k_init, &s_.l_k_app,
                               &s_.l_k_rem, &s_.l_ca_app, &s_.l_ca_loss})
+            h = fold_vec(h, *v);
+    }
+    if (cfg_.management_enabled) {
+        for (const auto& a : {&s_.res_c, &s_.res_n})
+            for (const auto& v : *a) h = fold_vec(h, v);
+        for (const auto& v : s_.res_p) h = fold_vec(h, v);
+        for (const auto& v : s_.res_k) h = fold_vec(h, v);
+        for (const auto* v : {&s_.res_chop, &s_.loose, &s_.damage, &s_.seedbed, &s_.soc, &s_.tilth_e2, &s_.sow_seeds, &s_.sow_fe,
+                              &s_.sow_viab, &s_.plants, &s_.w_seed_s, &s_.w_seed_a, &s_.w_seed_b, &s_.w_dens, &s_.w_bio,
+                              &s_.w_tt, &s_.w_n, &s_.w_seed_pl, &s_.w_res_pl, &s_.w_res_sd, &s_.h_act, &s_.l_c_crop,
+                              &s_.l_c_wg, &s_.l_c_rem, &s_.l_c_co2, &s_.weed_f})
             h = fold_vec(h, *v);
     }
     return h;

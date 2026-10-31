@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "ps/field/management_desc.h"
 #include "ps/field/nutrient_desc.h"
 #include "ps/types.h"
 
@@ -32,6 +33,10 @@ struct SoilDesc {
     // Optional nutrient block (F1b); required when the field runs with nutrients.
     bool has_nutrients = false;
     SoilNutrientDesc nutrients;
+
+    // Optional management block (F1c); required when the field runs with management_enabled.
+    bool has_management = false;
+    SoilManagementDesc management;
 
     // Derived (not in the file).
     real taw_mm_per_m() const { return 1000.0 * (theta_fc - theta_wp); }

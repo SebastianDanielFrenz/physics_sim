@@ -1,35 +1,47 @@
 """Generates data/climates/farm_de_home.json (physics_sim.climate/1) for the farming
 field model (ps_field, F1a). Dev tool, stdlib only; the generated file is committed.
 
-A real-year climate for the home region (Rhein-Main, 50.15 N): four seasons whose
-lengths are the real ones (365 game days, one game day = one real day, so the sun
+A real-year climate for the home region (Rhein-Main, 50.15 N): twelve monthly "seasons"
+whose lengths are the real ones (365 game days, one game day = one real day, so the sun
 warp is the identity), starting on 1 December. Season values are MID-season values
-(the calendar interpolates linearly between season midpoints), so each is set to
-the monthly normal of the middle month: winter = January, spring = April, summer =
-July, autumn = October.
+(the calendar interpolates linearly between season midpoints), so each month carries
+its own monthly normal. (F1c fix A: the former four-season version interpolated
+February to 4.8 C against a 3.1 C normal and August to 16.8 C against 20.0 C, so winter
+evaporation was too high and summer too low, and the profile drained almost nothing.)
 
-Every number is ASSUMED ([AS]) from memory of the DWD 1991-2020 normals for the
-Rhein-Main area (not re-read in this session); the regime statistics are the
-weather plan's test regimes (data/climates/test_weather.json) with the
+Temperature, precipitation, humidity and the cloud factor come from the DWD station
+Frankfurt/Main (1420) daily record, 1991-2020 (see the SEASONS comment); the regime
+statistics are the weather plan's test regimes (data/climates/test_weather.json) with the
 precipitation intensity of the rain regime solved here so that the long-run mean
-precipitation per season matches the target (semi-Markov stationary mix).
+precipitation per month matches the target (semi-Markov stationary mix).
 Usage: python tools/fielddata/farm_climate_gen.py [out.json]
 """
 import json
 import math
 import sys
 
-# name, days, doy span, T mean, range K, rh, pressure hPa, ground T, target mm/month of the mid month [AS],
-# target mean cloud factor G/G_clear of the mid month [AS]
+# name, days, doy span (1-based, from 1 December), T mean, daily T range K (regime-mix input), rh, pressure hPa,
+# ground T, target mm/month, target mean cloud factor G/G_clear, regime RH target.
+# T mean, rain, rh: DWD station Frankfurt/Main (1420) daily record, 1991-2020 monthly means, computed from the
+# produkt_klima_tag file [C] (annual 11.1 C, 598 mm). Cloud factor: Angstrom-Prescott from the same record's
+# sunshine duration, (0.25 + 0.5 n/N)/0.75 with N the astronomical day length at 50.15 N [D]. temp_range_k =
+# 1.7 x the record's mean daily range (Tx - Tn): the regime offsets and the diurnal model's cloud reduction
+# bring the realised range back down (factor [AS], kept from the four-season version). ground_temp_c = monthly
+# T + 1.0 in Dec-Feb, + 0.5 in Mar-May and Oct-Nov, - 0.3 in Jun-Sep [AS]. pressure_msl_hpa 1016/1017 [AS].
 SEASONS = [
-    ("winter", 90, [335, 59], 1.8, 7.9, 0.86, 1017.0, 3.5, 45.0, 0.45, 0.87),
-    ("spring", 92, [60, 151], 10.3, 19.0, 0.72, 1016.0, 10.0, 48.0, 0.64, 0.74),
-    ("summer", 92, [152, 243], 19.6, 19.5, 0.67, 1015.0, 19.0, 62.0, 0.64, 0.70),
-    ("autumn", 91, [244, 334], 10.0, 14.8, 0.82, 1016.0, 11.0, 50.0, 0.57, 0.82),
+    ("dec", 31, [335, 365], 3.1, 8.7, 0.85, 1017.0, 4.1, 54.5, 0.44, 0.85),
+    ("jan", 31, [1, 31], 2.3, 9.2, 0.82, 1017.0, 3.3, 44.0, 0.47, 0.82),
+    ("feb", 28, [32, 59], 3.1, 11.9, 0.78, 1017.0, 4.1, 38.6, 0.52, 0.78),
+    ("mar", 31, [60, 90], 6.8, 15.5, 0.71, 1016.0, 7.3, 38.7, 0.59, 0.71),
+    ("apr", 30, [91, 120], 11.1, 18.9, 0.64, 1016.0, 11.6, 36.6, 0.65, 0.64),
+    ("may", 31, [121, 151], 15.1, 18.9, 0.66, 1016.0, 15.6, 60.4, 0.64, 0.66),
+    ("jun", 30, [152, 181], 18.5, 19.0, 0.65, 1015.0, 18.2, 55.4, 0.65, 0.65),
+    ("jul", 31, [182, 212], 20.5, 19.2, 0.64, 1015.0, 20.2, 63.5, 0.65, 0.64),
+    ("aug", 31, [213, 243], 20.0, 19.2, 0.67, 1015.0, 19.7, 61.4, 0.67, 0.67),
+    ("sep", 30, [244, 273], 15.5, 17.3, 0.74, 1016.0, 15.2, 47.7, 0.63, 0.74),
+    ("oct", 31, [274, 304], 10.7, 13.8, 0.82, 1016.0, 11.2, 50.4, 0.55, 0.82),
+    ("nov", 30, [305, 334], 6.1, 9.7, 0.85, 1017.0, 6.6, 47.3, 0.46, 0.85),
 ]
-# The cloud factor targets are monthly global-radiation normals (recalled approximate DWD values for
-# Rhein-Main in kWh/m2: Jan 21, Apr 120, Jul 165, Oct 55 [AS]) divided by the Haurwitz clear-sky daily
-# total at 50.15 N for the middle of the month (5.3, 22.7, 30.1, 11.2 MJ/m2 per day).
 
 
 def regimes(season):
@@ -51,7 +63,7 @@ def regimes(season):
     tr = {"clear": {"clear": 0.5, "cloudy": 0.4, "rain": 0.1},
           "cloudy": {"clear": 0.3, "cloudy": 0.4, "rain": 0.3},
           "rain": {"clear": 0.2, "cloudy": 0.5, "rain": 0.3}}
-    if season == "summer":
+    if season in ("may", "jun", "jul", "aug", "sep"):
         r["thunderstorm"] = {
             "duration_h": {"min": 1, "median": 3, "sigma_log": 0.4}, "cloud_cover": [0.7, 1.0],
             "precip_mm_h": {"median": 0.3, "sigma_log": 0.5},
@@ -167,7 +179,7 @@ def build():
         "format": "physics_sim.climate/1",
         "location": {"latitude_deg": 50.14988, "longitude_deg": 8.45474, "elevation_m": 150},
         "sun": {"mode": "astronomical"},
-        "calendar": {"epoch": {"year": 0, "season": "winter", "day": 0, "time_of_day_s": 0}, "cycle_s": 86400},
+        "calendar": {"epoch": {"year": 0, "season": "dec", "day": 0, "time_of_day_s": 0}, "cycle_s": 86400},
         "seasons": seasons,
         "lags_s": {"cloud": 1200, "precip_on": 300, "precip_off": 600, "wind": 900, "temp_offset": 3600,
                    "rh": 1800, "pressure": 3600},
@@ -179,9 +191,9 @@ def build():
         "source": {
             "purpose": "climate of the farming field model (ps_field F1a): a real 365-day year starting 1 December for the home region.",
             "location": "latitude/longitude: the racing_game home-region spawn point as in test_fixed_summer.json; elevation 150 m ASSUMED.",
-            "seasons": "days 90/92/92/91 = the real meteorological seasons (Dec-Feb 90 days in a non-leap year, Mar-May 92, Jun-Aug 92, Sep-Nov 91); doy_span as test_fixed_summer.json. Season values sit at the season midpoint, so they are set to the January/April/July/October normals.",
-            "scalars": "[AS] temp_mean_c 1.8/10.3/19.6/10.0, temp_range_k, rh_mean, ground_temp_c: approximate DWD 1991-2020 normals for the Rhein-Main area recalled from memory, NOT re-read from the DWD files. Regime offsets shift the realised means; the measured annual statistics are reported by the ps_field tests.",
-            "regimes": "[AS] the regimes, transitions and durations of test_weather.json (the weather plan's assumed regime statistics); only the rain regime's precipitation median is solved by tools/fielddata/farm_climate_gen.py so that the long-run mean precipitation matches 45/48/62/50 mm per month (winter/spring/summer/autumn, [AS] recalled Rhein-Main normals of roughly 620 mm per year).",
+            "seasons": "twelve calendar months (31/31/28/31/30/31/30/31/31/30/31/30 days from 1 December = 365); doy_span 1-based. Season values sit at the month midpoint, so they are the monthly normals.",
+            "scalars": "temp_mean_c, rh_mean, precipitation target and cloud factor target: DWD station Frankfurt/Main (1420) daily record 1991-2020 monthly means [C], cloud factor via Angstrom-Prescott from sunshine duration [D]; temp_range_k 1.7 x the mean daily range, ground_temp_c, pressure [AS]. Regime offsets shift the realised means; the measured annual statistics are reported by the ps_field tests.",
+            "regimes": "[AS] the regimes, transitions and durations of test_weather.json (the weather plan's assumed regime statistics); only the rain regime's precipitation median is solved by tools/fielddata/farm_climate_gen.py so that the long-run mean precipitation matches 45/48/62/50 mm per month (the monthly means of the Frankfurt/Main record, 598 mm per year [C]).",
             "rest": "lags_s, precip_phase, humidity, diurnal_temperature, lightning: as test_weather.json (see its source notes)."
         }}
 

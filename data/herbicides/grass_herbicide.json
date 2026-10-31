@@ -1,0 +1,87 @@
+{
+  "format": "physics_sim.herbicide/1",
+  "name": "grass_herbicide",
+  "moa": "group_1_accase",
+  "label_rate": 1.0,
+  "targets": {
+    "annual_grass": {
+      "ed50_rel": 0.25,
+      "slope": 3.0,
+      "stage_gdd_full": 400.0,
+      "stage_gdd_zero": 900.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "volunteer": {
+      "ed50_rel": 0.3,
+      "slope": 3.0,
+      "stage_gdd_full": 400.0,
+      "stage_gdd_zero": 900.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "perennial": {
+      "ed50_rel": 0.8,
+      "slope": 2.0,
+      "stage_gdd_full": 400.0,
+      "stage_gdd_zero": 900.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    }
+  },
+  "resistance": {
+    "ed50_factor": 100.0,
+    "source": {
+      "ed50_factor": "[AS] ED50 multiplier of the resistant biotype (target-site resistance gives resistance factors of 10 to over 100, recalled)."
+    }
+  },
+  "residual": {
+    "half_life_days": 10.0,
+    "germ_kill": 0.2,
+    "source": {
+      "half_life_days": "[AS] half-life of the soil-residual activity.",
+      "germ_kill": "[AS] share of emerging seedlings killed at full residual activity."
+    }
+  },
+  "crops": {
+    "winter_wheat": {
+      "max_bbch": 39.0,
+      "damage_in": 0.0,
+      "damage_out": 0.5,
+      "source": {
+        "max_bbch": "[AS] last crop stage with the safe window.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    },
+    "default": {
+      "max_bbch": 30.0,
+      "damage_in": 0.05,
+      "damage_out": 0.8,
+      "source": {
+        "max_bbch": "[AS] last crop stage with the safe window.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    }
+  },
+  "damage": {
+    "dose_exponent": 1.5,
+    "source": {
+      "dose_exponent": "[AS] crop damage grows with dose^exponent (an overdose hurts more than proportionally)."
+    }
+  },
+  "source": "F1c herbicide: a generic post-emergence grass herbicide (ACCase type). Every number [AS]; no product label was consulted."
+}

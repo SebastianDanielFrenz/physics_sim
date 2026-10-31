@@ -23,6 +23,9 @@ constexpr const char* kSoilFormat = "physics_sim.soil/1";
 constexpr const char* kCropFormat = "physics_sim.crop/1";
 constexpr const char* kMaterialFormat = "physics_sim.field_material/1";
 constexpr const char* kMethodsFormat = "physics_sim.field_methods/1";
+constexpr const char* kWeedFormat = "physics_sim.weed_group/1";
+constexpr const char* kHerbicideFormat = "physics_sim.herbicide/1";
+constexpr const char* kOperationFormat = "physics_sim.operation/1";
 
 bool has_tag(const json& v) {
     if (!v.is_string()) return false;
@@ -152,6 +155,23 @@ SoilDesc parse_soil_json(const json& j, const std::string& origin) {
     } else {
         r.skip("nutrients");
     }
+    if (r.has("management")) {
+        ObjectReader w(block_of(r, "management", origin), "management", origin);
+        SoilManagementDesc& m = s.management;
+        s.has_management = true;
+#define SM(f) m.f = w.number(#f, true, 0.0)
+        SM(layer_a_m); SM(layer_b_m); SM(workable_wet_full); SM(workable_wet_zero); SM(workable_dry_zero); SM(workable_dry_full);
+        SM(damage_gain); SM(damage_recovery_per_day); SM(damage_cn_increase); SM(damage_root_penalty); SM(loose_cn_decrease);
+        SM(loose_stage2_evap_reduction); SM(loose_bd_reduction); SM(settle_per_mm_rain); SM(settle_per_day);
+        SM(tillage_dry_out_mm_per_m); SM(seedbed_rest); SM(seedbed_wet_floor); SM(seedbed_settle_per_mm); SM(seedbed_settle_per_day);
+        SM(cover_per_t_ha); SM(mulch_evap_max_reduction); SM(res_c_fraction); SM(res_k20_per_day); SM(res_surface_factor);
+        SM(res_stubble_factor); SM(res_moisture_floor); SM(res_chop_gain); SM(res_assim_eff); SM(res_cn_bio); SM(res_n_floor_kg_ha);
+#undef SM
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("management");
+    }
     r.finish();
     const std::string e = soil_validation_error(s);
     if (!e.empty()) throw std::runtime_error(origin + ": " + e);
@@ -250,6 +270,8 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         ObjectReader w(block_of(r, "biomass", origin), "biomass", origin);
         d.wp_star_g_m2 = w.number("wp_star_g_m2", true, 0.0);
         d.biomass_gdd_full = w.number("gdd_full", true, 0.0);
+        d.biomass_rs_ref_mj_m2 = w.number("rs_ref_mj_m2", false, 0.0);
+        d.biomass_rue_g_mj = w.number("rue_g_mj", false, 0.0);
         w.skip("source");
         w.finish();
     }
@@ -257,6 +279,7 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         ObjectReader w(block_of(r, "yield", origin), "yield", origin);
         d.hi0 = w.number("hi0", true, 0.0);
         d.hi_build_gdd = w.number("hi_build_gdd", true, 0.0);
+        d.straw_harvest_fraction = w.number("straw_harvest_fraction", false, 1.0);
         d.flowering_length_gdd = w.number("flowering_length_gdd", true, 0.0);
         d.excess_fruits_pct = w.number("excess_fruits_pct", true, 0.0);
         d.ppol = w.number("ppol", true, 0.0);
@@ -326,6 +349,20 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         w.finish();
     } else {
         r.skip("nutrients");
+    }
+    if (r.has("management")) {
+        ObjectReader w(block_of(r, "management", origin), "management", origin);
+        CropManagementDesc& m = d.management;
+        d.has_management = true;
+#define CM(f) m.f = w.number(#f, true, 0.0)
+        CM(root_dm_fraction); CM(root_upper_share); CM(seed_mass_g); CM(seed_viability); CM(depth_opt_min_m); CM(depth_opt_max_m);
+        CM(depth_zero_m); CM(depth_surface_factor); CM(seedbed_floor); CM(residue_emergence_penalty); CM(germ_wet_min);
+        CM(germ_wet_full); CM(dry_hazard_per_day); CM(compensation_density_m2);
+#undef CM
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("management");
     }
     r.finish();
     const std::string e = crop_validation_error(d);
@@ -411,6 +448,293 @@ std::vector<MethodDesc> parse_methods_json(const json& j, const std::string& ori
 
 std::vector<MethodDesc> load_methods_json(const std::filesystem::path& path) {
     return parse_methods_json(load_json_with_extends(path), path.string());
+}
+
+WeedGroupDesc parse_weed_group_json(const json& j, const std::string& origin) {
+    ObjectReader r(j, "", origin);
+    check_format(r, kWeedFormat);
+    r.skip("extends");
+    r.skip("source");
+    WeedGroupDesc g;
+    g.name = r.string("name", true, "");
+    const std::string kind = r.string("kind", true, "");
+    g.kind = weed_kind_from_name(kind);
+    if (g.kind < 0) r.fail("\"kind\" must be annual_grass, annual_broadleaf, perennial or volunteer (got \"" + kind + "\")");
+    g.perennial = g.kind == 2;
+    g.volunteer_crop = r.string("volunteer_crop", false, "");
+    {
+        ObjectReader w(block_of(r, "seedbank", origin), "seedbank", origin);
+        g.seeds_init_m2 = w.number("seeds_init_m2", true, 0.0);
+        g.clumps_init_m2 = w.number("clumps_init_m2", false, 0.0);
+        g.init_surface = w.number("init_surface", true, 0.0);
+        g.init_upper = w.number("init_upper", true, 0.0);
+        g.init_lower = w.number("init_lower", true, 0.0);
+        g.decay_surface_per_day = w.number("decay_surface_per_day", true, 0.0);
+        g.decay_upper_per_day = w.number("decay_upper_per_day", true, 0.0);
+        g.decay_lower_per_day = w.number("decay_lower_per_day", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "germination", origin), "germination", origin);
+        g.germ_t_min_c = w.number("t_min_c", true, 0.0);
+        g.germ_t_opt_c = w.number("t_opt_c", true, 0.0);
+        g.germ_t_max_c = w.number("t_max_c", true, 0.0);
+        g.germ_rate_per_day = w.number("rate_per_day", true, 0.0);
+        g.germ_wet_min = w.number("wet_min", true, 0.0);
+        g.germ_wet_full = w.number("wet_full", true, 0.0);
+        g.emerge_surface = w.number("emerge_surface", true, 0.0);
+        g.emerge_upper = w.number("emerge_upper", true, 0.0);
+        g.emerge_lower = w.number("emerge_lower", true, 0.0);
+        g.seedling_g = w.number("seedling_g", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "growth", origin), "growth", origin);
+        g.t_base_c = w.number("t_base_c", true, 0.0);
+        g.growth_per_gdd = w.number("per_gdd", true, 0.0);
+        g.w_max_g = w.number("w_max_g", true, 0.0);
+        g.area_max_g_m2 = w.number("area_max_g_m2", true, 0.0);
+        g.self_thin_per_day = w.number("self_thin_per_day", true, 0.0);
+        g.shade = w.number("shade", true, 0.0);
+        g.n_conc_pct = w.number("n_conc_pct", true, 0.0);
+        g.c_frac = w.number("c_frac", true, 0.0);
+        g.cold_kill_onset_c = w.number("cold_kill_onset_c", true, 0.0);
+        g.cold_kill_full_c = w.number("cold_kill_full_c", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "development", origin), "development", origin);
+        g.gdd_flower = w.number("gdd_flower", true, 0.0);
+        g.gdd_ripe = w.number("gdd_ripe", true, 0.0);
+        g.gdd_death = w.number("gdd_death", !g.perennial, 0.0);
+        g.seeds_per_g = w.number("seeds_per_g", true, 0.0);
+        g.shed_per_day = w.number("shed_per_day", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    if (r.has("perennial")) {
+        if (!g.perennial) r.fail("a \"perennial\" block is only for the kind perennial");
+        ObjectReader w(block_of(r, "perennial", origin), "perennial", origin);
+        g.dormancy_t_c = w.number("dormancy_t_c", true, 0.0);
+        g.senesce_per_day = w.number("senesce_per_day", true, 0.0);
+        g.regrow_g = w.number("regrow_g", true, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        if (g.perennial) r.fail("the kind perennial needs a \"perennial\" block");
+        r.skip("perennial");
+    }
+    {
+        ObjectReader w(block_of(r, "competition", origin), "competition", origin);
+        g.cousens_i_pct = w.number("cousens_i_pct", true, 0.0);
+        g.cousens_a_pct = w.number("cousens_a_pct", true, 0.0);
+        g.rel_emerge_decay = w.number("rel_emerge_decay", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "resistance", origin), "resistance", origin);
+        g.resistance_init = w.number("init", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    r.finish();
+    const std::string e = weed_group_validation_error(g);
+    if (!e.empty()) throw std::runtime_error(origin + ": " + e);
+    return g;
+}
+
+WeedGroupDesc load_weed_group_json(const std::filesystem::path& path) {
+    return parse_weed_group_json(load_json_with_extends(path), path.string());
+}
+
+HerbicideDesc parse_herbicide_json(const json& j, const std::string& origin) {
+    ObjectReader r(j, "", origin);
+    check_format(r, kHerbicideFormat);
+    r.skip("extends");
+    r.skip("source");
+    HerbicideDesc h;
+    h.name = r.string("name", true, "");
+    h.moa = r.string("moa", true, "");
+    h.label_rate = r.number("label_rate", true, 0.0);
+    {
+        const json& tg = r.object("targets");
+        for (auto it = tg.begin(); it != tg.end(); ++it) {
+            const int k = weed_kind_from_name(it.key());
+            if (k < 0) r.fail("targets: unknown weed kind \"" + it.key() + "\"");
+            require_tags(it.value(), "targets." + it.key(), origin);
+            ObjectReader w(it.value(), "targets." + it.key(), origin);
+            h.kind[k].ed50_rel = w.number("ed50_rel", true, 0.0);
+            h.kind[k].slope = w.number("slope", true, 0.0);
+            h.kind[k].stage_gdd_full = w.number("stage_gdd_full", true, 0.0);
+            h.kind[k].stage_gdd_zero = w.number("stage_gdd_zero", true, 0.0);
+            w.skip("source");
+            w.finish();
+        }
+    }
+    {
+        ObjectReader w(block_of(r, "resistance", origin), "resistance", origin);
+        h.resistance_ed50_factor = w.number("ed50_factor", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "residual", origin), "residual", origin);
+        h.residual_half_life_days = w.number("half_life_days", true, 0.0);
+        h.residual_germ_kill = w.number("germ_kill", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        const json& cr = r.object("crops");
+        bool have_default = false;
+        for (auto it = cr.begin(); it != cr.end(); ++it) {
+            require_tags(it.value(), "crops." + it.key(), origin);
+            ObjectReader w(it.value(), "crops." + it.key(), origin);
+            const real mb = w.number("max_bbch", true, 0.0), di = w.number("damage_in", true, 0.0), dout = w.number("damage_out", true, 0.0);
+            w.skip("source");
+            w.finish();
+            if (it.key() == "default") {
+                h.default_max_bbch = mb;
+                h.default_damage_in = di;
+                h.default_damage_out = dout;
+                have_default = true;
+            } else {
+                HerbicideCropResponse c;
+                c.crop = it.key();
+                c.max_bbch = mb;
+                c.damage_in = di;
+                c.damage_out = dout;
+                h.crops.push_back(c);
+            }
+        }
+        if (!have_default) r.fail("crops: an entry \"default\" (crops not listed) is required");
+    }
+    {
+        ObjectReader w(block_of(r, "damage", origin), "damage", origin);
+        h.damage_dose_exponent = w.number("dose_exponent", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    r.finish();
+    const std::string e = herbicide_validation_error(h);
+    if (!e.empty()) throw std::runtime_error(origin + ": " + e);
+    return h;
+}
+
+HerbicideDesc load_herbicide_json(const std::filesystem::path& path) {
+    return parse_herbicide_json(load_json_with_extends(path), path.string());
+}
+
+namespace {
+int index_of(const std::vector<std::string>& names, const std::string& n) {
+    for (std::size_t i = 0; i < names.size(); ++i)
+        if (names[i] == n) return static_cast<int>(i) + 1;
+    return 0;
+}
+} // namespace
+
+OperationEffect parse_operation_json(const json& j, const std::string& origin, const OperationPalette& pal) {
+    ObjectReader r(j, "", origin);
+    check_format(r, kOperationFormat);
+    r.skip("extends");
+    r.skip("source");
+    OperationEffect e;
+    const std::string name = r.string("name", true, "");
+    e.coverage = r.number("coverage", false, 1.0);
+    e.straw_pickup = r.number("straw_pickup", false, 0.0);
+    if (r.has("tillage")) {
+        const json& tb = r.object("tillage");
+        const json* src = tb.contains("source") ? &tb["source"] : nullptr;
+        for (auto it = tb.begin(); it != tb.end(); ++it) {   // every number (and the weed_kill object) needs a tagged source entry
+            if (it.key() == "source" || it.value().is_string()) continue;
+            if (!src || !src->is_object() || !src->contains(it.key()) || !has_tag((*src)[it.key()]))
+                throw std::runtime_error(origin + ": tillage: parameter \"" + it.key() + "\" has no source tag");
+        }
+        ObjectReader w(tb, "tillage", origin);
+        TillageEffect& t = e.tillage;
+        t.depth_m = w.number("depth_m", true, 0.0);
+        t.mix_surface = w.number("mix_surface", false, 0.0);
+        t.mix_upper = w.number("mix_upper", false, 0.0);
+        t.mix_lower = w.number("mix_lower", false, 0.0);
+        t.inversion = w.number("inversion", false, 0.0);
+        t.residue_chop = w.number("residue_chop", false, 0.0);
+        t.loosening = w.number("loosening", false, 0.0);
+        t.seedbed_fineness = w.number("seedbed_fineness", false, 0.0);
+        t.crop_kill = w.number("crop_kill", false, 0.0);
+        if (const json* wk = w.child("weed_kill")) {
+            if (!wk->is_object()) w.fail("\"weed_kill\" must be an object of weed kinds");
+            for (auto it = wk->begin(); it != wk->end(); ++it) {
+                const int k = weed_kind_from_name(it.key());
+                if (k < 0) w.fail("weed_kill: unknown weed kind \"" + it.key() + "\"");
+                if (!it.value().is_number()) w.fail("weed_kill." + it.key() + " must be a number");
+                t.weed_kill[k] = it.value().get<real>();
+            }
+        }
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("tillage");
+    }
+    if (r.has("harvest")) {
+        ObjectReader w(block_of(r, "harvest", origin), "harvest", origin);
+        e.harvest.harvest = true;
+        e.harvest.straw_carried = w.number("straw_carried", true, 0.0);
+        e.harvest.straw_chopped = w.number("straw_chopped", true, 0.0);
+        e.harvest.grain_loss = w.number("grain_loss", false, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("harvest");
+    }
+    if (r.has("seed")) {
+        ObjectReader w(block_of(r, "seed", origin), "seed", origin);
+        const std::string crop = w.string("crop", true, "");
+        e.seed.crop = index_of(pal.crops, crop);
+        if (e.seed.crop == 0) w.fail("\"crop\" names no crop of the field: " + crop);
+        e.seed.seeds_per_m2 = w.number("seeds_per_m2", true, 0.0);
+        e.seed.depth_m = w.number("depth_m", true, 0.0);
+        e.seed.quality = w.number("quality", true, 0.0);
+        e.seed.residue_tolerance = w.number("residue_tolerance", true, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("seed");
+    }
+    if (r.has("spray")) {
+        ObjectReader w(r.object("spray"), "spray", origin);
+        const std::string prod = w.string("product", true, "");
+        e.spray.product = index_of(pal.herbicides, prod);
+        if (e.spray.product == 0) w.fail("\"product\" names no herbicide of the field: " + prod);
+        e.spray.dose = w.number("dose", true, 1.0);
+        w.finish();
+    } else {
+        r.skip("spray");
+    }
+    if (r.has("deposit")) {
+        ObjectReader w(r.object("deposit"), "deposit", origin);
+        const std::string mat = w.string("material", true, ""), met = w.string("method", true, "");
+        e.deposit.material = index_of(pal.materials, mat);
+        e.deposit.method = index_of(pal.methods, met);
+        if (e.deposit.material == 0) w.fail("\"material\" names no material of the field: " + mat);
+        if (e.deposit.method == 0) w.fail("\"method\" names no method of the field: " + met);
+        e.deposit.rate_t_ha = w.number("rate_t_ha", true, 0.0);
+        e.deposit.incorporation_delay_h = w.number("incorporation_delay_h", false, e.deposit.incorporation_delay_h);
+        w.finish();
+    } else {
+        r.skip("deposit");
+    }
+    r.finish();
+    const std::string err = operation_validation_error(name, e);
+    if (!err.empty()) throw std::runtime_error(origin + ": " + err);
+    return e;
+}
+
+OperationEffect load_operation_json(const std::filesystem::path& path, const OperationPalette& palette) {
+    return parse_operation_json(load_json_with_extends(path), path.string(), palette);
 }
 
 } // namespace ps::io

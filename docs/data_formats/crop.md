@@ -76,3 +76,20 @@ The stress hook is filled when nutrients are enabled: `stress_n` = N factor, `st
 factors (with the pH availability), `stress_ph` = pH response; daily biomass x min(n, pk, ph, weed) x rotation.
 Rejections: untagged or unknown key, shares outside [0, 1], `ph_floor < ph_opt_low <= ph_opt_high` violated,
 `lodging_nmin_full` <= start. `tests/unit/test_field_io.cpp` I10.
+
+## `biomass.rue_g_mj` and `yield.straw_harvest_fraction` (F1c)
+
+`biomass.rue_g_mj` (optional, 0 = off): radiation-use cap on the daily biomass gain, at most `rue x Rs x cc` g/m2/day. AquaCrop's
+`WP* x Tr/ET0` does not depend on the light, so a canopy at low spring radiation would grow as fast as in June. (The older
+optional `biomass.rs_ref_mj_m2`, growth proportional to Rs below a reference radiation, stays available and is off in the shipped
+crop.) `yield.straw_harvest_fraction` (optional, default 1): share of the non-grain aboveground biomass a harvest can carry off;
+the rest (stubble, chaff, leaf litter) stays on the field as residue. winter_wheat: 0.68.
+
+## Optional `management` block (F1c)
+
+Needed by every crop of a field with `"management": true`. Required keys with source tags: `root_dm_fraction`, `root_upper_share`
+(root residue at harvest), `seed_mass_g`, `seed_viability`, `depth_opt_min_m`, `depth_opt_max_m`, `depth_zero_m`,
+`depth_surface_factor` (emergence against sowing depth, piecewise linear), `seedbed_floor`, `residue_emergence_penalty`,
+`germ_wet_min`, `germ_wet_full`, `dry_hazard_per_day` (germination needs a moist seed layer; a dry one kills seed),
+`compensation_density_m2` (plants per m2 at which canopy and yield reach the reference: ccx x (1 - exp(-d/d0)) / (1 - exp(-d_ref/d0))).
+A crop starts from a sowing operation (operation.md `seed`); `Field::sow` of the F1a/F1b tests still gives a full stand.

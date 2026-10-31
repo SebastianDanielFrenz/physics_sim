@@ -11,6 +11,11 @@
 
 namespace ps::field {
 
+namespace {
+// Priestley & Taylor (1972), Mon. Weather Rev. 100: lambda E = alpha Delta/(Delta+gamma) Rn for a wet surface, alpha = 1.26 [C].
+constexpr real kPriestleyTaylorAlpha = 1.26;
+}
+
 using namespace ps::environment;
 
 DailyWeatherSource::DailyWeatherSource(const ClimateDesc& climate, std::uint64_t seed,
@@ -101,7 +106,9 @@ DailyWeather DailyWeatherSource::compute(std::int64_t day) {
     in.latitude_deg = climate_.location.latitude_deg;
     in.elevation_m = climate_.location.elevation_m;
     in.day_of_year = r.doy;
-    r.et0_mm = fao56_et0(in).et0_mm;
+    const Et0Result er = fao56_et0(in);
+    r.et0_mm = er.et0_mm;
+    r.e_wet_mm = kPriestleyTaylorAlpha * er.delta / (er.delta + er.gamma) * 0.408 * std::max(0.0, er.rn);
     ++computed_;
     return r;
 }

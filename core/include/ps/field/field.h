@@ -60,6 +60,7 @@
 #include "ps/field/weather_record.h"
 #include "ps/types.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -78,6 +79,11 @@ struct FieldConfig {
     bool nutrients_enabled = false;
     std::vector<MaterialDesc> materials;  // palette; Deposit::material = index + 1
     std::vector<MethodDesc> methods;      // palette; Deposit::method = index + 1
+    // Management (F1c): tillage state, residues, establishment from sowing, weeds, herbicides. Needs nutrients_enabled,
+    // a management block in every soil and crop. false = bit-identical to the F1b field (the vectors below stay empty).
+    bool management_enabled = false;
+    std::vector<WeedGroupDesc> weeds;     // palette; empty = no weed model
+    std::vector<HerbicideDesc> herbicides;   // palette; Spray::product = index + 1
 };
 
 struct StressFactors {
@@ -87,13 +93,16 @@ struct StressFactors {
 struct HarvestResult {
     int crop_id = 0;               // 0 = nothing was growing
     real grain_dm_t_ha = 0.0;      // dry matter
-    real straw_dm_t_ha = 0.0;      // aboveground biomass minus grain
+    real straw_dm_t_ha = 0.0;      // harvestable straw (see stubble_dm_t_ha below)
     real bbch = 0.0;
     // Nutrients (all zero without nutrients_enabled). Quantities of the crop at harvest, kg/ha.
     real n_grain_kg_ha = 0.0, n_straw_kg_ha = 0.0, n_root_kg_ha = 0.0;
     real p2o5_grain_kg_ha = 0.0, p2o5_straw_kg_ha = 0.0;
     real k2o_grain_kg_ha = 0.0, k2o_straw_kg_ha = 0.0;
     real lodging_loss = 0.0;       // share of the grain lost to lodging
+    // Straw split (all zero when nothing grew). straw_dm_t_ha is the harvestable straw (CropDesc::straw_harvest_fraction of
+    // the non-grain aboveground biomass); stubble_dm_t_ha the rest (stubble, chaff, leaf litter) that stays on the field.
+    real stubble_dm_t_ha = 0.0;
 };
 
 // Plain-value view of one cell (copy; nothing here points into the field).
@@ -148,6 +157,34 @@ struct NutrientLedger {
     real n_mineralised = 0.0;        // organic -> ammonium
 };
 
+// Management state of one cell (copy; management_enabled only). Residue masses are dry matter in t/ha.
+struct WeedGroupView {
+    real seeds_surface = 0.0, seeds_upper = 0.0, seeds_lower = 0.0, seeds_total = 0.0;   // seeds per m2 in the bank
+    real plants_m2 = 0.0, biomass_g_m2 = 0.0, seed_on_plants_m2 = 0.0, tt_gdd = 0.0;
+    real resistant_plants[kMaxMoa] = {};   // share of the plants resistant to each mode of action
+    real resistant_seeds[kMaxMoa] = {};    // ... of the seed (bank and plants)
+};
+struct ManagementView {
+    real straw_t_ha = 0.0, stubble_t_ha = 0.0, buried_upper_t_ha = 0.0, buried_lower_t_ha = 0.0;
+    real residue_c_kg_ha = 0.0, residue_n_kg_ha = 0.0;
+    real cover = 0.0;                    // soil cover by residue, 0..1
+    real loosening = 0.0, damage = 0.0, seedbed = 0.0;
+    real soc_gain_c_kg_ha = 0.0;         // carbon built into humus from decomposed residue since construction
+    real plants_m2 = 0.0;                // established crop plants
+    real sown_seeds_m2 = 0.0;            // seeds sown and not yet emerged (0 once emerged)
+    real weed_factor = 1.0;              // growth factor from weed competition of the last step
+    std::vector<WeedGroupView> weeds;
+    std::vector<real> herbicide_residual;   // residual activity per herbicide
+};
+// Cumulative carbon ledger of the residue and weed pools (kg C/ha).
+struct CarbonLedger {
+    real c_from_crop = 0.0;              // crop biomass entering the residue pools (harvest, termination, damage)
+    real c_weed_growth = 0.0;            // carbon fixed by weeds
+    real c_removed = 0.0;                // straw pickup, weed carbon leaving with it
+    real c_co2 = 0.0;                    // respired during decomposition
+    real c_humus = 0.0;                  // assimilated into microbial biomass and humus (kept)
+};
+
 // Cumulative water ledger of one cell since construction (mm).
 struct WaterLedger {
     real precipitation = 0.0;
@@ -180,6 +217,15 @@ struct FieldState {
     std::vector<real> f_n, f_pk, f_ph;
     std::vector<real> l_n_init, l_n_fmin, l_n_forg, l_n_dep, l_n_fix, l_n_rem, l_n_leach, l_n_nh3, l_n_den, l_n_min;
     std::vector<real> l_p_init, l_p_app, l_p_rem, l_k_init, l_k_app, l_k_rem, l_ca_app, l_ca_loss;
+    // management (empty unless FieldConfig::management_enabled)
+    std::array<std::vector<real>, kResPools> res_c, res_n;      // loose straw, stubble, buried upper, buried lower (kg C, kg N per ha)
+    std::array<std::vector<real>, 2> res_p, res_k;              // P2O5, K2O still in the loose straw and the stubble
+    std::vector<real> res_chop, loose, damage, seedbed, soc, tilth_e2;
+    std::vector<real> sow_seeds, sow_fe, sow_viab, plants;      // sow_seeds < 0: legacy sow (full stand), 0: nothing sown
+    std::vector<real> w_seed_s, w_seed_a, w_seed_b, w_dens, w_bio, w_tt, w_n, w_seed_pl, w_res_pl, w_res_sd;   // [cell * groups (* moa)]
+    std::vector<real> h_act;                                    // [cell * herbicides]
+    std::vector<real> l_c_crop, l_c_wg, l_c_rem, l_c_co2;
+    std::vector<real> weed_f;                                   // weed competition factor (1 = none); always sized
 };
 
 struct FieldCheckpoint {
@@ -229,8 +275,10 @@ public:
 
     // One operation's effect (nutrients_enabled only; std::logic_error otherwise). F1b: the deposit.
     // The effect covers `coverage` of the cell (a double pass is a coverage of 2).
-    void apply(int cell, const OperationEffect& effect);
-    void apply_all(const OperationEffect& effect);
+    // With management_enabled the whole record applies in the order: crop and weed kill, harvest, straw pickup, tillage,
+    // deposit, spraying, sowing. `harvest_out` (optional) receives what a harvest effect took.
+    void apply(int cell, const OperationEffect& effect, HarvestResult* harvest_out = nullptr);
+    HarvestResult apply_all(const OperationEffect& effect);   // the field mean of the harvest effects
 
     void set_stress(int cell, const StressFactors& f);
     // Test only: every day starts with the profile brought back to field
@@ -254,6 +302,12 @@ public:
     real k_balance_residual(int cell) const;
     real cao_balance_residual(int cell) const;
     bool nutrients_enabled() const { return cfg_.nutrients_enabled; }
+    // Management (std::logic_error without management_enabled).
+    bool management_enabled() const { return cfg_.management_enabled; }
+    ManagementView management_view(int cell) const;
+    CarbonLedger carbon_ledger(int cell) const;
+    // Carbon in - out - stored in the residue pools and living weeds; zero up to rounding.
+    real c_balance_residual(int cell) const;
 
     // --- persistence ---
     FieldCheckpoint checkpoint() const;
@@ -263,7 +317,7 @@ public:
 
 private:
     struct DayFlows {            // what the water balance of the day hands to the nutrients
-        real taw1 = 0.0, dp = 0.0, drain = 0.0, bio_before = 0.0, bbch = 0.0;
+        real taw1 = 0.0, dp = 0.0, drain = 0.0, bio_before = 0.0, bbch = 0.0, shed_g_m2 = 0.0;
         int stage = 0;
         bool emerged = false;
     };
@@ -276,9 +330,37 @@ private:
     real ph_of(std::size_t c) const;
     real n_storage(std::size_t c) const;
     void drop_crop_nutrients(std::size_t c);   // a crop that leaves without a harvest returns all it holds
+    // Management (management.cpp, weeds.cpp)
+    void init_management();
+    void manage_prestep(std::size_t c, const DailyWeather& w);
+    void manage_poststep(std::size_t c, const DailyWeather& w, const DayFlows& fl);
+    void establish(std::size_t c, const CropDesc& cr);
+    void apply_management(std::size_t c, const OperationEffect& e, int phase, HarvestResult* harvest_out);   // phase 1: kill, harvest, pickup, tillage; 2: spray, sowing
+    real weed_competition(std::size_t c) const;
+    real crop_bbch(std::size_t c) const;
+    void apply_deposit(std::size_t c, const OperationEffect& e);
+    void reset_crop_state(std::size_t c);
+    void do_tillage(std::size_t c, const TillageEffect& t, real cov);
+    void do_harvest_mgmt(std::size_t c, const HarvestEffect& h, real cov, HarvestResult* out);
+    void do_seeding(std::size_t c, const SeedPlacement& sp, real cov);
+    void do_spray(std::size_t c, const Spray& sp, real cov);
+    void do_straw_pickup(std::size_t c, real f);
+    void crop_to_residue(std::size_t c, real fraction, bool with_grain);   // kills `fraction` of the standing crop into the residue pools
+    void clear_crop(std::size_t c);
+    void step_weeds(std::size_t c, const DailyWeather& w);
+    void weed_to_residue(std::size_t c, std::size_t gi, real fraction);
+    void release_residue_pk(std::size_t c, int pool, real fraction);
+    real workability(std::size_t c) const;
+    real rel_wet(std::size_t c) const;
+    real residue_dm_surface(std::size_t c) const;
+    real residue_cover(std::size_t c) const;
+    int group_count() const { return static_cast<int>(cfg_.weeds.size()); }
+    int herbicide_count() const { return static_cast<int>(cfg_.herbicides.size()); }
     const SoilDesc& soil_of(std::size_t c) const { return cfg_.soils[soil_idx_[c]]; }
 
     FieldConfig cfg_;
+    std::vector<int> weed_vol_crop_;   // per weed group: crop id whose shed grain seeds it, 0 = none
+    int moa_count_ = 0;
     int nx_ = 0, ny_ = 0;
     std::vector<std::uint16_t> soil_idx_;
     FieldState s_;

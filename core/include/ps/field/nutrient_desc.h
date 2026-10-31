@@ -117,14 +117,8 @@ struct Deposit {
     real incorporation_delay_h = -2.0;   // < -1.5 = the method's default; < 0 = none; else hours
 };
 
-// One operation's effect on one agronomy cell. PLAN 4.6: every operation is one data-driven effect record; F1b
-// carries the deposit, F1c adds mixing per layer, inversion, weed kill, residue burial, seedbed quality, seed
-// placement and removal to this same struct. `coverage` is the share of the cell the pass covered (an overlap is
-// a coverage above 1 in the sum of passes: a double dose).
-struct OperationEffect {
-    real coverage = 1.0;
-    Deposit deposit;
-};
+// The complete operation effect record (deposit, tillage, harvest, sowing, spraying) is OperationEffect in
+// ps/field/management_desc.h; F1b used only its deposit.
 
 // First problem with the descriptor ("soil <name>: nutrients.<field> ..."), or empty.
 std::string soil_nutrient_validation_error(const std::string& soil_name, const SoilNutrientDesc& sn);

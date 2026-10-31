@@ -10,6 +10,7 @@
 #pragma once
 
 #include "ps/field/crop_desc.h"
+#include "ps/field/management_desc.h"
 #include "ps/field/nutrient_desc.h"
 #include "ps/field/soil_desc.h"
 
@@ -33,5 +34,19 @@ field::MaterialDesc parse_material_json(const nlohmann::json& root, const std::s
 // physics_sim.field_methods/1: the application methods (one file, a list).
 std::vector<field::MethodDesc> load_methods_json(const std::filesystem::path& path);
 std::vector<field::MethodDesc> parse_methods_json(const nlohmann::json& root, const std::string& origin);
+
+// physics_sim.weed_group/1 (docs/data_formats/weed_group.md) and physics_sim.herbicide/1 (herbicide.md).
+field::WeedGroupDesc load_weed_group_json(const std::filesystem::path& path);
+field::WeedGroupDesc parse_weed_group_json(const nlohmann::json& root, const std::string& origin);
+field::HerbicideDesc load_herbicide_json(const std::filesystem::path& path);
+field::HerbicideDesc parse_herbicide_json(const nlohmann::json& root, const std::string& origin);
+
+// physics_sim.operation/1 (docs/data_formats/operation.md): one OperationEffect record. Names in the file (crop,
+// herbicide, material, method) are resolved against the palettes of the field they will be applied to.
+struct OperationPalette {
+    std::vector<std::string> crops, herbicides, materials, methods;   // index + 1 = id in the field's palette
+};
+field::OperationEffect load_operation_json(const std::filesystem::path& path, const OperationPalette& palette);
+field::OperationEffect parse_operation_json(const nlohmann::json& root, const std::string& origin, const OperationPalette& palette);
 
 } // namespace ps::io

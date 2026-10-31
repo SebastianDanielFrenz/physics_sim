@@ -364,8 +364,10 @@ add_executable(ps_field_tests
   test_field_water.cpp
   test_field_crop.cpp
   test_field_persistence.cpp
+  test_field_management.cpp
   test_field_nutrients.cpp
   test_field_nutrient_processes.cpp
+  test_field_reference.cpp
 )
 
 target_link_libraries(ps_field_tests

@@ -131,14 +131,17 @@ TEST_CASE("W4 climate statistics of the shipped farm climate (30 years)", "[fiel
     tmean /= years * 365;
     INFO("annual rain " << rain << " mm, ET0 " << et0 << " mm, mean temperature " << tmean << " C, Rs Jan "
                         << rs_jan / n_jan << " Jul " << rs_jul / n_jul);
-    // The climate generator's own targets ([AS], recalled Rhein-Main normals): ~620 mm, ~10.4 C, ~650-700 mm ET0,
-    // global radiation 2.4 / 19.2 MJ m-2 day-1 in January / July.
+    // F1c fix A: the climate carries the twelve monthly normals of the DWD station Frankfurt/Main (1420), 1991-2020:
+    // 598 mm, 11.1 C, global radiation 2.4 / 19.5 MJ m-2 day-1 in January / July. The FAO-56 Penman-Monteith ET0
+    // computed from that station's own daily record (Tmean, Tmax, Tmin, RH, wind, sunshine via Angstrom-Prescott,
+    // 1991-2020; a session script, tools/fielddata/farm_climate_gen.py documents the inputs) is 814 mm per year
+    // (Jan 17, Apr 84, Jul 139, Oct 36 mm): the synthetic weather must reproduce that, not an assumed 650-700.
     CHECK(rain > 560.0);
-    CHECK(rain < 700.0);
-    CHECK(tmean > 9.5);
+    CHECK(rain < 640.0);
+    CHECK(tmean > 10.6);
     CHECK(tmean < 11.8);
-    CHECK(et0 > 620.0);
-    CHECK(et0 < 790.0);
+    CHECK(et0 > 770.0);
+    CHECK(et0 < 860.0);
     CHECK_THAT(rs_jan / n_jan, WithinRel(2.4, 0.25));
     CHECK_THAT(rs_jul / n_jul, WithinRel(19.2, 0.12));
 }

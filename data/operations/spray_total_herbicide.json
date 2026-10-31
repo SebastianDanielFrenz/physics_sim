@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "spray_total_herbicide",
+  "spray": {
+    "product": "total_herbicide",
+    "dose": 1.0
+  },
+  "source": "F1c operation: field sprayer with the non-selective herbicide at label dose."
+}

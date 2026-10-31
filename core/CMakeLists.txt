@@ -172,6 +172,9 @@ add_library(ps_field STATIC
   src/field/desc_validation.cpp
   src/field/field.cpp
   src/field/nutrients.cpp
+  src/field/management_validation.cpp
+  src/field/management.cpp
+  src/field/weeds.cpp
 )
 
 target_include_directories(ps_field PUBLIC

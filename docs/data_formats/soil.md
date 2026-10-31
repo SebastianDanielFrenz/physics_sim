@@ -65,3 +65,27 @@ pH in CaCl2, kg CaO/ha for the calcium-equivalent pool.
 
 Rejections (`desc_validation.cpp`): a missing or untagged key, an unknown key, a P/K release or fixation rate outside [0, 1] per day, negative pools or rates, ph_init outside (3, 9), Q10 below 1, a
 non-positive buffer. `tests/unit/test_field_io.cpp` I10.
+
+## Optional `management` block (F1c)
+
+Needed by every soil of a field with `"management": true` (see field_scenario.md). Every key is required and carries an entry in
+`management.source` starting with [C], [D], [M] or [AS]; unknown keys are rejected. The three layers of the management
+layer are the surface, the upper layer (`layer_a_m`, 0.10 m) and the lower layer (`layer_b_m`, to 0.30 m in total).
+
+| group | keys |
+|---|---|
+| layers | `layer_a_m`, `layer_b_m` |
+| workability (relative wetness of the root zone, 0 wilting point, 1 field capacity) | `workable_wet_full`, `workable_wet_zero`, `workable_dry_zero`, `workable_dry_full` |
+| structure | `damage_gain`, `damage_recovery_per_day`, `damage_cn_increase`, `damage_root_penalty`, `loose_cn_decrease`, `loose_stage2_evap_reduction`, `loose_bd_reduction`, `settle_per_mm_rain`, `settle_per_day`, `tillage_dry_out_mm_per_m` |
+| seedbed | `seedbed_rest`, `seedbed_wet_floor`, `seedbed_settle_per_mm`, `seedbed_settle_per_day` |
+| residue | `cover_per_t_ha` (soil cover = 1 - exp(-x m), Gregory 1982 form), `mulch_evap_max_reduction`, `res_c_fraction`, `res_k20_per_day`, `res_surface_factor`, `res_stubble_factor`, `res_moisture_floor`, `res_chop_gain`, `res_assim_eff`, `res_cn_bio`, `res_n_floor_kg_ha` |
+
+Residue is four pools (loose straw, stubble, buried upper, buried lower) with carbon, nitrogen and, for the two surface pools,
+P2O5 and K2O. Decomposition is first order with a Q10 temperature factor and a moisture factor; the decomposers build
+`res_assim_eff` of the carbon into biomass and humus (kept in `soc`, no further decay - a simplification) and take the nitrogen they
+need from the mineral pool (immobilisation) or release it. Residue cover multiplies the soil evaporation by
+`1 - mulch_evap_max_reduction x cover` (FAO-56 chapter 11 mulch idea).
+
+Soil evaporation (F1c, all fields): when the weather record provides `e_wet_mm`, the Priestley-Taylor energy limit of a wet
+surface (alpha 1.26, Rn floored at 0), the dual-coefficient evaporation of a cell is capped by `kr x few x e_wet_mm`. Records
+made by hand (tests) leave `e_wet_mm` negative and are not capped.

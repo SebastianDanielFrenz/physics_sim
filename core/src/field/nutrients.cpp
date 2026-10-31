@@ -90,7 +90,13 @@ real Field::ph_of(std::size_t c) const {
 }
 
 real Field::n_storage(std::size_t c) const {
-    return s_.no3_1[c] + s_.no3_2[c] + s_.nh4[c] + s_.org_slow[c] + s_.org_fresh[c] + s_.tan_surf[c] + s_.n_crop[c] + s_.n_root[c];
+    real n = s_.no3_1[c] + s_.no3_2[c] + s_.nh4[c] + s_.org_slow[c] + s_.org_fresh[c] + s_.tan_surf[c] + s_.n_crop[c] + s_.n_root[c];
+    if (cfg_.management_enabled) {   // residue pools and living weeds
+        for (int p = 0; p < kResPools; ++p) n += s_.res_n[static_cast<std::size_t>(p)][c];
+        const std::size_t G = cfg_.weeds.size();
+        for (std::size_t g = 0; g < G; ++g) n += s_.w_n[c * G + g];
+    }
+    return n;
 }
 
 void Field::drop_crop_nutrients(std::size_t c) {
@@ -298,10 +304,22 @@ void Field::step_nutrients(std::size_t c, const DailyWeather& w, const DayFlows&
 // ---------------------------------------------------------------------------
 // operations: the deposit effect
 // ---------------------------------------------------------------------------
-void Field::apply(int cell, const OperationEffect& e) {
+void Field::apply(int cell, const OperationEffect& e, HarvestResult* harvest_out) {
     if (!cfg_.nutrients_enabled) throw std::logic_error("Field::apply: the field runs without nutrients");
     if (cell < 0 || cell >= cell_count()) throw std::out_of_range("Field::apply: bad cell");
     if (!(e.coverage >= 0.0)) throw std::invalid_argument("Field::apply: coverage must be >= 0");
+    const std::size_t c = static_cast<std::size_t>(cell);
+    if (!cfg_.management_enabled) {
+        if (e.needs_management()) throw std::logic_error("Field::apply: the effect needs management_enabled");
+        apply_deposit(c, e);
+        return;
+    }
+    apply_management(c, e, 1, harvest_out);
+    apply_deposit(c, e);
+    apply_management(c, e, 2, nullptr);
+}
+
+void Field::apply_deposit(std::size_t c, const OperationEffect& e) {
     const Deposit& d = e.deposit;
     if (d.material == 0) return;
     if (d.material < 1 || static_cast<std::size_t>(d.material) > cfg_.materials.size())
@@ -309,7 +327,6 @@ void Field::apply(int cell, const OperationEffect& e) {
     if (d.method < 1 || static_cast<std::size_t>(d.method) > cfg_.methods.size())
         throw std::invalid_argument("Field::apply: unknown method");
     if (!(d.rate_t_ha >= 0.0)) throw std::invalid_argument("Field::apply: rate must be >= 0");
-    const std::size_t c = static_cast<std::size_t>(cell);
     const MaterialDesc& m = cfg_.materials[static_cast<std::size_t>(d.material - 1)];
     const MethodDesc& me = cfg_.methods[static_cast<std::size_t>(d.method - 1)];
     const real amt = d.rate_t_ha * e.coverage;   // t/ha of fresh matter, summed over the passes
@@ -342,8 +359,35 @@ void Field::apply(int cell, const OperationEffect& e) {
     s_.l_ca_app[c] += cao;
 }
 
-void Field::apply_all(const OperationEffect& e) {
-    for (int c = 0; c < cell_count(); ++c) apply(c, e);
+HarvestResult Field::apply_all(const OperationEffect& e) {
+    HarvestResult m;
+    int n = 0;
+    for (int c = 0; c < cell_count(); ++c) {
+        HarvestResult r;
+        apply(c, e, &r);
+        if (r.crop_id == 0) continue;
+        m.crop_id = r.crop_id;
+        m.grain_dm_t_ha += r.grain_dm_t_ha;
+        m.straw_dm_t_ha += r.straw_dm_t_ha;
+        m.stubble_dm_t_ha += r.stubble_dm_t_ha;
+        m.bbch += r.bbch;
+        m.n_grain_kg_ha += r.n_grain_kg_ha;
+        m.n_straw_kg_ha += r.n_straw_kg_ha;
+        m.n_root_kg_ha += r.n_root_kg_ha;
+        m.p2o5_grain_kg_ha += r.p2o5_grain_kg_ha;
+        m.p2o5_straw_kg_ha += r.p2o5_straw_kg_ha;
+        m.k2o_grain_kg_ha += r.k2o_grain_kg_ha;
+        m.k2o_straw_kg_ha += r.k2o_straw_kg_ha;
+        m.lodging_loss += r.lodging_loss;
+        ++n;
+    }
+    if (n > 0) {
+        for (real* x : {&m.grain_dm_t_ha, &m.straw_dm_t_ha, &m.stubble_dm_t_ha, &m.bbch, &m.n_grain_kg_ha, &m.n_straw_kg_ha,
+                        &m.n_root_kg_ha, &m.p2o5_grain_kg_ha, &m.p2o5_straw_kg_ha, &m.k2o_grain_kg_ha, &m.k2o_straw_kg_ha,
+                        &m.lodging_loss})
+            *x /= n;
+    }
+    return m;
 }
 
 // ---------------------------------------------------------------------------
@@ -419,13 +463,17 @@ real Field::n_balance_residual(int cell) const {
 real Field::p_balance_residual(int cell) const {
     const NutrientLedger l = nutrient_ledger(cell);
     const std::size_t c = static_cast<std::size_t>(cell);
-    return l.p_initial + l.p_applied - l.p_removed - (s_.p_av[c] + s_.p_res[c] + s_.p_crop[c]);
+    real stored = s_.p_av[c] + s_.p_res[c] + s_.p_crop[c];
+    if (cfg_.management_enabled) stored += s_.res_p[0][c] + s_.res_p[1][c];
+    return l.p_initial + l.p_applied - l.p_removed - stored;
 }
 
 real Field::k_balance_residual(int cell) const {
     const NutrientLedger l = nutrient_ledger(cell);
     const std::size_t c = static_cast<std::size_t>(cell);
-    return l.k_initial + l.k_applied - l.k_removed - (s_.k_av[c] + s_.k_res[c] + s_.k_crop[c]);
+    real stored = s_.k_av[c] + s_.k_res[c] + s_.k_crop[c];
+    if (cfg_.management_enabled) stored += s_.res_k[0][c] + s_.res_k[1][c];
+    return l.k_initial + l.k_applied - l.k_removed - stored;
 }
 
 real Field::cao_balance_residual(int cell) const {

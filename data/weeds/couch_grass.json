@@ -1,0 +1,114 @@
+{
+  "format": "physics_sim.weed_group/1",
+  "name": "couch_grass",
+  "kind": "perennial",
+  "seedbank": {
+    "seeds_init_m2": 20.0,
+    "clumps_init_m2": 3.0,
+    "init_surface": 0.05,
+    "init_upper": 0.65,
+    "init_lower": 0.3,
+    "decay_surface_per_day": 0.004,
+    "decay_upper_per_day": 0.002,
+    "decay_lower_per_day": 0.001,
+    "source": {
+      "seeds_init_m2": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "init_surface": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "init_upper": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "init_lower": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "decay_surface_per_day": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "decay_upper_per_day": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "decay_lower_per_day": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled.",
+      "clumps_init_m2": "[AS] Elymus repens spreads mainly by rhizomes; the seedbank is small. clumps_init_m2 is a patchy infestation. Recalled."
+    }
+  },
+  "germination": {
+    "t_min_c": 3.0,
+    "t_opt_c": 15.0,
+    "t_max_c": 30.0,
+    "rate_per_day": 0.003,
+    "wet_min": 0.15,
+    "wet_full": 0.5,
+    "emerge_surface": 0.5,
+    "emerge_upper": 0.3,
+    "emerge_lower": 0.02,
+    "seedling_g": 0.003,
+    "source": {
+      "t_min_c": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "t_opt_c": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "t_max_c": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "rate_per_day": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "wet_min": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "wet_full": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "emerge_surface": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "emerge_upper": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "emerge_lower": "[AS] spring germination of couch grass seed (rare). Recalled.",
+      "seedling_g": "[AS] spring germination of couch grass seed (rare). Recalled."
+    }
+  },
+  "growth": {
+    "t_base_c": 2.0,
+    "per_gdd": 0.012,
+    "w_max_g": 25.0,
+    "area_max_g_m2": 800.0,
+    "self_thin_per_day": 0.02,
+    "shade": 0.6,
+    "n_conc_pct": 1.8,
+    "c_frac": 0.42,
+    "cold_kill_onset_c": -20.0,
+    "cold_kill_full_c": -30.0,
+    "source": {
+      "t_base_c": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "per_gdd": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "w_max_g": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "area_max_g_m2": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "self_thin_per_day": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "shade": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "n_conc_pct": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "c_frac": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "cold_kill_onset_c": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled.",
+      "cold_kill_full_c": "[AS] vigorous perennial grass; rhizome clumps regrow from stored reserves each spring (regrow_g). Recalled."
+    }
+  },
+  "development": {
+    "gdd_flower": 1000.0,
+    "gdd_ripe": 1500.0,
+    "gdd_death": 0.0,
+    "seeds_per_g": 0.4,
+    "shed_per_day": 0.1,
+    "source": {
+      "gdd_flower": "[AS] a perennial does not die of age (gdd_death unused); few seeds. Recalled.",
+      "gdd_ripe": "[AS] a perennial does not die of age (gdd_death unused); few seeds. Recalled.",
+      "gdd_death": "[AS] a perennial does not die of age (gdd_death unused); few seeds. Recalled.",
+      "seeds_per_g": "[AS] a perennial does not die of age (gdd_death unused); few seeds. Recalled.",
+      "shed_per_day": "[AS] a perennial does not die of age (gdd_death unused); few seeds. Recalled."
+    }
+  },
+  "perennial": {
+    "dormancy_t_c": 4.0,
+    "senesce_per_day": 0.04,
+    "regrow_g": 0.5,
+    "source": {
+      "dormancy_t_c": "[AS] shoots die back below 4 degC mean temperature (4 % per day) and regrow from rhizome reserves (0.5 g per clump when active).",
+      "senesce_per_day": "[AS] shoots die back below 4 degC mean temperature (4 % per day) and regrow from rhizome reserves (0.5 g per clump when active).",
+      "regrow_g": "[AS] shoots die back below 4 degC mean temperature (4 % per day) and regrow from rhizome reserves (0.5 g per clump when active)."
+    }
+  },
+  "competition": {
+    "cousens_i_pct": 0.9,
+    "cousens_a_pct": 55.0,
+    "rel_emerge_decay": 0.0,
+    "source": {
+      "cousens_i_pct": "[AS] Cousens hyperbola per clump/m2; perennials are present before the crop (no emergence-time penalty). Recalled.",
+      "cousens_a_pct": "[AS] Cousens hyperbola per clump/m2; perennials are present before the crop (no emergence-time penalty). Recalled.",
+      "rel_emerge_decay": "[AS] Cousens hyperbola per clump/m2; perennials are present before the crop (no emergence-time penalty). Recalled."
+    }
+  },
+  "resistance": {
+    "init": 1e-06,
+    "source": {
+      "init": "[AS] as for black_grass."
+    }
+  },
+  "source": "F1c weed group: couch grass, a perennial. Every number is [AS]."
+}

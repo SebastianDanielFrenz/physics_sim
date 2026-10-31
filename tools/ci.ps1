@@ -812,7 +812,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/terrain/'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^core/(include/ps|src)/environment/'; Kind = 'topics'; Topics = @('environment', 'vehicle') },  # weather plan W1+: ps_environment (+ _io); the wheel reads its surface condition
-    @{ Re = '^core/(include/ps|src)/field/|^tools/(ps_field_run|fielddata)/|^data/(soils|crops|field_scenarios|field_materials)/|^data/climates/farm_de_home\.json$'; Kind = 'topics'; Topics = @('field') },  # farming F1a: ps_field (+ _io), standalone of ps_core; the farm climate is only read by [field] tests
+    @{ Re = '^core/(include/ps|src)/field/|^tools/(ps_field_run|fielddata)/|^data/(soils|crops|field_scenarios|field_materials|weeds|herbicides|operations)/|^data/climates/farm_de_home\.json$'; Kind = 'topics'; Topics = @('field') },  # farming F1a: ps_field (+ _io), standalone of ps_core; the farm climate is only read by [field] tests
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/aero/|^core/src/io/aero_io\.(cpp|h)$|^core/include/ps/io/aero_coefficient_map_io\.h$'; Kind = 'topics'; Topics = @('aero', 'vehicle') },  # 8b04f0e aerodynamics + a949346 coefficient maps
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)

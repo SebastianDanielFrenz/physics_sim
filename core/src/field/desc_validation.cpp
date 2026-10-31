@@ -54,6 +54,7 @@ std::string soil_validation_error(const SoilDesc& s) {
     c.nonneg("snow_melt_mm_per_k_day", s.snow_melt_mm_per_k_day);
     c.fail_if(!fin(s.snow_melt_base_c), "snow_melt_base_c must be finite");
     if (c.err.empty() && s.has_nutrients) c.err = soil_nutrient_validation_error(s.name, s.nutrients);
+    if (c.err.empty() && s.has_management) c.err = soil_management_validation_error(s.name, s.management);
     return c.err;
 }
 
@@ -99,7 +100,11 @@ std::string crop_validation_error(const CropDesc& d) {
     c.nonneg("sen_shape", d.sen_shape);
     c.pos("wp_star_g_m2", d.wp_star_g_m2);
     c.nonneg("biomass_gdd_full", d.biomass_gdd_full);
+    c.nonneg("biomass_rs_ref_mj_m2", d.biomass_rs_ref_mj_m2);
+    c.nonneg("biomass_rue_g_mj", d.biomass_rue_g_mj);
     c.frac("hi0", d.hi0);
+    c.fail_if(!(fin(d.straw_harvest_fraction) && d.straw_harvest_fraction > 0.0 && d.straw_harvest_fraction <= 1.0),
+              "straw_harvest_fraction must be in (0, 1]");
     c.pos("hi_build_gdd", d.hi_build_gdd);
     c.pos("flowering_length_gdd", d.flowering_length_gdd);
     c.nonneg("excess_fruits_pct", d.excess_fruits_pct);
@@ -121,6 +126,7 @@ std::string crop_validation_error(const CropDesc& d) {
     c.nonneg("harvest_window_days", d.harvest_window_days);
     c.frac("shed_rate_per_day", d.shed_rate_per_day);
     if (c.err.empty() && d.has_nutrients) c.err = crop_nutrient_validation_error(d.name, d.nutrients);
+    if (c.err.empty() && d.has_management) c.err = crop_management_validation_error(d.name, d.management);
     return c.err;
 }
 

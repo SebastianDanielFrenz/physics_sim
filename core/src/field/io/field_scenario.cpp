@@ -99,6 +99,34 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
     } else {
         r.skip("nutrients");
     }
+    if (r.has("management")) {
+        const json* b = r.child("management");
+        if (!b->is_boolean()) r.fail("\"management\" must be a boolean");
+        sc.field.management_enabled = b->get<bool>();
+        if (sc.field.management_enabled && !sc.field.nutrients_enabled) r.fail("\"management\" needs \"nutrients\": true");
+    } else {
+        r.skip("management");
+    }
+    if (r.has("weeds")) {
+        const json* a = r.child("weeds");
+        if (!a->is_array()) r.fail("\"weeds\" must be an array of file names");
+        for (const json& e : *a) {
+            if (!e.is_string()) r.fail("\"weeds\" entries must be strings");
+            sc.field.weeds.push_back(load_weed_group_json(dir / e.get<std::string>()));
+        }
+    } else {
+        r.skip("weeds");
+    }
+    if (r.has("herbicides")) {
+        const json* a = r.child("herbicides");
+        if (!a->is_array()) r.fail("\"herbicides\" must be an array of file names");
+        for (const json& e : *a) {
+            if (!e.is_string()) r.fail("\"herbicides\" entries must be strings");
+            sc.field.herbicides.push_back(load_herbicide_json(dir / e.get<std::string>()));
+        }
+    } else {
+        r.skip("herbicides");
+    }
     if (r.has("materials")) {
         const json* mats = r.child("materials");
         if (!mats->is_array()) r.fail("\"materials\" must be an array of file names");
@@ -117,8 +145,8 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
             ObjectReader o(e, "operations[]", origin);
             FieldOperationRule rule;
             rule.op = o.string("op", true, "");
-            if (rule.op != "sow" && rule.op != "harvest" && rule.op != "apply")
-                o.fail("\"op\" must be \"sow\", \"harvest\" or \"apply\"");
+            if (rule.op != "sow" && rule.op != "harvest" && rule.op != "apply" && rule.op != "operation")
+                o.fail("\"op\" must be \"sow\", \"harvest\", \"apply\" or \"operation\"");
             rule.doy = o.integer("doy", true, 1);
             if (rule.doy < 1 || rule.doy > 366) o.fail("\"doy\" must be in [1, 366]");
             rule.first_year = o.integer("first_year", false, 0);
@@ -151,6 +179,36 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
                 if (o.has("incorporation_delay_h")) rule.effect.deposit.incorporation_delay_h = o.number("incorporation_delay_h", true, 0.0);
                 rule.effect.coverage = o.number("coverage", false, 1.0);
             }
+            if (rule.op == "operation") {
+                if (!sc.field.management_enabled) o.fail("\"operation\" needs \"management\": true");
+                OperationPalette pal;
+                for (const auto& c : sc.field.crops) pal.crops.push_back(c.name);
+                for (const auto& h : sc.field.herbicides) pal.herbicides.push_back(h.name);
+                for (const auto& m : sc.field.materials) pal.materials.push_back(m.name);
+                for (const auto& m : sc.field.methods) pal.methods.push_back(m.name);
+                const std::string file = o.string("file", true, "");
+                rule.effect = load_operation_json(dir / file, pal);
+                // optional overrides of the record, e.g. the seed rate or the spray dose of this application
+                if (o.has("coverage")) rule.effect.coverage = o.number("coverage", true, 1.0);
+                if (o.has("seeds_per_m2")) rule.effect.seed.seeds_per_m2 = o.number("seeds_per_m2", true, 0.0);
+                if (o.has("depth_m")) {
+                    if (rule.effect.seed.crop != 0) rule.effect.seed.depth_m = o.number("depth_m", true, 0.0);
+                    else rule.effect.tillage.depth_m = o.number("depth_m", true, 0.0);
+                }
+                if (o.has("dose")) rule.effect.spray.dose = o.number("dose", true, 1.0);
+                if (o.has("straw_carried")) rule.effect.harvest.straw_carried = o.number("straw_carried", true, 0.0);
+                if (o.has("straw_chopped")) rule.effect.harvest.straw_chopped = o.number("straw_chopped", true, 0.0);
+                const std::string err = field::operation_validation_error(file, rule.effect);
+                if (!err.empty()) o.fail(err);
+            } else {
+                o.skip("file");
+                o.skip("coverage");
+                o.skip("seeds_per_m2");
+                o.skip("depth_m");
+                o.skip("dose");
+                o.skip("straw_carried");
+                o.skip("straw_chopped");
+            }
             const std::string crop = o.string("crop", rule.op == "sow", "");
             if (rule.op == "sow") {
                 for (std::size_t i = 0; i < sc.field.crops.size(); ++i)
@@ -171,10 +229,14 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
     f.set_irrigate_to_capacity(sc.irrigate_to_capacity);
     FieldRunSummary sum;
     const std::int64_t n_days = static_cast<std::int64_t>(sc.years) * src.days_per_year();
+    sum.drainage_by_year_mm.assign(static_cast<std::size_t>(sc.years), 0.0);
     if (csv)
         *csv << "day,year,doy,tmin_c,tmax_c,rain_mm,snow_mm,rs_mj,et0_mm,rh_mean,wind2_m_s,swe_mm,depletion_root_mm,taw_root_mm,zr_m,"
                 "crop,stage,bbch,gdd_sow,cc,biomass_t_ha,grain_t_ha,tr_mm,evap_mm,runoff_mm,drain_mm,ks_sto";
-    if (csv) *csv << (sc.field.nutrients_enabled ? ",nmin_kg_ha,nh4_kg_ha,tan_surface_kg_ha,ph,p_test,k_test,f_n,f_pk,n_crop_kg_ha,n_leached_cum,nh3_cum,n_mineralised_cum,n_denitrified_cum\n" : "\n");
+    if (csv) *csv << (sc.field.nutrients_enabled ? ",nmin_kg_ha,nh4_kg_ha,tan_surface_kg_ha,ph,p_test,k_test,f_n,f_pk,n_crop_kg_ha,n_leached_cum,nh3_cum,n_mineralised_cum,n_denitrified_cum" : "");
+    if (csv && sc.field.management_enabled)
+        *csv << ",residue_t_ha,residue_cover,loosening,seedbed,crop_plants_m2,weed_factor,weed_plants_m2,weed_biomass_g_m2,weed_seeds_m2,humus_c_kg_ha,g0_plants,g1_plants,g2_plants,g3_plants,g0_seeds,g1_seeds,g2_seeds,g3_seeds";
+    if (csv) *csv << "\n";
     for (std::int64_t d = 0; d < n_days; ++d) {
         const field::DailyWeather& w = src.record(d);
         const int year = static_cast<int>(d / src.days_per_year());
@@ -186,12 +248,29 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                 f.sow_all(rule.crop_id, rule.density_scale);
             } else if (rule.op == "apply") {
                 f.apply_all(rule.effect);
+            } else if (rule.op == "operation") {
+                const field::HarvestResult h = f.apply_all(rule.effect);
+                if (h.crop_id != 0) sum.harvests.push_back({d, year, w.doy, h});
             } else {
                 const field::HarvestResult h = f.harvest_all(rule.straw_removed);
                 if (h.crop_id != 0) sum.harvests.push_back({d, year, w.doy, h});
             }
         }
         f.step_day(w);
+        {
+            double dr = 0.0;
+            const int n = f.cell_count();
+            for (int c = 0; c < n; ++c) dr += f.view(c).last_drain_mm;
+            sum.drainage_by_year_mm[static_cast<std::size_t>(year)] += dr / n;
+            if (sc.field.management_enabled && !sc.field.weeds.empty()) {
+                double wb = 0.0;
+                for (int c = 0; c < n; ++c) {
+                    const field::ManagementView mv = f.management_view(c);
+                    for (const field::WeedGroupView& g : mv.weeds) wb += g.biomass_g_m2;
+                }
+                sum.weed_biomass_max_g_m2 = std::max(sum.weed_biomass_max_g_m2, wb / n);
+            }
+        }
         if (csv) {
             double depl = 0, taw = 0, swe = 0, zr = 0, bbch = 0, gdd = 0, cc = 0, bio = 0, grain = 0, tr = 0, ev = 0, ro = 0, dr = 0, ks = 0;
             const int n = f.cell_count();
@@ -209,7 +288,7 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                           w.et0_mm, w.rh_mean, w.wind2_m_s, swe / n, depl / n, taw / n, zr / n, v0.crop_id, v0.stage, bbch / n, gdd / n, cc / n,
                           bio / n, grain / n, tr / n, ev / n, ro / n, dr / n, ks / n);
             std::string row(buf);
-            if (sc.field.nutrients_enabled) row.pop_back();
+            row.pop_back();
             *csv << row;
             if (sc.field.nutrients_enabled) {
                 double nmin = 0, nh4 = 0, tan = 0, ph = 0, pt = 0, kt = 0, fn = 0, fpk = 0, nc = 0, le = 0, vo = 0, mi = 0, de = 0;
@@ -221,10 +300,30 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                     mi += nl.n_mineralised; de += nl.n_denitrified;
                 }
                 char b2[320];
-                std::snprintf(b2, sizeof b2, ",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f\n", nmin / n, nh4 / n,
+                std::snprintf(b2, sizeof b2, ",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f", nmin / n, nh4 / n,
                               tan / n, ph / n, pt / n, kt / n, fn / n, fpk / n, nc / n, le / n, vo / n, mi / n, de / n);
                 *csv << b2;
             }
+            if (sc.field.management_enabled) {
+                double res = 0, cov = 0, loose = 0, sb = 0, pl = 0, wf = 0, wp = 0, wbm = 0, ws = 0, soc = 0;
+                double gp[4] = {0, 0, 0, 0}, gs[4] = {0, 0, 0, 0};
+                for (int c = 0; c < n; ++c) {
+                    const field::ManagementView mv = f.management_view(c);
+                    res += mv.straw_t_ha + mv.stubble_t_ha + mv.buried_upper_t_ha + mv.buried_lower_t_ha;
+                    cov += mv.cover; loose += mv.loosening; sb += mv.seedbed; pl += mv.plants_m2; wf += mv.weed_factor;
+                    soc += mv.soc_gain_c_kg_ha;
+                    for (std::size_t gi = 0; gi < mv.weeds.size(); ++gi) {
+                        const field::WeedGroupView& g = mv.weeds[gi];
+                        wp += g.plants_m2; wbm += g.biomass_g_m2; ws += g.seeds_total;
+                        if (gi < 4) { gp[gi] += g.plants_m2; gs[gi] += g.seeds_total; }
+                    }
+                }
+                char b3[512];
+                std::snprintf(b3, sizeof b3, ",%.3f,%.4f,%.4f,%.4f,%.2f,%.4f,%.3f,%.3f,%.2f,%.1f,%.2f,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f", res / n, cov / n, loose / n, sb / n,
+                              pl / n, wf / n, wp / n, wbm / n, ws / n, soc / n, gp[0] / n, gp[1] / n, gp[2] / n, gp[3] / n, gs[0] / n, gs[1] / n, gs[2] / n, gs[3] / n);
+                *csv << b3;
+            }
+            *csv << "\n";
         }
     }
     for (int c = 0; c < f.cell_count(); ++c) {
@@ -239,6 +338,16 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
             sum.max_k_residual = absmax(sum.max_k_residual, f.k_balance_residual(c));
             sum.max_cao_residual = absmax(sum.max_cao_residual, f.cao_balance_residual(c));
         }
+    }
+    if (sc.field.management_enabled) {
+        double seeds = 0.0;
+        for (int c = 0; c < f.cell_count(); ++c) {
+            const double r = f.c_balance_residual(c);
+            sum.max_c_residual = std::max(sum.max_c_residual, r < 0 ? -r : r);
+            const field::ManagementView mv = f.management_view(c);
+            for (const field::WeedGroupView& g : mv.weeds) seeds += g.seeds_total;
+        }
+        sum.weed_seedbank_end_m2 = seeds / f.cell_count();
     }
     sum.total_precip_mm = f.ledger(0).precipitation;
     sum.state_hash = f.fold_hash(1469598103934665603ull);

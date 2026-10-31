@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
         if (sc.field.nutrients_enabled)
             std::printf("nutrient balance residual (worst cell): N %.3e, P2O5 %.3e, K2O %.3e, CaO %.3e kg/ha\n", sum.max_n_residual,
                         sum.max_p_residual, sum.max_k_residual, sum.max_cao_residual);
+        if (sc.field.management_enabled)
+            std::printf("residue carbon balance residual (worst cell): %.3e kg C/ha; weed biomass peak (field mean) %.1f g/m2; seedbank at the end %.1f seeds/m2\n",
+                        sum.max_c_residual, sum.weed_biomass_max_g_m2, sum.weed_seedbank_end_m2);
+        std::printf("drainage out of the profile by year (mm):");
+        for (double d : sum.drainage_by_year_mm) std::printf(" %.0f", d);
+        std::printf("\n");
         std::printf("wrote %s\n", out.string().c_str());
         return 0;
     } catch (const std::exception& e) {

@@ -120,8 +120,10 @@
     "gdd_full": 14.0,
     "source": {
       "wp_star_g_m2": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.1: WP* 15.0 g/m2.",
-      "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum growing degrees required for full biomass production 13.0-15.0 degC day (estimated); 14 is the midpoint."
-    }
+      "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum growing degrees required for full biomass production 13.0-15.0 degC day (estimated); 14 is the midpoint.",
+      "rue_g_mj": "[AS] radiation-use cap on the daily biomass gain: at most rue x Rs x canopy cover (g/m2/day). The AquaCrop gain WP* x Tr/ET0 does not depend on the radiation at all, so a canopy at low spring light would grow as fast as in June; 1.4 g per MJ of global radiation is the order of the total-biomass radiation-use efficiency of wheat (about 2.8 g/MJ PAR, Gallagher and Biscoe 1978, recalled, not re-read). It bites in February-March only: B at BBCH 31 stays 6-7 t/ha where field figures are 2-3 t/ha - a structural property of the Tr/ET0 growth law, recorded in the F1c report."
+    },
+    "rue_g_mj": 1.4
   },
   "yield": {
     "hi0": 0.46,
@@ -137,7 +139,8 @@
       "cold_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: cold pollination coefficient reaches 0 five degrees below the threshold.",
       "heat_t_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: maximum air temperature above which pollination starts to fail 35.0 degC (estimate); F1a had 32 [AS].",
       "heat_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: heat pollination coefficient reaches 0 five degrees above the threshold (F1a had a 6 K width).",
-      "logistic_steepness": "[AS] the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits."
+      "logistic_steepness": "[AS] the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits.",
+      "straw_harvest_fraction": "[D] share of the non-grain aboveground biomass a harvest can carry off: LfL Bayern Bas22 Tab. 1a gives a straw:grain ratio of 0.8 (both 86 % DM); with the harvest index 0.46 the non-grain biomass is 0.54 per unit biomass, harvestable straw 0.8 x 0.46 = 0.368, 0.368 / 0.54 = 0.68. The rest (cutting height, chaff, leaf litter) stays as stubble."
     },
     "flowering_length_gdd": 200,
     "excess_fruits_pct": 50,
@@ -147,7 +150,8 @@
     "cold_width_k": 5.0,
     "heat_t_c": 35.0,
     "heat_width_k": 5.0,
-    "logistic_steepness": 10.0
+    "logistic_steepness": 10.0,
+    "straw_harvest_fraction": 0.68
   },
   "roots": {
     "zr_min_m": 0.3,
@@ -190,12 +194,12 @@
     "n_uptake_frac_per_day": 0.15,
     "n_residual_kg_ha": 5.0,
     "n_root_fraction": 0.1,
-    "n_grain_share": 0.82,
+    "n_grain_share": 0.755,
     "n_fixation_fraction": 0.0,
-    "p2o5_conc_pct_dm": 0.672,
-    "p2o5_grain_share": 0.77,
-    "k2o_conc_pct_dm": 1.079,
-    "k2o_grain_share": 0.33,
+    "p2o5_conc_pct_dm": 0.617,
+    "p2o5_grain_share": 0.694,
+    "k2o_conc_pct_dm": 1.176,
+    "k2o_grain_share": 0.25,
     "ph_opt_low": 5.4,
     "ph_opt_high": 8.0,
     "ph_floor": 4.0,
@@ -216,12 +220,12 @@
       "n_uptake_frac_per_day": "[AS] share of the available soil mineral N the roots can take per day.",
       "n_residual_kg_ha": "[AS] soil mineral N the roots cannot take.",
       "n_root_fraction": "[AS] root N as a fraction of the aboveground N.",
-      "n_grain_share": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 1a: grain 1.81 of grain + straw 2.21 kg N/dt (86 % DM, straw:grain 0.8) = 0.82.",
+      "n_grain_share": "[D] LfL Bayern Bas22 Tab. 1a: N removal 1.81 kg/dt grain, 2.21 with straw (straw 0.40 kg/dt). With the harvestable share 0.68 of the non-grain biomass the grain holds 1.81 / (1.81 + 0.40 / 0.68) = 0.755 of the aboveground N.",
       "n_fixation_fraction": "[C] cereals do not fix nitrogen.",
-      "p2o5_conc_pct_dm": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 1a: 1.04 kg P2O5/dt grain with straw = 10.4 kg/t over 1.548 t dry matter (0.86 x (1 + 0.8)) = 6.72 kg/t = 0.672 %.",
-      "p2o5_grain_share": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 1a: grain 0.80 of 1.04 kg P2O5/dt.",
-      "k2o_conc_pct_dm": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 1a: 1.67 kg K2O/dt = 16.7 kg/t over 1.548 t dry matter = 10.79 kg/t = 1.079 %.",
-      "k2o_grain_share": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 1a: grain 0.55 of 1.67 kg K2O/dt.",
+      "p2o5_conc_pct_dm": "[D] LfL Bayern Bas22 Tab. 1a: 1.04 kg P2O5/dt grain with straw (grain 0.80, straw 0.24); total aboveground P2O5 per t grain = 8.0 / 0.694 = 11.53 kg over the aboveground biomass 0.86 / 0.46 = 1.870 t dry matter = 0.617 %.",
+      "p2o5_grain_share": "[D] grain 8.0 kg / (8.0 + 2.4 / 0.68) kg P2O5 per t grain, LfL Bayern Bas22 Tab. 1a with the straw harvest share 0.68.",
+      "k2o_conc_pct_dm": "[D] LfL Bayern Bas22 Tab. 1a: 1.67 kg K2O/dt grain with straw (grain 0.55, straw 1.12); total aboveground K2O per t grain = 5.5 / 0.25 = 22.0 kg over 1.870 t dry matter = 1.176 %.",
+      "k2o_grain_share": "[D] grain 5.5 kg / (5.5 + 11.2 / 0.68) kg K2O per t grain, LfL Bayern Bas22 Tab. 1a with the straw harvest share 0.68.",
       "ph_opt_low": "[AS] pH (CaCl2) from which wheat is unrestricted; the VDLUFA class C target of BAG III is 5.4-6.3.",
       "ph_opt_high": "[AS]",
       "ph_floor": "[AS] pH at which the factor is ph_floor_factor.",
@@ -231,6 +235,38 @@
       "lodging_max_loss": "[AS] share of the grain lost at the full lodging risk.",
       "lodging_bbch_from": "[AS] window of the stem elongation to flowering stages in which surplus N makes the stand lodge.",
       "lodging_bbch_to": "[AS]"
+    }
+  },
+  "management": {
+    "root_dm_fraction": 0.12,
+    "root_upper_share": 0.45,
+    "seed_mass_g": 0.045,
+    "seed_viability": 0.95,
+    "depth_opt_min_m": 0.02,
+    "depth_opt_max_m": 0.05,
+    "depth_zero_m": 0.1,
+    "depth_surface_factor": 0.5,
+    "seedbed_floor": 0.55,
+    "residue_emergence_penalty": 0.35,
+    "germ_wet_min": 0.15,
+    "germ_wet_full": 0.5,
+    "dry_hazard_per_day": 0.03,
+    "compensation_density_m2": 40.0,
+    "source": {
+      "root_dm_fraction": "[AS] root dry matter as a share of the aboveground dry matter at harvest; cereal root:shoot at maturity is about 0.1-0.2 (recalled).",
+      "root_upper_share": "[AS] share of the root residue in the top 0.10 m of the 0.30 m management layers.",
+      "seed_mass_g": "[D] thousand-kernel weight 45 g, the middle of the 40-50 g of German winter wheat varieties.",
+      "seed_viability": "[AS] germination capacity of drilled seed (the German seed law minimum is 85 %, certified lots are above 92 %).",
+      "depth_opt_min_m": "[AS] the recommended drilling depth of winter wheat is 2-4 cm (extension advice, recalled).",
+      "depth_opt_max_m": "[AS] see depth_opt_min_m.",
+      "depth_zero_m": "[AS] emergence fails from about 10 cm (the coleoptile of modern semi-dwarf wheats is short).",
+      "depth_surface_factor": "[AS] emergence of seed lying on the surface (birds, drying) relative to the optimum depth.",
+      "seedbed_floor": "[AS] emergence factor of the worst seedbed; field emergence of drilled wheat is typically 75-85 % of the seeds, which this reproduces together with seed_viability.",
+      "residue_emergence_penalty": "[AS] emergence lost at full residue cover for a tool with residue_tolerance 0.",
+      "germ_wet_min": "[AS] wetness of the evaporation layer (1 - De/TEW) below which the seed does not germinate.",
+      "germ_wet_full": "[AS] wetness from which germination runs at full rate.",
+      "dry_hazard_per_day": "[AS] share of the sown seed that dies per day in a seed layer below germ_wet_min.",
+      "compensation_density_m2": "[AS] constant d0 of the yield-density law 1 - exp(-d/d0) (Willey and Heath 1969 form); wheat compensates thin stands by tillering, 100 plants/m2 give about 92 % of the 250 plants/m2 reference."
     }
   },
   "source": "F1b winter wheat. Annex I.10 values of the AquaCrop reference manual v7.3 and FAO-56 Table 12/22 are [C] (document, section in each entry); the stage table is [D] from DWD phenology and DWD Frankfurt station data; what remains [AS]: vernalisation cardinals, frost kill, ripeness/shedding, root depth timing, excess of fruits, HI coefficient b, logistic steepness, flowering and senescence stage placement, senescence_acceleration. Nutrient block (F1b): Justes critical N curve and the LfL Bayern removal figures are [C]/[D]; uptake rates, dilution minimum, root N, pH response and lodging are [AS]."

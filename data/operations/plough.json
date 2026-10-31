@@ -1,0 +1,34 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "plough",
+  "tillage": {
+    "depth_m": 0.25,
+    "mix_surface": 0.0,
+    "mix_upper": 0.0,
+    "mix_lower": 0.0,
+    "inversion": 0.9,
+    "residue_chop": 0.0,
+    "loosening": 0.8,
+    "seedbed_fineness": 0.25,
+    "crop_kill": 1.0,
+    "weed_kill": {
+      "annual_grass": 0.95,
+      "annual_broadleaf": 0.95,
+      "perennial": 0.6,
+      "volunteer": 0.95
+    },
+    "source": {
+      "depth_m": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_surface": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_upper": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_lower": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "inversion": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "residue_chop": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "loosening": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "seedbed_fineness": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "crop_kill": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "weed_kill": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured."
+    }
+  },
+  "source": "F1c operation: mouldboard plough, 25 cm. The inversion buries surface residue, seed and lime in the lower layer and brings the lower soil up."
+}
