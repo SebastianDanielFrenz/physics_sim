@@ -2,17 +2,18 @@
 // core/src/machine/coupling_solver.cpp on their own, then a tractor carrying a mounted
 // body through vehicle::System, and the PTO shaft into a mounted rotor.
 //
-// Sabotages, each recorded against the case that catches it:
-//   lower_tension sign in the angle row's lever (lift_row angular_a: + p.y)     -> solver identity
-//   the lift row kept when lambda < 0 (side 0)                                  -> one-sided lift
-//   held torque left out of the wrench                                          -> saturated lift gives the max
-//   no latch: c.latch_total 0 on a linkage                                      -> latch hides nothing: no jump
-//   Float that keeps the lift row (active true)                                 -> float follows the ramp
-//   follow_slack ignored                                                        -> lever winds no slack
-//   PTO stub inertia without the load's (J_node only)                           -> shaft spin-up time
-//   set_pto_load left on at detach                                              -> detach clears the load
-//   linkage hashed unconditionally is a no-op for non-linkage; dropped for
-//   linkage: angle out of the fold                                              -> kept by the 1 vs 10 case as a check only
+// Sabotages, run one at a time against "[machine]~[diag]~Coupling*" on 2026-10-31, each with
+// the case that caught it:
+//   the angle row's lever on the wrong side of the link (+ p.y)  -> a mounted body loads the rear axle
+//   the lift row two-sided                                       -> the lift only lifts; the ground may lift the implement
+//   the held lift left out of the wrench                         -> an implement over the lift's rating
+//   a lift that never leaves the lower stop                      -> the lift, an implement over the lift's rating
+//   float keeps the lift row                                     -> float rides up a ramp
+//   the rotor's inertia not on the shaft                         -> the PTO rotor's inertia
+//   the rotor's work not in the ledger                           -> the PTO shaft drives the rotor
+//   detach leaves the load on the shaft                          -> the PTO shaft comes off with the hitch
+//   a saturated lift not flagged to the rating                   -> an implement over the lift's rating
+// Tool-side sabotages are listed in test_machine_tools.cpp.
 
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/jobs/debug_alloc.h"
@@ -387,6 +388,8 @@ TEST_CASE("an implement over the lift's rating stays down, and the rating says s
     printf("heavy: position %.3f, lift force %.0f N, saturated %d\n", state.linkage.position, state.linkage.lift_force_n, state.linkage.saturated ? 1 : 0);
     CHECK(state.linkage.saturated);
     CHECK(state.linkage.position < 0.3); // lever up, and it sank from 0.44 to where the two links ask less of it
+    CHECK(state.linkage.position > 0.1); // held there by the 8 kN, off the stop and off the ground
+    CHECK(state.linkage.lift_force_n == Approx(8000.0).margin(100.0));
     const auto findings = r.world->hitch_limits(r.hitch);
     const auto lift = std::find_if(findings.begin(), findings.end(), [](const drivetrain::LimitFinding& f) { return f.kind == drivetrain::LimitKind::LiftCapacity; });
     REQUIRE(lift != findings.end());

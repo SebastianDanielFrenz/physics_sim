@@ -1,6 +1,26 @@
 // tests/unit/test_machine_tools.cpp — ps::machine work tools: the draft law and parts
 // on their own, then a tractor working soil with a mounted cultivator, plough and rotary
 // harrow, and the swept work a farm reads.
+//
+// Sabotages, run one at a time against "[machine]~[diag]~Coupling*" on 2026-10-31, each with
+// the case that caught it:
+//   no speed-squared term; moisture dropped; tilled ignored on A    -> draft: the D497 form
+//   draft growing past the tines; the part's A 46 -> 56             -> draft: the D497 form
+//   draft not applied as a force; half of it as force; no suction   -> a cultivator in soil; an undersized tractor
+//   quality falling above the minimum                               -> quality; a cultivator in soil
+//   no soil load on the rotor; the engine not feeling it            -> the rotary harrow
+//   draft control reversed                                          -> draft control
+//   a road counts as worked                                         -> a tool in ground that cannot be worked
+//   the first tick writing a quad                                   -> the first tick in the ground
+//   standing still writes quads; dropped quads uncounted;
+//   worked area not added up                                        -> work: a tool sweeps its width
+//   drain unsorted by tool                                          -> work from two tools
+//   a bow tie as a plain quad; an unweighted ledger depth           -> work_coverage
+//   the sweep forgetting the rotor; tool power never graded         -> the shop's figure
+//   sources needing no tag                                          -> machine parts
+//   an allocation in the substep; a result that depends on the
+//   worker                                                          -> work is the same on 1 and 10 workers
+//   an unconditional fold in vehicle::System's state hash           -> ps_determinism_tests' pinned scenario hashes
 
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/drivetrain/limit_findings.h"
@@ -224,9 +244,11 @@ TEST_CASE("the shop's figure: a sweep over the tool's speeds, soils and efficien
 
     const machine::ToolDesc rotary = part_tool("rotary_harrow_3m");
     const machine::ToolPowerSweep rotary_sweep = machine::tool_power_sweep(rotary, spec);
-    bool has_pto = false;
-    for (const machine::ToolPowerPoint& p : rotary_sweep.points) has_pto = has_pto || p.pto_kw > 0.0;
-    CHECK(has_pto);
+    // Its rotor is in the figure: the top speed in the worst soil, drawbar and shaft on one engine.
+    const real rotary_speed = rotary.speed_max_km_h, rotary_depth = rotary.depth_nominal_m;
+    const real rotary_draft = 1.0 * (108.0 + 5.6 * rotary_speed) * 3.0 * (rotary_depth * 100.0);
+    const real rotor_kw = 3.0 + 1.0 * 3.0 + 0.15e3 * 3.0 * rotary_depth * (rotary_speed / 3.6);
+    CHECK(rotary_sweep.needed_kw == Approx((rotary_draft * (rotary_speed / 3.6) * 1e-3 / 0.78 + rotor_kw) / 0.90 * 1.15).epsilon(1e-9));
 
     SECTION("against a tractor, as findings") {
         using drivetrain::LimitKind;
@@ -263,6 +285,11 @@ TEST_CASE("a cultivator in soil: its draft is a real force at the hitch and the 
     // And the wheels pay it, on top of their own rolling resistance.
     CHECK(s.thrust > s.draft);
     CHECK(s.engine_kw > drawbar_kw);
+    // The soil's push less the tool's suction, shallower than the roller.
+    MountRig shallow = worked_rig(on_dirt(), 6, 0.0, -0.12);
+    const Steady d = working_run(shallow, 6.0, 2.0);
+    REQUIRE(d.depth < 0.95 * tool.depth_nominal_m);
+    CHECK(shallow.world->tool_state(shallow.implement, 0).vertical_n == Approx(tool.soil.bearing_n_m2 * tool.width_m * d.depth - tool.soil.suction_ratio * d.draft).epsilon(0.05));
     CHECK(r.world->tool_state(r.implement, 0).working);
     CHECK(r.world->tool_state(r.implement, 0).quality == 1.0);
 
@@ -408,6 +435,16 @@ TEST_CASE("work: a tool sweeps its width times the distance, tick by tick, in or
         r.world->drain_work(quads);
         CHECK(quads.empty());
         CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+
+        // Back in the ground the strip starts where the tool is, not where it came out.
+        r.set("lift", lever_for(kWorkingAngle));
+        r.run(3.0);
+        quads.clear();
+        r.world->drain_work(quads);
+        REQUIRE_FALSE(quads.empty());
+        real largest = 0.0;
+        for (const machine::WorkQuad& q : quads) largest = std::max(largest, machine::work_area(q));
+        CHECK(largest < tool.width_m * 3.0 / 240.0);
     }
     SECTION("a road: the tool scrapes on it, sweeps nothing and does not sink") {
         machine::SoilSample road;
@@ -433,10 +470,7 @@ TEST_CASE("work: a tool sweeps its width times the distance, tick by tick, in or
         quads.clear();
         r.run(1.0);
         r.world->drain_work(quads);
-        real still = 0.0;
-        for (const machine::WorkQuad& q : quads) still += machine::work_area(q);
-        printf("standing: %zu quads, %.6f m2\n", quads.size(), still);
-        CHECK(still < 1e-3);
+        CHECK(quads.empty());
     }
     SECTION("a full buffer drops the newest and counts them") {
         r.run(4100.0 / 240.0);
@@ -444,6 +478,68 @@ TEST_CASE("work: a tool sweeps its width times the distance, tick by tick, in or
         quads.clear();
         r.world->drain_work(quads);
         CHECK(quads.size() == 4096);
+    }
+}
+
+TEST_CASE("a tool in ground that cannot be worked works nothing, however deep it is", "[machine][vehicle]") {
+    // A road soft enough for the edge to be below its surface at the working link angle: only `workable` says no.
+    MountCfg cfg = on_dirt();
+    cfg.edit_implement = [](vehicle::VehicleDesc& d) { d.machine->tools[0].soil.hard_n_m2 = d.machine->tools[0].soil.bearing_n_m2; };
+    machine::SoilSample road;
+    road.workable = false;
+    MountRig r = worked_rig(cfg, 5, 0.0, kWorkingAngle, road);
+    r.run(3.0);
+    const machine::ToolState& tool = r.world->tool_state(r.implement, 0);
+    CHECK(r.world->get_motion(r.tractor_body).linear.x > 0.5);
+    CHECK(tool.depth_m > r.world->tool_desc(r.implement, 0).depth_min_m);
+    CHECK_FALSE(tool.working);
+    std::vector<machine::WorkQuad> quads;
+    r.world->drain_work(quads);
+    CHECK(quads.empty());
+    CHECK(tool.worked_area_m2 == 0.0);
+}
+
+TEST_CASE("the first tick in the ground starts a strip and writes none", "[machine][vehicle]") {
+    // There is no edge to sweep from yet: a quad here would run from the world's origin.
+    MountCfg cfg = on_dirt();
+    cfg.edit_implement = [](vehicle::VehicleDesc& d) {
+        d.machine->tools[0].edge_left_local.z -= 0.2;
+        d.machine->tools[0].edge_right_local.z -= 0.2;
+    };
+    MountRig r = build_mount(cfg);
+    r.world->set_soil_source(std::make_shared<UniformSoil>(field_soil()));
+    r.world->step();
+    const machine::ToolState& tool = r.world->tool_state(r.implement, 0);
+    CHECK(tool.depth_m > r.world->tool_desc(r.implement, 0).depth_min_m);
+    CHECK(tool.working);
+    std::vector<machine::WorkQuad> quads;
+    r.world->drain_work(quads);
+    CHECK(quads.empty());
+    CHECK(tool.worked_area_m2 == 0.0);
+}
+
+TEST_CASE("work from two tools drains ordered by tick, vehicle and tool", "[machine][vehicle]") {
+    MountCfg cfg = on_dirt();
+    cfg.edit_implement = [](vehicle::VehicleDesc& d) {
+        // The one width split in two.
+        machine::ToolDesc& first = d.machine->tools[0];
+        machine::ToolDesc second = first;
+        second.name = "second";
+        first.edge_right_local.y = 0.0;
+        second.edge_left_local.y = 0.0;
+        first.width_m = second.width_m = 0.5 * first.width_m;
+        d.machine->tools.push_back(second);
+    };
+    MountRig r = worked_rig(cfg, 5);
+    r.run(4.0);
+    std::vector<machine::WorkQuad> quads;
+    r.world->drain_work(quads);
+    REQUIRE(quads.size() > 200);
+    CHECK(std::count_if(quads.begin(), quads.end(), [](const machine::WorkQuad& q) { return q.tool == 1; }) > 100);
+    for (std::size_t i = 1; i < quads.size(); ++i) {
+        const machine::WorkQuad& a = quads[i - 1];
+        const machine::WorkQuad& b = quads[i];
+        REQUIRE((a.tick < b.tick || (a.tick == b.tick && a.tool < b.tool)));
     }
 }
 
@@ -526,9 +622,10 @@ TEST_CASE("work_coverage: a quad's area per cell, conserved however it lies", "[
         VehicleId v{};
         v.index = 3;
         v.generation = 1;
-        // Four strips filling one cell, the last shallower and worse.
+        // Four strips of different widths filling one cell, the last, a tenth of it, shallower and worse.
+        const real edges[5] = {0.0, 0.2, 0.4, 0.45, 0.5};
         for (int i = 0; i < 4; ++i) {
-            machine::WorkQuad q = quad(0.125 * i, 0.125 * (i + 1), 0.5, 0.0);
+            machine::WorkQuad q = quad(edges[i], edges[i + 1], 0.5, 0.0);
             q.vehicle = v;
             q.tool = 1;
             q.depth_m = i < 3 ? 0.1 : 0.06;
@@ -539,8 +636,8 @@ TEST_CASE("work_coverage: a quad's area per cell, conserved however it lies", "[
         const std::vector<machine::WorkCell> cells = ledger.take();
         REQUIRE(cells.size() == 1);
         CHECK(cells[0].coverage == Approx(1.0));
-        CHECK(cells[0].depth_m == Approx(0.09));
-        CHECK(cells[0].quality == Approx(0.9));
+        CHECK(cells[0].depth_m == Approx(0.096));
+        CHECK(cells[0].quality == Approx(0.96));
         CHECK(cells[0].tool == 1);
         CHECK(ledger.empty());
     }
