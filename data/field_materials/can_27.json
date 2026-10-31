@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.field_material/1",
+  "name": "can_27",
+  "kind": "mineral",
+  "composition": {
+    "dm_frac": 1.0,
+    "density_kg_m3": 1000.0,
+    "n_total_kg_t": 270.0,
+    "nh4_n_kg_t": 135.0,
+    "urea_n_kg_t": 0.0,
+    "no3_n_kg_t": 135.0,
+    "p2o5_kg_t": 0.0,
+    "k2o_kg_t": 0.0,
+    "cao_kg_t": -150.0,
+    "source": {
+      "dm_frac": "[AS] granulated, moisture neglected.",
+      "density_kg_m3": "[AS] bulk density.",
+      "n_total_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: KAS 27, 27 kg N per 100 kg.",
+      "nh4_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: 13.5 kg NH4-N per 100 kg.",
+      "urea_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "no3_n_kg_t": "[D] total minus ammonium N.",
+      "p2o5_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "k2o_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "cao_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3: KAS 27 acidifies by 15 kg CaO per 100 kg."
+    }
+  },
+  "ammonia": {
+    "k_vol_per_day": 0.183,
+    "k_inf_per_day": 4.417,
+    "k_inf_per_mm_rain": 0.3,
+    "org_slow_fraction": 0.0,
+    "source": {
+      "k_vol_per_day": "[D] EMEP/EEA Guidebook 2023, 3.D Table 3-2 / A1.1 (g NH3 per kg N applied, soil pH <= 7): CAN 24 g NH3 per kg N = 2.0 % of the N, 4.0 % of its ammoniacal half; volatilisation share k_vol / (k_vol + k_inf) = 0.04 at a total rate of 4.6 per day, 15 degC.",
+      "k_inf_per_day": "[D] see k_vol_per_day.",
+      "k_inf_per_mm_rain": "[AS] extra infiltration rate per mm of rain that day (the Guidebook only says that rain has a significant effect on the fertiliser emission factor).",
+      "org_slow_fraction": "[C] no organic N."
+    }
+  },
+  "source": "Calcium ammonium nitrate (KAS 27)."
+}

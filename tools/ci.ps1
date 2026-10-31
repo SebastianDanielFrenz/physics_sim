@@ -614,6 +614,44 @@ function Invoke-CrossPlatformHashCheck {
     }
 }
 
+# The same comparison for field scenarios: ps_field_run, a tool of its own because ps_field does not link ps_core.
+$script:FieldHashCheckScenarios = @('wheat_fertilised_10y.json', 'wheat_managed_11y.json', 'rotation_rape_wheat_barley_30y.json')
+$script:FieldHashSelected = $true
+
+function Invoke-FieldHashCheck {
+    if (-not $script:FieldHashSelected) { return }
+    if ($SkipWsl -or $SkipWindows) { return }
+    $staleSide = $script:Results | Where-Object { $_.Leg -in @('release', 'linux-release') -and $_.Stage -in @('configure', 'build', 'ps_run') -and -not $_.Pass } | Select-Object -First 1
+    if ($staleSide) {
+        Add-Result -Leg 'field-hash-compare' -Stage 'compare' -Pass $false -Detail "not run: $($staleSide.Leg) $($staleSide.Stage) failed this run"
+        return
+    }
+    $winTool = Join-Path $repoRoot 'out\build\release\tools\ps_field_run\ps_field_run.exe'
+    $linuxTool = "$script:WslBuildRoot/linux-release/tools/ps_field_run/ps_field_run"
+    if (-not (Test-Path $winTool)) {
+        Add-Result -Leg 'field-hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: no Windows release ps_field_run.exe'
+        return
+    }
+    $linuxProbe = wsl --cd ~ -- bash -lc "test -x '$linuxTool' && echo OK"
+    if (($linuxProbe -join '') -notmatch 'OK') {
+        Add-Result -Leg 'field-hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: no Linux ps_field_run'
+        return
+    }
+    $tmpWin = Join-Path $env:TEMP 'ps_hashcheck'
+    New-Item -ItemType Directory -Force -Path $tmpWin | Out-Null
+    foreach ($scenario in $script:FieldHashCheckScenarios) {
+        $winHash = Get-PsRunStateHash -PsRunPath $winTool -ScenarioPath (Join-Path $repoRoot "data\field_scenarios\$scenario") -CsvOutPath (Join-Path $tmpWin "$scenario.win.csv")
+        $linuxHash = Get-PsRunStateHash -PsRunPath $linuxTool -ScenarioPath "$script:WslRepoRoot/data/field_scenarios/$scenario" -CsvOutPath "/home/sebas/ps_hashcheck_$scenario.csv" -Wsl
+        if (-not $winHash -or -not $linuxHash) {
+            Add-Result -Leg 'field-hash-compare' -Stage $scenario -Pass $false -Detail "ps_field_run failed to report a hash (win='$winHash' linux='$linuxHash')"
+        } elseif ($winHash -ne $linuxHash) {
+            Add-Result -Leg 'field-hash-compare' -Stage $scenario -Pass $false -Detail "MISMATCH win=0x$winHash linux=0x$linuxHash"
+        } else {
+            Add-Result -Leg 'field-hash-compare' -Stage $scenario -Pass $true -Detail "0x$winHash"
+        }
+    }
+}
+
 # ===========================================================================
 # Run legs
 # ===========================================================================
@@ -784,7 +822,7 @@ function Invoke-WslLane {
 # ===========================================================================
 # -Affected / -Topic: per-change runs
 # ===========================================================================
-$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'environment', 'aero', 'machine', 'determinism', 'bench')
+$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'environment', 'aero', 'field', 'machine', 'determinism', 'bench')
 
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
@@ -812,6 +850,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/terrain/'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^core/(include/ps|src)/environment/'; Kind = 'topics'; Topics = @('environment', 'vehicle') },  # weather plan W1+: ps_environment (+ _io); the wheel reads its surface condition
+    @{ Re = '^core/(include/ps|src)/field/|^tools/(ps_field_run|fielddata)/|^data/(soils|crops|field_scenarios|field_materials|weeds|herbicides|operations)/|^data/climates/farm_de_home\.json$'; Kind = 'topics'; Topics = @('field') },  # farming F1a: ps_field (+ _io), standalone of ps_core; the farm climate is only read by [field] tests
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/aero/|^core/src/io/aero_io\.(cpp|h)$|^core/include/ps/io/aero_coefficient_map_io\.h$'; Kind = 'topics'; Topics = @('aero', 'vehicle') },  # 8b04f0e aerodynamics + a949346 coefficient maps
     @{ Re = '^core/(include/ps|src)/machine/|^core/src/io/hitch_io\.cpp$|^core/include/ps/io/hitch_io\.h$|^data/hitch_classes/'; Kind = 'topics'; Topics = @('machine', 'vehicle') },  # attachment A1: hitches between vehicles
@@ -1034,7 +1073,8 @@ function Invoke-AffectedRun {
             Write-Host "  => build only (changed code has no ctest topic)" -ForegroundColor Yellow
         }
         $script:HashScenarioSelection = @($Plan.Scenarios)
-        Write-Host "  => hash compare: $(if ($Plan.Scenarios.Count) { $Plan.Scenarios -join ', ' } else { 'none' })" -ForegroundColor Yellow
+        $script:FieldHashSelected = $Plan.Topics.Contains('field')
+        Write-Host "  => hash compare:$(if ($Plan.Scenarios.Count) { $Plan.Scenarios -join ', ' } else { 'none' })" -ForegroundColor Yellow
         Write-Host "  => Linux legs: $(if ($Plan.Linux) { 'linux-release' + $(if ($Plan.Tsan) { ' + linux-tsan' } else { '' }) } else { 'no (not determinism/platform-sensitive; -Linux forces linux-release)' })" -ForegroundColor Yellow
 
         $topicKind = if ($WithValidation) { 'release' } else { 'unit' }
@@ -1048,11 +1088,11 @@ function Invoke-AffectedRun {
         if (-not $SkipWsl -and $Plan.Linux -and $Plan.Topics.Count -gt 0) {
             Invoke-WslLeg -Preset 'linux-release' -LegKind 'unit'
             if ($Plan.Tsan) { Invoke-WslLeg -Preset 'linux-tsan' -LegKind 'sanitizer' }
-        } elseif (-not $SkipWsl -and $Plan.Scenarios.Count -gt 0) {
+        } elseif (-not $SkipWsl -and ($Plan.Scenarios.Count -gt 0 -or $script:FieldHashSelected)) {
             # The hash compare needs a CURRENT Linux ps_run; build just that target.
             Write-Host ""
             Write-Host "=== WSL: building linux-release ps_run only (for the hash compare) ===" -ForegroundColor Cyan
-            $cmd = "cd '$script:WslRepoRoot' && cmake --preset linux-release -B '$script:WslBuildRoot/linux-release' > /dev/null && cmake --build '$script:WslBuildRoot/linux-release' --target ps_run"
+            $cmd = "cd '$script:WslRepoRoot' && cmake --preset linux-release -B '$script:WslBuildRoot/linux-release' > /dev/null && cmake --build '$script:WslBuildRoot/linux-release' --target ps_run ps_field_run"
             $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
             Add-Result -Leg 'linux-release' -Stage 'ps_run' -Pass ($LASTEXITCODE -eq 0) -Seconds $t.TotalSeconds
         }
@@ -1066,6 +1106,7 @@ function Invoke-AffectedRun {
         $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'walltime (topic benches)'; TotalSeconds = ((Get-Date) - $phaseBStart).TotalSeconds })
         $hashStart = Get-Date
         Invoke-CrossPlatformHashCheck
+        Invoke-FieldHashCheck
         $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'hash compare'; TotalSeconds = ((Get-Date) - $hashStart).TotalSeconds })
     }
     return $true
@@ -1167,6 +1208,7 @@ $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'B: serial walltime'; TotalS
 # run - PLAN.md D7 / vault PHYS-009 Step 1 rule 4 ("runs in the fast CI too").
 $hashStart = Get-Date
 Invoke-CrossPlatformHashCheck
+Invoke-FieldHashCheck
 $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'hash compare'; TotalSeconds = ((Get-Date) - $hashStart).TotalSeconds })
 }  # end of the default (all-leg) flow
 

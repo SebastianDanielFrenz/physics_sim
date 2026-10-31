@@ -1,0 +1,321 @@
+{
+  "format": "physics_sim.crop/1",
+  "name": "winter_rapeseed",
+  "family": "brassica",
+  "thermal": {
+    "t_base_c": 0.0,
+    "t_upper_c": 30.0,
+    "source": {
+      "t_base_c": "[AS] base temperature 0 degC; canola AquaCrop calibrations use 0-5 degC, not confirmed.",
+      "t_upper_c": "[AS] upper temperature 30 degC."
+    }
+  },
+  "phenology": {
+    "stages": [
+      {
+        "name": "sown",
+        "bbch": 0,
+        "gdd": 0
+      },
+      {
+        "name": "emergence",
+        "bbch": 10,
+        "gdd": 216
+      },
+      {
+        "name": "rosette",
+        "bbch": 14,
+        "gdd": 558
+      },
+      {
+        "name": "buds",
+        "bbch": 50,
+        "gdd": 1755
+      },
+      {
+        "name": "flowering",
+        "bbch": 61,
+        "gdd": 1942
+      },
+      {
+        "name": "senescence",
+        "bbch": 71,
+        "gdd": 2450
+      },
+      {
+        "name": "maturity",
+        "bbch": 87,
+        "gdd": 3267
+      },
+      {
+        "name": "overripe",
+        "bbch": 92,
+        "gdd": 3504
+      }
+    ],
+    "source": {
+      "stages": "[D] emergence 216, rosette 558, buds 1755, flowering 1942, maturity 3267, overripe 3504 are development units accumulated by the Python port of the model's thermal-time rule (clamped daily Tmin/Tmax, Tbase/Tupper above) along the Frankfurt/Main daily record (DWD station 01420), 1992-2024, from the year's mean sowing date to the year's mean date of the DWD phase (annual reporters of all German stations, quality level <= 3; DWD CDC opendata phenology/annual_reporters/crops), averaged over 32 seasons (DWD winter rapeseed phases 12 Auflaufen BBCH 10, 14 Rosettenbildung BBCH 14, 17 Knospenbildung BBCH 50, 5 Bluete Beginn BBCH 61, 22 Vollreife BBCH 87, 24 Ernte; sd 28/52/95/91/111/122 units; mean doys sowing 237.4 (25 Aug), emergence 249.5, rosette 271.9, buds 98.9, flowering 115.9, full ripe 193.8, harvest 205.6). Senescence 2450 [AS]: start of the canopy decline between the end of flowering and maturity."
+    }
+  },
+  "canopy": {
+    "cc0_cm2_per_plant": 3.0,
+    "plant_density_per_ha": 450000,
+    "ccx": 0.95,
+    "cgc_per_gdd": 0.008,
+    "cdc_per_gdd": 0.005,
+    "senescence_acceleration": 0.5,
+    "source": {
+      "cc0_cm2_per_plant": "[AS] canopy per rapeseed seedling at emergence (larger cotyledons than a cereal); not confirmed in a canola calibration.",
+      "plant_density_per_ha": "[AS] 40-50 established plants/m2 in autumn (German practice, 40-60 seeds/m2); 4.5e5/ha.",
+      "ccx": "[AS] maximum canopy cover.",
+      "cgc_per_gdd": "[AS] canopy growth coefficient per GDD.",
+      "cdc_per_gdd": "[AS] canopy decline coefficient per GDD.",
+      "senescence_acceleration": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: extra senescence progress per unit of senescence stress (1 - Ks_sen); the model's own device (AquaCrop shifts the senescence start instead).)"
+    }
+  },
+  "water": {
+    "kc_tr_x": 1.05,
+    "height_max_m": 0.6,
+    "p_depletion": 0.6,
+    "p_adjust_for_etc": true,
+    "exp_p_upper": 0.2,
+    "exp_p_lower": 0.65,
+    "exp_shape": 5.0,
+    "sen_p_upper": 0.7,
+    "sen_shape": 2.5,
+    "source": {
+      "kc_tr_x": "[AS] transpiration coefficient at full canopy; FAO-56 Table 12 gives a single Kc,mid of 1.0-1.15 for rapeseed/canola.",
+      "height_max_m": "[C] FAO-56 Table 12 (fao.org/4/x0490e/x0490e0b.htm): rapeseed/canola maximum crop height 0.6 m.",
+      "p_depletion": "[C] FAO-56 Table 22 (fao.org/4/x0490e/x0490e0e.htm): rapeseed/canola p = 0.60 at ETc ~ 5 mm/day, rooting depth 1.0-1.5 m.",
+      "p_adjust_for_etc": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: FAO-56 Table 22 note: p = p_table + 0.04 (5 - ETc), limited to 0.1-0.8 (the limits are in the code as the note's own range).)",
+      "exp_p_upper": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.20 (the annex labels it 'pexp,lower ... Upper threshold').)",
+      "exp_p_lower": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.65.)",
+      "exp_shape": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy expansion 5.0.)",
+      "sen_p_upper": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy senescence psen 0.70.)",
+      "sen_shape": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy senescence 2.5.)"
+    }
+  },
+  "biomass": {
+    "wp_star_g_m2": 17.0,
+    "gdd_full": 12.0,
+    "source": {
+      "wp_star_g_m2": "[AS] normalised water productivity of canola: 15.3 g/m2 (spring canola, Karkag, calibrated) and 18.6 g/m2 (Wagga Wagga, Zeleke et al. 2011, Agron. J. 103:1610-1618) as found in search-result snippets; 17.0 between them. With the light-primary form WP* does not drive the gain, it enters only the CO2 type (f_type 1).",
+      "gdd_full": "[AS] thermal limit of biomass production.",
+      "rue_g_mj": "[M] 0.9 g/MJ of global radiation for rapeseed, set so that the 30-year mean on the home loess is about 8 %% above the Destatis 2016/21 national mean (33.6 dt/ha; 1.0 gave +22 %%), the site being favourable like the wheat site (+5 %%); the literature value of rapeseed RUE was not looked up.",
+      "rue_t_low_c": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: ramp of the light-use efficiency over the daily mean air temperature: 0 at and below this value, 1 at rue_t_full_c. Form: linear ramp as in the SIMPLE crop model (Zhao et al. 2019, Eur. J. Agron. 104:97-106; read in a code port, not the paper). Both values fitted (F1d part 1) so that the aboveground biomass at BBCH 31 falls from 6.7 t/ha to about 4 t/ha without the harvest falling by more than 15 )",
+      "rue_t_full_c": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: see rue_t_low_c.)",
+      "light_primary": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: 1: the daily gain is the light potential x Tr/Tr_potential (the water factor of the AquaCrop gain, Tr = transpiration, Tr_potential = Kcb x ET0), WP* is then not used for the gain. 0: the smaller of the light potential and WP* x Tr/ET0. With 0 and the ramp below the harvest was 14 % under the DESTATIS mean at the same BBCH 31 biomass (F1d part 1); with 1 the same early biomass keeps the yield, bec)",
+      "co2_response": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), chapter 3, Table 3.11c/1 (Eq. 3.11c): multiplier of WP* for a C3 crop (f_type = 1) over the atmospheric CO2 concentration, the FACE-based column (fsink 0); WP* is normalised to 369.41 ppm (the year 2000). Applied to WP* and, as photosynthesis, to rue. The crop's f_type = clamp((40 - WP*)/20, 0, 1) (Eq. 3.11d).)"
+    },
+    "rue_g_mj": 0.9,
+    "rue_t_low_c": 5.0,
+    "rue_t_full_c": 13.0,
+    "light_primary": 1,
+    "co2_response": [
+      {
+        "ppm": 298.2,
+        "factor": 0.815
+      },
+      {
+        "ppm": 304.5,
+        "factor": 0.832
+      },
+      {
+        "ppm": 311.9,
+        "factor": 0.851
+      },
+      {
+        "ppm": 331.11,
+        "factor": 0.901
+      },
+      {
+        "ppm": 369.41,
+        "factor": 1.0
+      },
+      {
+        "ppm": 400.0,
+        "factor": 1.073
+      },
+      {
+        "ppm": 450.0,
+        "factor": 1.162
+      },
+      {
+        "ppm": 500.0,
+        "factor": 1.214
+      },
+      {
+        "ppm": 550.0,
+        "factor": 1.23
+      }
+    ]
+  },
+  "yield": {
+    "hi0": 0.3,
+    "hi_build_gdd": 1325,
+    "source": {
+      "hi0": "[AS] reference harvest index 0.30: a semi-arid canola AquaCrop study reports HI0 = 30 %% (search-result snippet); Bas22 straw ratio 1.7 gives 0.38 for the harvested grain/straw split.",
+      "hi_build_gdd": "[D] development units from the flowering stage to maturity of the stage table (3267 - 1942).",
+      "flowering_length_gdd": "[AS] flowering of rapeseed lasts about 4 weeks (about 300 units at 11 units/day in April-May).",
+      "excess_fruits_pct": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2 lists 'medium' without a number; 50 % is the value of the manual's own worked example (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Fig. 3.12i).)",
+      "ppol": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: pollination fails above a depletion of 0.85 of TAW (estimate); Ks_pol,w falls linearly to 0 at TAW (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12).)",
+      "sto_coefficient_b": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: coefficient b of the negative effect of stomatal closure during yield formation (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Eq. 3.12m/n: 1 = strong effect .. 20 = small effect); Annex I.10 section 3.2 gives only 'moderate' for wheat. 7 (recalled default crop file) is inside the range. The functional form (HI factor = mean of 1 - (1 - Ks_sto^(1/10))/b) is [C];)",
+      "cold_t_c": "[AS] minimum temperature below which pollination starts to fail.",
+      "cold_width_k": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: cold pollination coefficient reaches 0 five degrees below the threshold.)",
+      "heat_t_c": "[AS] maximum temperature above which pollination starts to fail (B. napus is heat-sensitive from about 29.5 degC at flowering, recalled).",
+      "heat_width_k": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: heat pollination coefficient reaches 0 five degrees above the threshold (F1a had a 6 K width).)",
+      "logistic_steepness": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits.)",
+      "straw_harvest_fraction": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: winter rapeseed straw:grain 1.7 (86 % / 91 % dry matter) = 1.46 t straw dm per t grain fresh (0.91 t dm) = 1.6 per t grain dm; 1.6 x 0.30 = 0.48 of the biomass out of the non-grain 0.70: 0.69."
+    },
+    "flowering_length_gdd": 300,
+    "excess_fruits_pct": 50,
+    "ppol": 0.85,
+    "sto_coefficient_b": 7.0,
+    "cold_t_c": 3.0,
+    "cold_width_k": 5.0,
+    "heat_t_c": 29.5,
+    "heat_width_k": 5.0,
+    "logistic_steepness": 10.0,
+    "straw_harvest_fraction": 0.69
+  },
+  "roots": {
+    "zr_min_m": 0.3,
+    "zr_max_m": 1.2,
+    "gdd_full": 2600,
+    "source": {
+      "zr_min_m": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.4: minimum effective rooting depth 0.30 m.)",
+      "zr_max_m": "[C] FAO-56 Table 22: rapeseed/canola maximum rooting depth 1.0-1.5 m (middle).",
+      "gdd_full": "[AS] development units from sowing at which the maximum depth is reached (before maturity)."
+    }
+  },
+  "frost": {
+    "kill_onset_c": -15.0,
+    "kill_full_c": -25.0,
+    "snow_insulation_swe_mm": 10.0,
+    "snow_floor_c": -3.0,
+    "source": {
+      "kill_onset_c": "[AS] daily minimum at which frost starts to kill an emerged rosette (winter rapeseed LT50 about -15 to -20 degC, recalled).",
+      "kill_full_c": "[AS] daily minimum at which the whole stand is killed.",
+      "snow_insulation_swe_mm": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: snow water equivalent above which snow shields the stand.)",
+      "snow_floor_c": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: lowest temperature the stand sees under that snow.)"
+    }
+  },
+  "ripeness": {
+    "harvest_window_days": 14,
+    "shed_rate_per_day": 0.004,
+    "source": {
+      "harvest_window_days": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: days after maturity before the grain starts to shed.)",
+      "shed_rate_per_day": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: fraction of the remaining grain lost per day afterwards.)"
+    }
+  },
+  "nutrients": {
+    "nc_a": 4.5,
+    "nc_b": 0.25,
+    "nc_w_min_t_ha": 1.0,
+    "nc_const_pct": 4.5,
+    "n_min_conc_pct": 1.0,
+    "n_stress_start_t_ha": 0.05,
+    "n_uptake_max_kg_ha_day": 6.0,
+    "n_uptake_frac_per_day": 0.15,
+    "n_residual_kg_ha": 5.0,
+    "n_root_fraction": 0.1,
+    "n_grain_share": 0.6727,
+    "n_fixation_fraction": 0.0,
+    "p2o5_conc_pct_dm": 0.9183,
+    "p2o5_grain_share": 0.659,
+    "k2o_conc_pct_dm": 2.2384,
+    "k2o_grain_share": 0.1545,
+    "ph_opt_low": 6.0,
+    "ph_opt_high": 8.0,
+    "ph_floor": 4.0,
+    "ph_floor_factor": 0.5,
+    "lodging_nmin_start_kg_ha": 250.0,
+    "lodging_nmin_full_kg_ha": 600.0,
+    "lodging_max_loss": 0.25,
+    "lodging_bbch_from": 31.0,
+    "lodging_bbch_to": 65.0,
+    "source": {
+      "nc_a": "[AS] Colnenne, Meynard, Reau, Justes, Merrien 1998 (Ann. Bot. 81:311-317) critical N curve of winter oilseed rape, Nc = 4.5 W^-0.25 recalled; the abstract found this session confirms the paper but not the coefficients.",
+      "nc_b": "[AS] see nc_a.",
+      "nc_w_min_t_ha": "[AS] below 1 t/ha the curve is held at its value for 1 t/ha.",
+      "nc_const_pct": "[AS] Nc at W = 1 t/ha.",
+      "n_min_conc_pct": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: N concentration at which growth stops.)",
+      "n_stress_start_t_ha": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: the N factor applies once the aboveground dry matter exceeds this.)",
+      "n_uptake_max_kg_ha_day": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: maximum daily N uptake.)",
+      "n_uptake_frac_per_day": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: share of the available soil mineral N the roots can take per day.)",
+      "n_residual_kg_ha": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: soil mineral N the roots cannot take.)",
+      "n_root_fraction": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: root N as a fraction of the aboveground N.)",
+      "n_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: Winterraps grain (91 % dry matter) 3.35 kg N/dt, straw 0.70 kg/dt, straw ratio 1.7 dt/dt.",
+      "n_fixation_fraction": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: cereals do not fix nitrogen.)",
+      "p2o5_conc_pct_dm": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: total aboveground P2O5 per t fresh grain over the aboveground dry matter 0.91/0.30 t.",
+      "p2o5_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: grain 1.80, straw 0.40 kg P2O5/dt.",
+      "k2o_conc_pct_dm": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: as p2o5_conc_pct_dm for K2O.",
+      "k2o_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: grain 1.00, straw 2.35 kg K2O/dt.",
+      "ph_opt_low": "[AS] pH (CaCl2) from which rapeseed is unrestricted; rapeseed is lime-demanding (VDLUFA target for heavy soils above 6, recalled).",
+      "ph_opt_high": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: )",
+      "ph_floor": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: pH at which the factor is ph_floor_factor.)",
+      "ph_floor_factor": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: )",
+      "lodging_nmin_start_kg_ha": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: soil mineral N in the root zone above which lodging starts to cost yield.)",
+      "lodging_nmin_full_kg_ha": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: ... and at which the loss is lodging_max_loss.)",
+      "lodging_max_loss": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: share of the grain lost at the full lodging risk.)",
+      "lodging_bbch_from": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: window of the stem elongation to flowering stages in which surplus N makes the stand lodge.)",
+      "lodging_bbch_to": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: )"
+    }
+  },
+  "management": {
+    "root_dm_fraction": 0.12,
+    "root_upper_share": 0.45,
+    "seed_mass_g": 0.005,
+    "seed_viability": 0.95,
+    "depth_opt_min_m": 0.01,
+    "depth_opt_max_m": 0.02,
+    "depth_zero_m": 0.05,
+    "depth_surface_factor": 0.5,
+    "seedbed_floor": 0.55,
+    "residue_emergence_penalty": 0.35,
+    "germ_wet_min": 0.15,
+    "germ_wet_full": 0.5,
+    "dry_hazard_per_day": 0.03,
+    "compensation_density_m2": 6.0,
+    "source": {
+      "root_dm_fraction": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: root dry matter as a share of the aboveground dry matter at harvest; cereal root:shoot at maturity is about 0.1-0.2 (recalled).)",
+      "root_upper_share": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: share of the root residue in the top 0.10 m of the 0.30 m management layers.)",
+      "seed_mass_g": "[D] thousand-seed weight 5 g of winter rapeseed (4.5-6 g).",
+      "seed_viability": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: germination capacity of drilled seed (the German seed law minimum is 85 %, certified lots are above 92 %).)",
+      "depth_opt_min_m": "[AS] drilling depth of rapeseed 1-2 cm (extension advice, recalled).",
+      "depth_opt_max_m": "[AS] see depth_opt_min_m.",
+      "depth_zero_m": "[AS] emergence fails from about 5 cm for the small seed.",
+      "depth_surface_factor": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: emergence of seed lying on the surface (birds, drying) relative to the optimum depth.)",
+      "seedbed_floor": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: emergence factor of the worst seedbed; field emergence of drilled wheat is typically 75-85 % of the seeds, which this reproduces together with seed_viability.)",
+      "residue_emergence_penalty": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: emergence lost at full residue cover for a tool with residue_tolerance 0.)",
+      "germ_wet_min": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: wetness at sowing depth (1 - De/TEW at the surface, blended to the root zone at the foot of the evaporation layer) below which the seed does not germinate.)",
+      "germ_wet_full": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: wetness from which germination runs at full rate.)",
+      "dry_hazard_per_day": "[AS] value of winter_wheat.json reused for winter_rapeseed, not crop-specific (wheat entry: share of the sown seed that dies per day in a seed layer below germ_wet_min.)",
+      "compensation_density_m2": "[AS] winter rapeseed compensates thin stands strongly by branching: 20 plants/m2 give about 96 % and 10 plants/m2 about 80 % of the 45 plants/m2 reference (recalled from extension advice, not looked up); constant d0 of the yield-density law 1 - exp(-d/d0)."
+    }
+  },
+  "pathogen": {
+    "agent": "clubroot, Sclerotinia and Verticillium (long-lived resting bodies)",
+    "loss_max": 0.5,
+    "build_per_season": 0.8,
+    "season_gdd": 3300.0,
+    "decay_half_life_days": 700.0,
+    "suppression_max": 0.0,
+    "suppression_gain": 0.0,
+    "suppression_half_life_days": 1800.0,
+    "residue_source_per_day": 0.0005,
+    "residue_ref_c_kg_ha": 1500.0,
+    "source": {
+      "loss_max": "[M] fitted with build_per_season and decay_half_life_days to one published margin: a 4-year break (rapeseed every fifth year) yields 8-15 % more than rapeseed every third year (topagrar 'Rapsanbau in Deutschland: weite Fruchtfolge', which in another passage gives only 4-7 %); the fit gives +12.5 % (test P8b). The loss of rapeseed after rapeseed (0.43) is not published as a number anywhere that was found.",
+      "build_per_season": "[M] fitted with loss_max (see there).",
+      "season_gdd": "[D] development units (daily gdd, clamped Tmin/Tmax) from emergence to maturity along the same thermal rule as data/crops/winter_rapeseed.json's stages, rounded; the build per day is proportional to the day's gdd over this number.",
+      "decay_half_life_days": "[M] fitted with loss_max (see there); consistent with clubroot and Verticillium resting spores that stay active for years (Regierungspraesidium Giessen: 10 to 20 years; topagrar: infestation falls noticeably only after a six-year break).",
+      "suppression_max": "[AS] no suppression modelled for this family (0).",
+      "suppression_gain": "[AS] no suppression modelled for this family (0).",
+      "suppression_half_life_days": "[AS] unused while suppression_max is 0; equal across the crops of a family.",
+      "residue_source_per_day": "[AS] small: the resting bodies of this family live in the soil more than on the surface residue.",
+      "residue_ref_c_kg_ha": "[AS] surface residue carbon at which the source is complete."
+    }
+  },
+  "source": "F1d winter rapeseed (family brassica). AquaCrop has no rapeseed in Annex I; parameters come from the canola AquaCrop calibrations named in each entry (values read from search-result snippets, not from the papers) and FAO-56. The stage table is [D] from DWD phenology and the Frankfurt station. Nutrient removal is [D] from LfL Bayern Bas22. No vernalisation is modelled (autumn sowing only)."
+}

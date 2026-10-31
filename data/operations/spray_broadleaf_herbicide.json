@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "spray_broadleaf_herbicide",
+  "spray": {
+    "product": "broadleaf_herbicide",
+    "dose": 1.0
+  },
+  "source": "F1c operation: field sprayer with the broadleaf herbicide at label dose."
+}

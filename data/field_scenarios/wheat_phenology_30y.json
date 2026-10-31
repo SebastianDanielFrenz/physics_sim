@@ -1,0 +1,16 @@
+{
+  "format": "physics_sim.field_scenario/1",
+  "climate": "../climates/farm_de_home.json",
+  "seed": 21,
+  "years": 30,
+  "soils": ["../soils/silt_loam_loess.json"],
+  "crops": ["../crops/winter_wheat.json"],
+  "grid": { "nx": 1, "ny": 1, "cell_size_m": 4.0 },
+  "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
+  "operations": [
+    { "op": "sow", "crop": "winter_wheat", "doy": 280 },
+    { "op": "harvest", "doy": 240, "first_year": 1 }
+  ],
+  "source": "F1b phenology check: winter wheat drilled on doy 280 (DWD national mean 1992-2024 of phase 10, Bestellung Beginn) every year for 30 years, harvested on doy 240 (after DWD harvest mean 216.7). Output CSV gives gdd_sow and bbch per day for the comparison against the DWD means of BBCH 10, 31, 51, 75, 87."
+}

@@ -1,0 +1,41 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "direct_drill",
+  "tillage": {
+    "depth_m": 0.03,
+    "mix_surface": 0.0,
+    "mix_upper": 0.03,
+    "mix_lower": 0.0,
+    "inversion": 0.0,
+    "residue_chop": 0.0,
+    "loosening": 0.0,
+    "seedbed_fineness": 0.0,
+    "crop_kill": 0.0,
+    "source": {
+      "depth_m": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_surface": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_upper": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "mix_lower": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "inversion": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "residue_chop": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "loosening": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "seedbed_fineness": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "crop_kill": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured."
+    }
+  },
+  "seed": {
+    "crop": "winter_wheat",
+    "seeds_per_m2": 300.0,
+    "depth_m": 0.035,
+    "quality": 0.95,
+    "residue_tolerance": 0.3,
+    "source": {
+      "seeds_per_m2": "[AS] 300 kernels/m2 at 3.5 cm (German practice 250-400 seeds/m2, 2-4 cm); quality 0.95 of the seeds placed in contact with soil; a drill with disc coulters cuts through half of the residue in the row.",
+      "depth_m": "[AS] 300 kernels/m2 at 3.5 cm (German practice 250-400 seeds/m2, 2-4 cm); quality 0.95 of the seeds placed in contact with soil; a drill with disc coulters cuts through half of the residue in the row.",
+      "quality": "[AS] 300 kernels/m2 at 3.5 cm (German practice 250-400 seeds/m2, 2-4 cm); quality 0.95 of the seeds placed in contact with soil; a drill with disc coulters cuts through half of the residue in the row.",
+      "residue_tolerance": "[AS] a direct drill meets the whole untilled residue and cuts through less of it.",
+      "crop": "[AS] sown crop."
+    }
+  },
+  "source": "F1c operation: no-till drill, narrow slot, little soil disturbance."
+}

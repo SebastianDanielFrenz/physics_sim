@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "spray_cereal_fungicide",
+  "spray": {
+    "product": "cereal_fungicide",
+    "dose": 1.0
+  },
+  "source": "F1d operation: field sprayer with the cereal fungicide at label dose (partial protection against the soil-borne pathogen of the cereal family)."
+}

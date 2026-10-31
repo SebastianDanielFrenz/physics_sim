@@ -1,0 +1,85 @@
+# `physics_sim.field_scenario/1` - headless field scenario (farming F1a, F1b)
+
+Loader: `ps::io::load_field_scenario(path)`; runner:
+`ps::io::run_field_scenario(scenario, csv)` (`core/include/ps/field/field_scenario.h`,
+library `ps_field_io`); tool: `ps_field_run <scenario.json> [out.csv]`. Files:
+`data/field_scenarios/` (deliberately not `data/scenarios/`: those are the
+ps_run hash-compare scenarios). The demos are `wheat_10y.json` and (nutrients) `wheat_fertilised_10y.json`.
+
+A scenario is a climate, a seed, soils, crops, a small grid, a number of years
+and a list of TEST-ONLY sow/harvest rules. The runner steps a `Field` from game
+day 0 using the daily weather record of the climate (a pure function of climate,
+seed and day), applying the rules before the step of the matching day. The field
+never harvests or kills a crop by itself.
+
+| Key | Required | Notes |
+|---|---|---|
+| `format` | yes | `"physics_sim.field_scenario/1"` |
+| `climate` | yes | path (relative to the scenario) of a `physics_sim.climate/1` file with weather statistics |
+| `seed` | no (0) | weather seed |
+| `years` | yes | >= 1; game years of `days_per_year` days (365) from game day 0 |
+| `weather` | no | `samples_per_day` (48), `wind_height_m` (10), `sleet_snow_fraction` (0.5): `DailyWeatherConfig` |
+| `soils` | yes | non-empty list of soil file paths |
+| `soil_pattern` | no | soil index per grid column, repeated over the rows; default: soil 0 everywhere |
+| `crops` | yes | list of crop file paths; crop ids are 1-based list positions, rules name the crop |
+| `grid` | yes | `nx`, `ny`, `cell_size_m` (4), `origin_x_m`, `origin_y_m` |
+| `initial_depletion_fraction` | no (0) | of both buckets' TAW |
+| `co2_ppm` | no (369.41) | atmospheric CO2 for the crops' `biomass.co2_response` (369.41 = AquaCrop reference, factor 1; the shipped demos use 400) |
+| `test_irrigate_to_capacity` | no (false) | test only: every morning the profile is brought to field capacity (booked as irrigation) |
+| `nutrients` | no (false) | boolean: the field runs the nutrient model (F1b); needs the `nutrients` blocks of every soil and crop |
+| `materials` | no | list of `physics_sim.field_material/1` paths ([field_material.md](field_material.md)); ids are 1-based list positions |
+| `methods` | no | path of a `physics_sim.field_methods/1` file |
+| `operations[]` | no | `{op: "sow"|"harvest"|"apply", doy, first_year (0), last_year, every_years (1), ...}`; `doy` is the real day of year 1..366, years count from game year 0. sow: `crop`, `density_scale` (1). harvest: `straw_removed` in [0, 1] (1: the straw leaves the field, the rest stays as residue). apply: `material`, `method` (names), exactly one of `rate_t_ha`, `rate_m3_ha`, `rate_n_kg_ha` (total N), optional `incorporation_delay_h`, `coverage` (1) |
+
+CSV columns (one row per day): `day,year,doy,tmin_c,tmax_c,rain_mm,snow_mm,rs_mj,
+et0_mm,rh_mean,wind2_m_s` (weather), then grid means `swe_mm,depletion_root_mm,
+taw_root_mm,zr_m`, cell 0's `crop,stage`, grid means `bbch,gdd_sow,cc,
+biomass_t_ha,grain_t_ha,tr_mm,evap_mm,runoff_mm,drain_mm,ks_sto`. With `nutrients` the grid means
+`nmin_kg_ha,nh4_kg_ha,tan_surface_kg_ha,ph,p_test,k_test,f_n,f_pk,n_crop_kg_ha` and the cumulative
+`n_leached_cum,nh3_cum,n_mineralised_cum,n_denitrified_cum` follow.
+
+`ps_field_run` prints each harvest (field mean grain and straw dry matter, BBCH),
+the worst-cell water-balance residual, the cell-0 precipitation total and the
+state hash. With `nutrients` it also prints the worst-cell N, P2O5, K2O and CaO balance residuals.
+
+Rejections: wrong `format`; unknown key; an unknown `op`; `doy` outside [1, 366];
+`every_years` < 1; a sow naming no crop of the scenario or without one;
+`soil_pattern` entries that are not soil indices; `years` < 1; an apply naming no material or method, with none or several rates, or a negative rate; `straw_removed` outside [0, 1].
+`tests/unit/test_field_io.cpp` I6, I7.
+
+## Management (F1c)
+
+Optional top-level keys: `"management": true` (needs `"nutrients": true`; every soil and crop then needs its `management` block, see
+soil.md and crop.md), `"weeds": [files]` (weed_group.md), `"herbicides": [files]` (herbicide.md). New operation rule
+`{"op": "operation", "file": "<physics_sim.operation/1 file>", "doy": N, ...}` with the usual `first_year`/`last_year`/`every_years`
+and the optional overrides `coverage`, `seeds_per_m2`, `depth_m`, `dose`, `straw_carried`, `straw_chopped` (operation.md); it needs
+`"management": true`. A harvest effect of such a record is reported like an `"harvest"` rule. The summary gains
+`drainage_by_year_mm`, `max_c_residual`, `weed_biomass_max_g_m2` and `weed_seedbank_end_m2`; the CSV gains the management columns
+(residue, cover, loosening, seedbed, crop plants, weed factor/plants/biomass/seeds, humus carbon, per-group plants and seeds).
+Scenarios: data/field_scenarios/wheat_managed_11y.json (combine with chopped straw, stubble cultivator, plough, seedbed harrow, drill,
+autumn grass herbicide, spring broadleaf herbicide, fertiliser plan) and wheat_unmanaged_11y.json (no plough, no spray).
+
+## Pathogens (F1d part 4)
+
+Optional `"pathogens": true` (needs `"management": true`; every crop needs `family` and its `pathogen` block, crop.md). The CSV gains
+`path_p_<family>`, `path_s_<family>` (field means of the inoculum and the suppression, families in sorted order) and
+`path_loss_untreated`, `fungicide_protection`, `rotation_factor`. Pathogen state is hashed and checkpointed only when enabled (a
+scenario without the key is bit-identical to before).
+
+## Soil organic carbon (F1d part 5)
+
+Optional `"soc": true` (needs `"management": true`; every soil needs its `organic_matter` block, soil.md). The CSV gains `soc_pct`,
+`hum_c_kg_ha`, `soc_dfc` (field means of the humus carbon content, the humus carbon and the change of `theta_fc`). SOC state is hashed and
+checkpointed only when enabled (a scenario without the key is bit-identical to before).
+
+## The 30-year scenarios (F1d part 7)
+
+`data/field_scenarios/wheat_continuous_30y.json`, `rotation_rape_wheat_barley_30y.json` and `wheat_unfertilised_30y.json`
+(generated by `tools/fielddata/f1d_scenarios_gen.py`). All three run `nutrients`, `management`, `pathogens` and `soc` on the deep
+loess with the sandy loam in the soil list (unused unless a test assigns it to cells), straw returned, no weeds, no fungicide, 31 game
+years: a winter crop is sown in the autumn before its harvest, so the harvest of year k (k = 1..30) is the k-th crop and year 0 holds
+only the first sowing. Fertiliser per crop as in the part 4 rotation tests (DAP and MOP at sowing, three CAN dressings, chalk 4 t/ha
+every fourth year). The rotation is rapeseed (harvest years 1, 4, ...), wheat (2, 5, ...), barley (3, 6, ...). The unfertilised file
+applies no N, P or K and keeps the chalk, as the Broadbalk nil plot does. `ps_field_run` prints the water, N, P2O5, K2O, CaO and
+residue-carbon residuals of the worst cell; measured over the 31 years: water <= 2.0e-11 mm, N <= 1.4e-10, P2O5 <= 1.0e-11, K2O <=
+2.6e-11, CaO <= 5.0e-11 kg/ha, carbon <= 1.5e-9 kg C/ha. Tests: `tests/unit/test_field_scenarios_30y.cpp`.

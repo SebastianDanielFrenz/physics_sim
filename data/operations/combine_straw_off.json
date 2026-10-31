@@ -1,0 +1,15 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "combine_straw_off",
+  "harvest": {
+    "straw_carried": 1.0,
+    "straw_chopped": 0.0,
+    "grain_loss": 0.015,
+    "source": {
+      "straw_carried": "[AS] combine with a swath and a baler pass: all harvestable straw is carried off; grain losses as for the chopping combine.",
+      "straw_chopped": "[AS] combine with a swath and a baler pass: all harvestable straw is carried off; grain losses as for the chopping combine.",
+      "grain_loss": "[AS] combine with a swath and a baler pass: all harvestable straw is carried off; grain losses as for the chopping combine."
+    }
+  },
+  "source": "F1c operation: combine harvest, the harvestable straw baled and removed."
+}

@@ -1,0 +1,100 @@
+{
+  "format": "physics_sim.field_scenario/1",
+  "climate": "../climates/farm_de_home.json",
+  "seed": 21,
+  "years": 31,
+  "nutrients": true,
+  "management": true,
+  "pathogens": true,
+  "soc": true,
+  "soils": [
+    "../soils/silt_loam_loess.json",
+    "../soils/sandy_loam.json"
+  ],
+  "crops": [
+    "../crops/winter_wheat.json"
+  ],
+  "materials": [
+    "../field_materials/can_27.json",
+    "../field_materials/dap_18_46.json",
+    "../field_materials/mop_60.json",
+    "../field_materials/lime_carbonate_90.json"
+  ],
+  "methods": "../field_materials/methods.json",
+  "grid": {
+    "nx": 2,
+    "ny": 2,
+    "cell_size_m": 4.0
+  },
+  "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
+  "operations": [
+    {
+      "op": "apply",
+      "material": "lime_carbonate_90",
+      "method": "incorporated",
+      "rate_t_ha": 4.0,
+      "doy": 250,
+      "every_years": 4
+    },
+    {
+      "op": "apply",
+      "material": "dap_18_46",
+      "method": "broadcast",
+      "rate_t_ha": 0.15,
+      "doy": 262,
+      "first_year": 0,
+      "every_years": 1
+    },
+    {
+      "op": "apply",
+      "material": "mop_60",
+      "method": "broadcast",
+      "rate_t_ha": 0.17,
+      "doy": 262,
+      "first_year": 0,
+      "every_years": 1
+    },
+    {
+      "op": "sow",
+      "crop": "winter_wheat",
+      "doy": 288,
+      "first_year": 0,
+      "every_years": 1
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 60,
+      "doy": 95,
+      "first_year": 1,
+      "every_years": 1
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 50,
+      "doy": 130,
+      "first_year": 1,
+      "every_years": 1
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 40,
+      "doy": 160,
+      "first_year": 1,
+      "every_years": 1
+    },
+    {
+      "op": "harvest",
+      "doy": 212,
+      "first_year": 1,
+      "every_years": 1,
+      "straw_removed": 0.0
+    }
+  ]
+}

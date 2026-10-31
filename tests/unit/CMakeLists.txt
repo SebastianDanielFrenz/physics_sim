@@ -354,3 +354,70 @@ target_compile_definitions(ps_environment_standalone PRIVATE PS_SOURCE_DIR="${CM
 
 add_test(NAME ps_environment_standalone COMMAND ps_environment_standalone)
 set_tests_properties(ps_environment_standalone PROPERTIES LABELS "environment")
+
+
+# ps_field_tests (farming plan F1a, vault FARM-002): the Catch2 tests of
+# ps_field / ps_field_io. A separate executable that does NOT link ps_core (the
+# library's independence stays visible in the link line); tests carry the
+# [field] tag, so CTest labels select them.
+add_executable(ps_field_tests
+  test_field_et0.cpp
+  test_field_weather_record.cpp
+  test_field_io.cpp
+  test_field_water.cpp
+  test_field_crop.cpp
+  test_field_persistence.cpp
+  test_field_management.cpp
+  test_field_nutrients.cpp
+  test_field_nutrient_processes.cpp
+  test_field_reference.cpp
+  test_field_crops.cpp
+  test_field_pathogens.cpp
+  test_field_soc.cpp
+  test_field_scenarios_30y.cpp
+  test_field_weed_water.cpp
+)
+
+target_link_libraries(ps_field_tests
+  PRIVATE
+    ps_field
+    ps_field_io
+    ps_test_catch_main
+    ps_warnings
+    ps_options
+    nlohmann_json::nlohmann_json
+)
+
+target_include_directories(ps_field_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_compile_definitions(ps_field_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+catch_discover_tests(ps_field_tests ADD_TAGS_AS_LABELS)
+
+# ps_field_standalone - link-time guard like ps_environment_standalone: a plain
+# main() linking ps_field_io (and so ps_field, ps_environment_io, ps_environment)
+# WHOLE-ARCHIVE without ps_core (tests/unit/field_standalone_main.cpp).
+add_executable(ps_field_standalone
+  field_standalone_main.cpp
+)
+
+target_link_libraries(ps_field_standalone
+  PRIVATE
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_field_io>
+    nlohmann_json::nlohmann_json
+    ps_warnings
+    ps_options
+)
+
+# see the ps_environment_standalone note above: one feature per item, so the
+# transitive libraries get WHOLE_ARCHIVE through the override.
+set_property(TARGET ps_field_standalone PROPERTY
+  LINK_LIBRARY_OVERRIDE_ps_field WHOLE_ARCHIVE)
+set_property(TARGET ps_field_standalone APPEND PROPERTY
+  LINK_LIBRARY_OVERRIDE_ps_environment_io WHOLE_ARCHIVE)
+set_property(TARGET ps_field_standalone APPEND PROPERTY
+  LINK_LIBRARY_OVERRIDE_ps_environment WHOLE_ARCHIVE)
+
+target_compile_definitions(ps_field_standalone PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+add_test(NAME ps_field_standalone COMMAND ps_field_standalone)
+set_tests_properties(ps_field_standalone PROPERTIES LABELS "field")
