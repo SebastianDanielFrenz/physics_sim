@@ -31,6 +31,7 @@ The caller binds socket names to chassis-local positions: `load_machine_json(pat
 | `name` | string | yes | the machine's name |
 | `source` | string | yes | free text |
 | `tools` | array | yes | at least one tool |
+| `efficiency` | object | no | this machine against the class its coefficients describe, see "Efficiency" |
 
 ## Tool
 
@@ -83,8 +84,18 @@ D = F_i (A + B S + C S^2) W T  x  moisture(wetness)  x  (1 + compaction_gain * c
 | `damping_n_s_m2` | per metre per second of the edge's vertical speed |
 
 **`pto`**: `source`, `nominal_rpm` (the tractor must offer it), `inertia_kgm2` (at the tractor's shaft), `no_load_kw`, `kw_per_m`
-(rotor running, per metre of width), `specific_energy_mj_m3` (per cubic metre of soil worked), `min_speed_fraction` (below this
-share of nominal the tool does no work). Rotor power is `no_load + kw_per_m W + e W d v`, torque is that over the shaft's speed.
+(rotor running, per metre of width), `specific_energy_mj_m3` (per cubic metre of soil worked), `specific_energy_kj_kg` (per
+kilogram of material the game says goes through the tool, default 0, see "Material through the tool"), `min_speed_fraction` (below
+this share of nominal the tool's quality falls in proportion; it keeps working, slower and worse: only a shaft that is off does
+none). Shaft power is `efficiency.shaft x (no_load + kw_per_m W + e W d v + e_m mdot)`, torque is that over the shaft's speed
+(held at the floor `min_speed_fraction x nominal` so the torque stays finite when the shaft is nearly still).
+
+**Efficiency.** A machine's coefficients describe the average machine of its class; a better one of the same type needs less. The
+part's top-level `efficiency` block (`source` tagged like any number, `draft` and `shaft`, each in (0, 2], default 1) states how
+much of the class's draft (`tool_draft_n` is multiplied by it) and of its shaft power it needs for the same work. A part that
+`extends` another can state the block alone: `data/machines` of the farm game has `disc_harrow_3m_pro` (`draft` 0.8 [AS]) as the
+pair of `disc_harrow_3m`. It sets `ToolDesc::efficiency_draft`, `efficiency_shaft` and `efficiency_source` on every tool of the part.
+`tool_power_sweep` and the runtime use the same factors, so a shop's "needs about N kW" and the tractor's load agree.
 
 ## Applicators
 
@@ -93,8 +104,10 @@ spreader, a slurry distributor. A soil tool works when it is in the ground (`dep
 kind of its own. Every part without `kind` is a soil tool, exactly as before: nothing in the state hash changes for it.
 
 An applicator has `name`, `kind`, `operation`, `edge_left`, `edge_right` and a `range` with `source`, `speed_min_km_h`,
-`speed_max_km_h`, `overspeed_quality_per_km_h` and `quality_floor`. It has no `draft`, `soil` or `pto` block and no depth keys in
-`range`: the loader rejects them. Its width is the distance of its two sockets, as for a soil tool.
+`speed_max_km_h`, `overspeed_quality_per_km_h` and `quality_floor`, and optionally a `pto` block (a sprayer's pump, a spreader's
+discs, a slurry pump; same keys as above). It has no `draft` or `soil` block and no depth keys in `range`: the loader rejects them.
+Its width is the distance of its two sockets, as for a soil tool. With a `pto` block it works only while its shaft is connected and
+turning.
 
 It works while **all three** hold in a tick: `World::set_tool_enabled(vehicle, tool, true)` (off at spawn), the soil source's
 sample under the middle of the edge is `workable`, and the forward speed of that point is above zero (standing or reversing
@@ -106,6 +119,15 @@ after the switch only starts the strip. It puts no force on the vehicle: no draf
 switch. The switch is part of the state hash for an applicator and not for any other tool.
 
 The game decides what comes out (a product, a rate, a tank): the part says only where and how fast.
+
+**Material through the tool.** `World::set_tool_material_flow(vehicle, tool, kg_s)` (between steps, any tool, 0 for none) states
+what goes through the tool now; the shaft's `specific_energy_kj_kg` is taken against it and `ToolState::material_kg_s` mirrors it.
+A sprayer's pump, a spreader's discs and a slurry pump take their power from it; a combine's threshing and a baler's chamber are
+the same term fed with the crop's kg/s, nothing else to add. `tool_power_sweep(tool, spec, steps, material_kg_m2)` takes the
+quantity per square metre (spray or spread rate) and makes the flow at each speed from the tool's width.
+
+`World::set_body_mass(body, kg)` (sim thread, between steps) sets a dynamic body's mass with its inertia scaled; a machine with a
+tank uses it so a full tank is heavier to carry and pull.
 
 ## How a tool runs
 
@@ -152,7 +174,7 @@ for (const machine::WorkCell& w : ledger.take()) {
 
 ## `physics_sim.tool_power/1`
 
-`data/machines/power_estimate.json`, the shop's "needs about N kW". `tool_power_sweep(tool, spec, speed_steps)` runs the tool's
+`data/machines/power_estimate.json`, the shop's "needs about N kW". `tool_power_sweep(tool, spec, speed_steps, material_kg_m2 = 0)` runs the tool's
 speed range at its nominal depth over the spec's soils:
 
 ```

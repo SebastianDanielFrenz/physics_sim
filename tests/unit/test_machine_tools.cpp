@@ -931,7 +931,30 @@ TEST_CASE("applicator parts: the loader's rules", "[machine][io][applicator]") {
     CHECK_NOTHROW(io::load_machine_json(scratch_file("app_ok.json", text("", "", "applicator")), sockets));
     CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_depth.json", text(R"(,"depth_min_m":0.05)", "", "applicator")), sockets), Catch::Matchers::ContainsSubstring("depth_min_m"));
     CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_draft.json", text("", R"("draft":{},)", "applicator")), sockets), Catch::Matchers::ContainsSubstring("an applicator has no 'draft' block"));
-    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_pto.json", text("", R"("pto":{},)", "applicator")), sockets), Catch::Matchers::ContainsSubstring("an applicator has no 'pto' block"));
+    // A shaft is allowed (a sprayer's pump, a spreader's discs) but must be a whole block.
+    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_pto.json", text("", R"("pto":{},)", "applicator")), sockets), Catch::Matchers::ContainsSubstring("pto"));
+    {
+        const char* shaft = R"("pto":{"source":"[AS] x","nominal_rpm":540,"inertia_kgm2":0.2,"no_load_kw":2,"kw_per_m":0.1,"specific_energy_mj_m3":0,"specific_energy_kj_kg":0.5,"min_speed_fraction":0.5},)";
+        const machine::MachineDesc m = io::load_machine_json(scratch_file("app_pto_ok.json", text("", shaft, "applicator")), sockets);
+        CHECK(m.tools[0].pto.present);
+        CHECK(m.tools[0].pto.specific_energy_kj_kg == Approx(0.5));
+        // no load 2 kW + 0.1 kW/m x 6 m + 0.5 kJ/kg x 20 kg/s = 12.6 kW; nothing through it: 2.6 kW
+        CHECK(machine::tool_pto_power_w(m.tools[0], 3.0, 0.0, 20.0) == Approx(12600.0));
+        CHECK(machine::tool_pto_power_w(m.tools[0], 3.0, 0.0) == Approx(2600.0));
+        CHECK(machine::tool_pto_power_w(m.tools[0], 0.0, 0.0) == Approx(2600.0));
+    }
+    // The machine's efficiency scales the draft and the shaft power; it must lie in (0, 2].
+    {
+        const std::string good = std::string(R"({"format":"physics_sim.machine/1","name":"x","source":"x","efficiency":{"source":"[AS] x","draft":0.8,"shaft":0.5},"tools":[{"name":"t","kind":"applicator","operation":"sprayer","edge_left":"socket_work_L","edge_right":"socket_work_R",)") +
+                                R"("pto":{"source":"[AS] x","nominal_rpm":540,"inertia_kgm2":0.2,"no_load_kw":2,"kw_per_m":0,"specific_energy_mj_m3":0,"min_speed_fraction":0.5},)" +
+                                R"("range":{"source":"[AS] x","speed_min_km_h":4,"speed_max_km_h":12,"overspeed_quality_per_km_h":0.1,"quality_floor":0.3}}]})";
+        const machine::MachineDesc m = io::load_machine_json(scratch_file("eff_ok.json", good), sockets);
+        CHECK(m.tools[0].efficiency_shaft == Approx(0.5));
+        CHECK(machine::tool_pto_power_w(m.tools[0], 0.0, 0.0) == Approx(1000.0)); // half of 2 kW
+        std::string bad = good;
+        bad.replace(bad.find("\"shaft\":0.5"), 11, "\"shaft\":0.0");
+        CHECK_THROWS_WITH(io::load_machine_json(scratch_file("eff_bad.json", bad), sockets), Catch::Matchers::ContainsSubstring("efficiency"));
+    }
     CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_kind.json", text("", "", "sprinkler")), sockets), Catch::Matchers::ContainsSubstring("'kind' must be"));
     // A soil tool still needs all of its blocks.
     CHECK_THROWS(io::load_machine_json(scratch_file("soil_bare.json", text("", "", "soil")), sockets));
