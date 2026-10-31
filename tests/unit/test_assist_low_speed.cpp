@@ -467,7 +467,7 @@ TEST_CASE("I2 V2: 12 % WOT crawl from 0.4 m/s, TC On/Relaxed/Sport/Drift", "[ass
 // |v|), so TC allows ~0.16 m/s of wheel overspeed, kappa ~3.5 at 0.046 m/s; lowering the floor (env
 // PS_I2_TC_FLOOR, diag only) gives v_end 1.07 / 0.046 / 0.13 m/s at 1.0 / 0.5 / 0.25 m/s - not monotone, no fix.
 // Outside D-LS1..3 (a TC slip-reference question at crawl), reported as an open point.
-TEST_CASE("I2 V2 low grip: lambda_mu 0.35, 12 % WOT, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][!mayfail]") {
+TEST_CASE("I2 V2 low grip: lambda_mu 0.35, 12 % WOT, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][!mayfail][long]") {
     for (int mode = 1; mode <= 4; ++mode) {
         Case c;
         c.surface = "fx_lambda_035";

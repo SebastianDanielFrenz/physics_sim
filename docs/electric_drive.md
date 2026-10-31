@@ -98,7 +98,7 @@ Owner report 2026-10-21 (racing_game, hybrid hypercar): "The hybrid hyper car on
 
 Owner request 2026-10-21: "There should be a B gear that maxes out regeneration on the motors at all speeds at 0 throttle and then
 scales the throttle between that maximum negative power and the maximum peak power the car can produce." B exists on a car with
-traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid while it runs in Electric mode. Public pure functions in
+traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid while it runs in Eco or Electric mode. Public pure functions in
 `ps/drivetrain/b_mode.h`; the runtime is `Powertrain::prepare_b`.
 
 - Law: system power `P(pedal) = -R + pedal (R + P_max)`. R = the regeneration the car can take right now: per wheel-path motor
@@ -126,7 +126,7 @@ traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid wh
   now, applied after the power corner, to B's DRIVE only; B's regeneration is never scaled by it (traction control limits drive).
 - Selector (no gearbox): the EV's D/N/R latch gains B above D. Shift up from D goes to B, shift down from B goes to D (then N and R as
   before); the absolute request `gear_request = kGearRequestB (98)` selects B directly (edge-triggered, so a game that keeps sending
-  its selector does not re-enter B after Electric mode ended it). B is refused in N and R. A car with a gearbox never has B. Snapshot
+  its selector does not re-enter B after leaving both Eco and Electric cleared it). B is refused in N and R. A non-hybrid car with a gearbox never has B. Snapshot
   (never hashed): `b_mode_available`, `b_mode_active`, `b_regen_capacity_w`, `b_drive_capacity_w`, `b_power_command_w`,
   `b_zero_power_pedal`, `b_slip_fraction`, `b_hold_level`.
 - Hash: the selector latch, the hold state and the per-motor slip fraction are hashed only while non-default, so every other car and a
@@ -147,9 +147,9 @@ low-SOC charge latch has no say.
 - Leaving: a pack at or below `low_soc` refuses or ends the mode (`hybrid_electric_leave_reason` = 1 in the snapshot); the car runs
   Normal and `VehicleInstance` writes `assist.drive_mode` back to the part's default (never Electric) as a pending channel write, like
   a drive-mode change queues its defaults. A car whose `drive_modes` part does not offer Electric treats the value 4 as Normal.
-- Shift inputs: in Electric mode the shift counters (`shift_up_count` / `shift_down_count`) act as the EV selector (D <-> B) and are
-  consumed before the gearbox's controller sees them, so the gearbox stays where the supervisor puts it. Leaving Electric ends B.
-- Snapshot: `hybrid_electric_mode`, `hybrid_electric_leave_reason`, `b_mode_available` (true in Electric mode).
+- Shift inputs: in Eco and Electric modes the shift counters (`shift_up_count` / `shift_down_count`) act as the EV selector (D <-> B) and are
+  consumed before the gearbox's controller sees them, so the gearbox stays where the supervisor puts it. Leaving both Eco and Electric ends B.
+- Snapshot: `hybrid_electric_mode`, `hybrid_electric_leave_reason`, `b_mode_available` (true in Eco and Electric modes).
 - The drive-mode part must list `electric` (`data/electronics/drive_modes_hybrid.json` in racing_game); the loader rejects offering it
   without a `hybrid_control` component.
 - Hash: the lost-latch is hashed only while set; the drive-mode folds skip an unoffered mode >= 4, so a car without the key hashes as before.
@@ -232,3 +232,18 @@ Sample sweeps (pedal 1, release build, 2026-10-19):
 
 Cost: 29 points for car_electric take 22 ms serial and 4.3 ms on 10 workers. The 12-point car_hybrid Normal sweep takes 30.5 ms
 serial and 9.0 ms on 10 workers. Tests: tests/unit/test_powertrain_dyno.cpp `[drivetrain][electric][dyno]`.
+
+### Hybrid Eco B selection
+
+Eco offers the same D/B selector as Electric mode. Shift up from D enters B; shift down returns to D.
+The existing Eco pedal mapping and low-SOC charging supervisor remain active: the ICE may charge the pack,
+but stays disconnected from the wheels. B uses the existing available motor regeneration, charge acceptance,
+wheel-slip protection and low-speed auto-hold. Leaving both Eco and Electric clears B; changing between them keeps it.
+ICE-only cars do not gain B.
+
+### Hybrid launch-control motor limits
+
+When a fitted combustion launch controller holds the clutch open, wheel-path motors produce no drive torque.
+On release its throttle ceiling also scales electric drive after the constant-power corner, alongside the TC limit.
+Crank-assist generators remain available for engine start and regeneration is unaffected. The host drive-mode policy
+controls where the fitted controller is allowed to operate.

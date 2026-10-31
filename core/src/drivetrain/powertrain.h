@@ -390,7 +390,7 @@ public:
     // True once after the supervisor left Electric: the car writes the drive-mode channel back to the part's default.
     [[nodiscard]] bool take_hybrid_electric_leave() {const bool v=hybrid_electric_leave_pending_;hybrid_electric_leave_pending_=false;return v;}
     // B mode (docs/electric_drive.md): the car has the position, it is selected, and last substep's numbers (never hashed).
-    [[nodiscard]] bool b_mode_available() const {return b_capable_&&(!hybrid_||hybrid_electric_active_);}
+    [[nodiscard]] bool b_mode_available() const {return b_capable_&&(!hybrid_||hybrid_b_allowed_);}
     [[nodiscard]] bool b_mode_selected() const {return b_selected_&&b_capable_;}
     [[nodiscard]] real b_regen_capacity_w() const {return b_regen_cap_w_;}
     [[nodiscard]] real b_drive_capacity_w() const {return b_drive_cap_w_;}
@@ -765,13 +765,13 @@ private:
     real blend_regen_nm_ = 0, blend_pad_nm_ = 0;   // last substep, snapshot only (never hashed)
     void prepare_regen(const ComponentSubstepCtx& ctx);
     // B mode. b_capable_: regeneration blending runs, a motor reaches the rims, b_mode.enabled, and the car is a pure EV
-    // (no gearbox) or a hybrid (B then exists in Electric mode only). Selected/hold state is hashed only while non-default.
+    // (no gearbox) or a hybrid (B then exists in Eco and Electric modes). Selected/hold state is hashed only while non-default.
     bool b_capable_=false,b_selected_=false,b_hold_active_=false;
     real b_hold_level_=0;
     std::vector<real> b_fraction_;            // per regen map: the wheel-slip guard's regeneration fraction (1 = full)
     bool b_counters_init_=false;
     real b_prev_up_=0,b_prev_down_=0,b_prev_request_=kGearRequestNone; // selector edge detection (not hashed)
-    real swallow_up_=0,swallow_down_=0;       // shift counts consumed by the EV selector in Electric mode (not hashed)
+    real swallow_up_=0,swallow_down_=0;       // shift counts consumed by the EV selector in Eco / Electric modes (not hashed)
     real regen_fade_min_=1; // prepare_regen's results for B (not hashed)
     real b_regen_cap_w_=0,b_drive_cap_w_=0,b_power_cmd_w_=0,b_zero_pedal_=0; // last substep (never hashed)
     bool b_feed_on_=false;                    // the motors currently carry a B feed (cleared once when B ends)
@@ -780,6 +780,7 @@ private:
     void b_update_selector(const ComponentSubstepCtx& ctx_in,bool allowed);
     void prepare_b(const ComponentSubstepCtx& ctx,real pedal);
     // Hybrid Electric mode / derived full-pedal demand.
+    bool hybrid_b_allowed_=false; // derived from the effective mode each substep, never hashed
     bool hybrid_electric_active_=false,hybrid_electric_lost_=false,hybrid_electric_leave_pending_=false;
     int hybrid_electric_reason_=0;
     real hybrid_ice_full_w_=0,engine_limiter_rpm_=0;
