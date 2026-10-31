@@ -719,6 +719,40 @@ CellView Field::view(int cell) const {
     return v;
 }
 
+void Field::visual_rows(int begin, int end, VisualRow* out) const {
+    if (begin < 0 || end > cell_count() || begin > end) throw std::out_of_range("Field::visual_rows: bad range");
+    const std::size_t groups = cfg_.weeds.size();
+    for (int cell = begin; cell < end; ++cell, ++out) {
+        const std::size_t c = static_cast<std::size_t>(cell);
+        VisualRow r;
+        r.crop_id = s_.crop[c];
+        if (r.crop_id != 0) {
+            const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(r.crop_id - 1)];
+            r.bbch = bbch_of(cr, s_.gdd_sow[c]);
+            r.cc = s_.stage[c] >= cr.stage_emergence ? s_.cc[c] : 0.0;
+        }
+        r.stand = s_.stand[c];
+        const real tew = tew_of(c);
+        r.wet_surface = tew > 0.0 ? std::clamp(1.0 - s_.d_evap[c] / tew, 0.0, 1.0) : 0.0;
+        const real taw = taw_per_m_of(c) * s_.zr[c];
+        r.wet_root = taw > 0.0 ? std::clamp(1.0 - s_.d_root[c] / taw, 0.0, 1.0) : 0.0;
+        real stress = std::max(1.0 - s_.last_ks_sto[c], 1.0 - s_.last_ks_exp[c]);
+        if (!s_.f_n.empty()) stress = std::max(stress, 1.0 - s_.f_n[c]);
+        r.stress = std::clamp(stress, 0.0, 1.0);
+        if (!s_.lodge.empty()) r.lodging = s_.lodge[c];
+        if (cfg_.management_enabled) {
+            const SoilManagementDesc& m = soil_of(c).management;
+            const real k = 1.0e-3 / m.res_c_fraction;
+            r.residue_t_ha = (s_.res_c[0][c] + s_.res_c[1][c]) * k;
+            r.residue_cover = residue_cover(c);
+            r.loosening = s_.loose[c];
+            r.seedbed = s_.seedbed[c];
+            for (std::size_t g = 0; g < groups; ++g) r.weeds_g_m2 += s_.w_bio[c * groups + g];
+        }
+        *out = r;
+    }
+}
+
 real Field::storage_mm(int cell) const {
     const std::size_t c = static_cast<std::size_t>(cell);
     return s_.swe[c] + total_taw_of(c) - s_.d_root[c] - s_.d_sub[c];

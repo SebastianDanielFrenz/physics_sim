@@ -267,6 +267,24 @@ struct FieldState {
     std::vector<real> hum_c, hum_c0, soc_dfc, l_c_hdec, l_c_amend;
 };
 
+// What a renderer reads of one cell, as plain values (visual_rows). No vectors: a bulk read of a whole region does not allocate.
+// Derived only from model state; nothing is stored. height is not here: the model has no plant height, a look table gives it.
+struct VisualRow {
+    int crop_id = 0;               // 0 = no crop
+    real bbch = 0.0;
+    real cc = 0.0;                 // canopy cover of the crop, 0 until emergence
+    real stand = 0.0;
+    real wet_surface = 0.0;        // 1 - De / TEW of the surface evaporation layer, 0..1
+    real wet_root = 0.0;           // 1 - D1 / TAW of the root zone, 0..1
+    real stress = 0.0;             // worst of 1 - Ks_sto, 1 - Ks_exp and 1 - f_N, 0..1
+    real weeds_g_m2 = 0.0;         // weed biomass over all groups (0 without management)
+    real lodging = 0.0;            // share of the grain lost to lodging (0 without nutrients)
+    real residue_t_ha = 0.0;       // loose straw plus stubble on the surface (0 without management)
+    real residue_cover = 0.0;      // soil cover by that residue, 0..1
+    real loosening = 0.0;          // tilth state 0..1 (0 without management)
+    real seedbed = 0.0;
+};
+
 struct FieldCheckpoint {
     int nx = 0, ny = 0;
     FieldState state;
@@ -327,6 +345,9 @@ public:
 
     // --- queries ---
     CellView view(int cell) const;
+    // The renderer's read of cells [begin, end): one plain row each, no allocation (view() plus the management scalars without
+    // management_view()'s vectors). Throws std::out_of_range for a bad range.
+    void visual_rows(int begin, int end, VisualRow* out) const;
     WaterLedger ledger(int cell) const;
     // precipitation + irrigation + initial storage - runoff - ET - drainage -
     // final storage (mm); zero up to rounding.
