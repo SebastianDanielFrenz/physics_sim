@@ -89,6 +89,7 @@ struct CropDesc {
     real hi0 = 0.0;
     real hi_build_gdd = 0.0;             // development units after flowering over which HI builds up (also the yield-formation length)
     real straw_harvest_fraction = 1.0;   // share of the non-grain aboveground biomass a harvest can carry off (cutting height, chaff, leaf litter stay as stubble)
+    bool pollination = true;             // false: a root crop (yield formation from the "flowering" stage on, no pollination; the pollination keys are then required but unused)
     real flowering_length_gdd = 0.0;     // length of the flowering stage in development units
     real excess_fruits_pct = 0.0;        // excess of potential fruits, %
     real ppol = 0.0;                     // depletion fraction of TAW at which pollination starts to fail (Ks_pol,w linear to 0 at TAW)

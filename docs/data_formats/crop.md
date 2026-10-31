@@ -102,3 +102,19 @@ Needed by every crop of a field with `"management": true`. Required keys with so
 `germ_wet_min`, `germ_wet_full`, `dry_hazard_per_day` (germination needs a moist seed layer; a dry one kills seed),
 `compensation_density_m2` (plants per m2 at which canopy and yield reach the reference: ccx x (1 - exp(-d/d0)) / (1 - exp(-d_ref/d0))).
 A crop starts from a sowing operation (operation.md `seed`); `Field::sow` of the F1a/F1b tests still gives a full stand.
+
+## Crops shipped (F1d)
+
+| File | Family | Notes |
+|---|---|---|
+| winter_wheat.json | cereal | AquaCrop Annex I.10, DWD stage table, F1b/F1c blocks |
+| winter_barley.json | cereal | Annex I.11 (Tupper 15 as printed), shares the family with wheat; no vernalisation block |
+| winter_rapeseed.json | brassica | no Annex I entry: canola AquaCrop values from search snippets and FAO-56, [AS]/[M] where unconfirmed |
+| grain_maize.json | maize | Annex I.2 (C4, WP* 33.7), spring sown, stover left |
+| sugar_beet.json | beet | Annex I.7; a root crop (`yield.pollination` 0); the yield is the root dry matter |
+
+`yield.pollination` (optional, default 1): 0 switches the AquaCrop pollination factor off (a root crop); the stage named
+`flowering` is then the start of yield formation and `hi_build_gdd` the units from it to maturity. The pollination keys
+(`ppol`, cold/heat) are still required and unused. Every key a new crop does not state keeps the wheat value with the source
+tag [AS] ("reused, not crop-specific"). The generator is `tools/fielddata/f1d_crop_gen.py`; the single-crop 30-year runs are
+`data/field_scenarios/crop_<name>_30y.json`. Tests `tests/unit/test_field_crops.cpp` (CR1-CR3).

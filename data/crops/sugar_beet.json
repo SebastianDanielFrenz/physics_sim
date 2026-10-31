@@ -1,0 +1,295 @@
+{
+  "format": "physics_sim.crop/1",
+  "name": "sugar_beet",
+  "family": "beet",
+  "thermal": {
+    "t_base_c": 5.0,
+    "t_upper_c": 30.0,
+    "source": {
+      "t_base_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.1: Tbase 5 degC.",
+      "t_upper_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.1: Tupper 30 degC."
+    }
+  },
+  "phenology": {
+    "stages": [
+      {
+        "name": "sown",
+        "bbch": 0,
+        "gdd": 0
+      },
+      {
+        "name": "emergence",
+        "bbch": 10,
+        "gdd": 131
+      },
+      {
+        "name": "row_closure",
+        "bbch": 35,
+        "gdd": 619
+      },
+      {
+        "name": "flowering",
+        "bbch": 40,
+        "gdd": 1000
+      },
+      {
+        "name": "senescence",
+        "bbch": 70,
+        "gdd": 1900
+      },
+      {
+        "name": "maturity",
+        "bbch": 89,
+        "gdd": 2212
+      },
+      {
+        "name": "overripe",
+        "bbch": 92,
+        "gdd": 2500
+      }
+    ],
+    "source": {
+      "stages": "[D] emergence 131, row_closure 619, maturity 2212 are development units accumulated by the Python port of the model's thermal-time rule (clamped daily Tmin/Tmax, Tbase/Tupper above) along the Frankfurt/Main daily record (DWD station 01420), 1992-2024, from the year's mean sowing date to the year's mean date of the DWD phase (annual reporters of all German stations, quality level <= 3; DWD CDC opendata phenology/annual_reporters/crops), averaged over 32 seasons (DWD sugar beet phases 10 Bestellung, 12 Auflaufen BBCH 10, 13 Bestand geschlossen BBCH 35, 24 Ernte; sd 21/38/144 units; mean doys sowing 96.8, emergence 116.7, closure 162.5, harvest 282.5; the harvest is the beginning of the lifting campaign, so 'maturity' is the mean lifting date). The stage named flowering is the start of yield formation (no flowers on a beet), 1000 [C range]: AquaCrop annex I.7 section 1.3, start of yield formation at emergence + 800-1000 (here emergence + 869). Senescence 1900 [C range]: annex emergence + 1700-2300. Overripe 2500 [AS]."
+    }
+  },
+  "canopy": {
+    "cc0_cm2_per_plant": 1.0,
+    "plant_density_per_ha": 100000,
+    "ccx": 0.95,
+    "cgc_per_gdd": 0.012,
+    "cdc_per_gdd": 0.0035,
+    "senescence_acceleration": 0.5,
+    "source": {
+      "cc0_cm2_per_plant": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.2: soil surface covered by an individual seedling 1.00 cm2/plant.",
+      "plant_density_per_ha": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.2: 80 000 - 120 000 plants per hectare (management); 100 000.",
+      "ccx": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.2: maximum canopy cover 'almost entirely covered'; 0.95.",
+      "cgc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.2: canopy growth coefficient 0.010-0.012 per GDD; the upper end, because with 0.011 the canopy reached half cover at about 740 units after emergence while the DWD row closure (BBCH 35) is at 488 units after emergence.",
+      "cdc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 1.2: canopy decline coefficient 0.003-0.004 per GDD.",
+      "senescence_acceleration": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: extra senescence progress per unit of senescence stress (1 - Ks_sen); the model's own device (AquaCrop shifts the senescence start instead).)"
+    }
+  },
+  "water": {
+    "kc_tr_x": 1.1,
+    "height_max_m": 0.5,
+    "p_depletion": 0.55,
+    "p_adjust_for_etc": true,
+    "exp_p_upper": 0.2,
+    "exp_p_lower": 0.6,
+    "exp_shape": 3.0,
+    "sen_p_upper": 0.75,
+    "sen_shape": 3.0,
+    "source": {
+      "kc_tr_x": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 2: KcTr,x 1.10.",
+      "height_max_m": "[C] FAO-56 Table 12 (fao.org/4/x0490e/x0490e0b.htm): sugar beet maximum crop height 0.5 m.",
+      "p_depletion": "[C] FAO-56 Table 22 (fao.org/4/x0490e/x0490e0e.htm): sugar beet p = 0.55 at ETc ~ 5 mm/day (footnote 3), rooting depth 0.7-1.2 m.",
+      "p_adjust_for_etc": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: FAO-56 Table 22 note: p = p_table + 0.04 (5 - ETc), limited to 0.1-0.8 (the limits are in the code as the note's own range).)",
+      "exp_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.1: canopy expansion 0.20.",
+      "exp_p_lower": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.1: canopy expansion 0.60.",
+      "exp_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.1: shape factor for canopy expansion 3.0.",
+      "sen_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.1: canopy senescence psen 0.75.",
+      "sen_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.1: shape factor for canopy senescence 3.0."
+    }
+  },
+  "biomass": {
+    "wp_star_g_m2": 17.0,
+    "gdd_full": 9.0,
+    "source": {
+      "wp_star_g_m2": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 3.1: WP* 17.0 g/m2.",
+      "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 4.2: minimum growing degrees for full biomass production 9 degC day (estimated).",
+      "rue_g_mj": "[AS] light-use efficiency of sugar beet, 1.8 g per MJ of global radiation (total dry matter): Scott and Jaggard (about 1.8 g/MJ intercepted solar radiation), recalled, not looked up.",
+      "rue_t_low_c": "[AS] the light-use efficiency starts at the base temperature 5 degC ...",
+      "rue_t_full_c": "[AS] ... and is full from 15 degC.",
+      "light_primary": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: 1: the daily gain is the light potential x Tr/Tr_potential (the water factor of the AquaCrop gain, Tr = transpiration, Tr_potential = Kcb x ET0), WP* is then not used for the gain. 0: the smaller of the light potential and WP* x Tr/ET0. With 0 and the ramp below the harvest was 14 % under the DESTATIS mean at the same BBCH 31 biomass (F1d part 1); with 1 the same early biomass keeps the yield, bec)",
+      "co2_response": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), chapter 3, Table 3.11c/1 (Eq. 3.11c): multiplier of WP* for a C3 crop (f_type = 1) over the atmospheric CO2 concentration, the FACE-based column (fsink 0); WP* is normalised to 369.41 ppm (the year 2000). Applied to WP* and, as photosynthesis, to rue. The crop's f_type = clamp((40 - WP*)/20, 0, 1) (Eq. 3.11d).)"
+    },
+    "rue_g_mj": 1.8,
+    "rue_t_low_c": 5.0,
+    "rue_t_full_c": 15.0,
+    "light_primary": 1,
+    "co2_response": [
+      {
+        "ppm": 298.2,
+        "factor": 0.815
+      },
+      {
+        "ppm": 304.5,
+        "factor": 0.832
+      },
+      {
+        "ppm": 311.9,
+        "factor": 0.851
+      },
+      {
+        "ppm": 331.11,
+        "factor": 0.901
+      },
+      {
+        "ppm": 369.41,
+        "factor": 1.0
+      },
+      {
+        "ppm": 400.0,
+        "factor": 1.073
+      },
+      {
+        "ppm": 450.0,
+        "factor": 1.162
+      },
+      {
+        "ppm": 500.0,
+        "factor": 1.214
+      },
+      {
+        "ppm": 550.0,
+        "factor": 1.23
+      }
+    ]
+  },
+  "yield": {
+    "hi0": 0.68,
+    "hi_build_gdd": 1212,
+    "source": {
+      "hi0": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.7 Sugar Beet, section 3.2: reference harvest index 65-75 % (root dry matter over aboveground-plus-root dry matter); 0.68; Bas22 beet:leaf gives 0.646.",
+      "hi_build_gdd": "[D] development units from the yield formation stage to maturity of the stage table (2212 - 1000).",
+      "flowering_length_gdd": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.3: length of the flowering stage 150-280 GDD; 200 inside the range.)",
+      "excess_fruits_pct": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2 lists 'medium' without a number; 50 % is the value of the manual's own worked example (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Fig. 3.12i).)",
+      "ppol": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: pollination fails above a depletion of 0.85 of TAW (estimate); Ks_pol,w falls linearly to 0 at TAW (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12).)",
+      "sto_coefficient_b": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: coefficient b of the negative effect of stomatal closure during yield formation (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Eq. 3.12m/n: 1 = strong effect .. 20 = small effect); Annex I.10 section 3.2 gives only 'moderate' for wheat. 7 (recalled default crop file) is inside the range. The functional form (HI factor = mean of 1 - (1 - Ks_sto^(1/10))/b) is [C];)",
+      "cold_t_c": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum air temperature below which pollination starts to fail 5.0 degC (estimate).)",
+      "cold_width_k": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: cold pollination coefficient reaches 0 five degrees below the threshold.)",
+      "heat_t_c": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: maximum air temperature above which pollination starts to fail 35.0 degC (estimate); F1a had 32 [AS].)",
+      "heat_width_k": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: heat pollination coefficient reaches 0 five degrees above the threshold (F1a had a 6 K width).)",
+      "logistic_steepness": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits.)",
+      "straw_harvest_fraction": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: sugar beet leaves (Blatt) are 0.7 dt per dt beet at 18 % dry matter against 23 % for the beet: leaf dm 0.126 t per t beet, non-grain biomass at HI 0.68 is 0.47 per unit root dm = 0.108 t; all of it can be taken, capped at 0.95.",
+      "pollination": "[AS] a root crop has no pollination: 0 switches the pollination factor off (the harvest index builds from the stage named flowering = start of yield formation)."
+    },
+    "flowering_length_gdd": 200,
+    "excess_fruits_pct": 50,
+    "ppol": 0.85,
+    "sto_coefficient_b": 7.0,
+    "cold_t_c": 5.0,
+    "cold_width_k": 5.0,
+    "heat_t_c": 35.0,
+    "heat_width_k": 5.0,
+    "logistic_steepness": 10.0,
+    "straw_harvest_fraction": 0.95,
+    "pollination": 0
+  },
+  "roots": {
+    "zr_min_m": 0.3,
+    "zr_max_m": 1.8,
+    "gdd_full": 1400,
+    "source": {
+      "zr_min_m": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.4: minimum effective rooting depth 0.30 m.)",
+      "zr_max_m": "[AS] FAO-56 Table 22 gives 0.7-1.2 m for sugar beet and the AquaCrop annex I.7 'up to 2.40 m' (management); 1.8 m is the depth of the loess water bucket of the home soil (beet roots follow the water on deep loess).",
+      "gdd_full": "[AS] development units from sowing at which the maximum depth is reached."
+    }
+  },
+  "frost": {
+    "kill_onset_c": -5.0,
+    "kill_full_c": -10.0,
+    "snow_insulation_swe_mm": 10.0,
+    "snow_floor_c": -3.0,
+    "source": {
+      "kill_onset_c": "[AS] daily minimum at which frost starts to kill an emerged stand; sugar beet seedlings are damaged from about -3 to -5 degC.",
+      "kill_full_c": "[AS] daily minimum at which the whole stand is killed.",
+      "snow_insulation_swe_mm": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: snow water equivalent above which snow shields the stand.)",
+      "snow_floor_c": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: lowest temperature the stand sees under that snow.)"
+    }
+  },
+  "ripeness": {
+    "harvest_window_days": 120,
+    "shed_rate_per_day": 0.0005,
+    "source": {
+      "harvest_window_days": "[AS] beets stay in the ground after maturity.",
+      "shed_rate_per_day": "[AS] fraction of the remaining root dry matter lost per day afterwards (rot, respiration)."
+    }
+  },
+  "nutrients": {
+    "nc_a": 4.23,
+    "nc_b": 0.49,
+    "nc_w_min_t_ha": 1.0,
+    "nc_const_pct": 4.23,
+    "n_min_conc_pct": 1.0,
+    "n_stress_start_t_ha": 0.05,
+    "n_uptake_max_kg_ha_day": 6.0,
+    "n_uptake_frac_per_day": 0.15,
+    "n_residual_kg_ha": 5.0,
+    "n_root_fraction": 0.1,
+    "n_grain_share": 0.3792,
+    "n_fixation_fraction": 0.0,
+    "p2o5_conc_pct_dm": 0.5353,
+    "p2o5_grain_share": 0.5523,
+    "k2o_conc_pct_dm": 2.2859,
+    "k2o_grain_share": 0.3233,
+    "ph_opt_low": 6.0,
+    "ph_opt_high": 8.0,
+    "ph_floor": 4.0,
+    "ph_floor_factor": 0.5,
+    "lodging_nmin_start_kg_ha": 1000.0,
+    "lodging_nmin_full_kg_ha": 2000.0,
+    "lodging_max_loss": 0.0,
+    "lodging_bbch_from": 31.0,
+    "lodging_bbch_to": 65.0,
+    "source": {
+      "nc_a": "[C] critical N dilution curve of sugar beet Nc = 4.23 W^-0.49 (Inner Mongolia field experiments, Acta Agron. Sin., zwxb.chinacrops.org abstract 7280, value from a search-result snippet).",
+      "nc_b": "[C] see nc_a.",
+      "nc_w_min_t_ha": "[AS] below 1 t/ha the curve is held at its value for 1 t/ha.",
+      "nc_const_pct": "[C] Nc at W = 1 t/ha of the curve above.",
+      "n_min_conc_pct": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: N concentration at which growth stops.)",
+      "n_stress_start_t_ha": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: the N factor applies once the aboveground dry matter exceeds this.)",
+      "n_uptake_max_kg_ha_day": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: maximum daily N uptake.)",
+      "n_uptake_frac_per_day": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: share of the available soil mineral N the roots can take per day.)",
+      "n_residual_kg_ha": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: soil mineral N the roots cannot take.)",
+      "n_root_fraction": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: root N as a fraction of the aboveground N.)",
+      "n_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: beet 0.18 kg N/dt fresh, leaves 0.40 kg/dt, 0.7 dt leaves per dt beet.",
+      "n_fixation_fraction": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: cereals do not fix nitrogen.)",
+      "p2o5_conc_pct_dm": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: total aboveground P2O5 per t fresh beet over the aboveground dry matter 0.23/0.68 t.",
+      "p2o5_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: beet 0.10, leaves 0.11 kg P2O5/dt.",
+      "k2o_conc_pct_dm": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: as p2o5_conc_pct_dm for K2O.",
+      "k2o_grain_share": "[D] LfL Bayern Bas22 (Basisdaten Duengung und Naehrstofffluesse, 10.12.2021) Tab. 1a: beet 0.25, leaves 0.71 kg K2O/dt.",
+      "ph_opt_low": "[AS] pH (CaCl2) from which sugar beet is unrestricted; beet is lime-demanding (VDLUFA target above 6, recalled).",
+      "ph_opt_high": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: )",
+      "ph_floor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: pH at which the factor is ph_floor_factor.)",
+      "ph_floor_factor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: )",
+      "lodging_nmin_start_kg_ha": "[AS] no lodging in a root crop.",
+      "lodging_nmin_full_kg_ha": "[AS] see lodging_nmin_start_kg_ha.",
+      "lodging_max_loss": "[AS] none.",
+      "lodging_bbch_from": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: window of the stem elongation to flowering stages in which surplus N makes the stand lodge.)",
+      "lodging_bbch_to": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: )"
+    }
+  },
+  "management": {
+    "root_dm_fraction": 0.12,
+    "root_upper_share": 0.45,
+    "seed_mass_g": 0.012,
+    "seed_viability": 0.95,
+    "depth_opt_min_m": 0.02,
+    "depth_opt_max_m": 0.03,
+    "depth_zero_m": 0.06,
+    "depth_surface_factor": 0.5,
+    "seedbed_floor": 0.55,
+    "residue_emergence_penalty": 0.35,
+    "germ_wet_min": 0.15,
+    "germ_wet_full": 0.5,
+    "dry_hazard_per_day": 0.03,
+    "compensation_density_m2": 40.0,
+    "source": {
+      "root_dm_fraction": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: root dry matter as a share of the aboveground dry matter at harvest; cereal root:shoot at maturity is about 0.1-0.2 (recalled).)",
+      "root_upper_share": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: share of the root residue in the top 0.10 m of the 0.30 m management layers.)",
+      "seed_mass_g": "[D] thousand-pellet weight 12 g of pelleted sugar beet seed (about 10-14 g).",
+      "seed_viability": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: germination capacity of drilled seed (the German seed law minimum is 85 %, certified lots are above 92 %).)",
+      "depth_opt_min_m": "[AS] beet is drilled 2-3 cm deep (extension advice, recalled).",
+      "depth_opt_max_m": "[AS] see depth_opt_min_m.",
+      "depth_zero_m": "[AS] emergence fails from about 6 cm for the small seed.",
+      "depth_surface_factor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence of seed lying on the surface (birds, drying) relative to the optimum depth.)",
+      "seedbed_floor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence factor of the worst seedbed; field emergence of drilled wheat is typically 75-85 % of the seeds, which this reproduces together with seed_viability.)",
+      "residue_emergence_penalty": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence lost at full residue cover for a tool with residue_tolerance 0.)",
+      "germ_wet_min": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: wetness of the evaporation layer (1 - De/TEW) below which the seed does not germinate.)",
+      "germ_wet_full": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: wetness from which germination runs at full rate.)",
+      "dry_hazard_per_day": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: share of the sown seed that dies per day in a seed layer below germ_wet_min.)",
+      "compensation_density_m2": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: constant d0 of the yield-density law 1 - exp(-d/d0) (Willey and Heath 1969 form); wheat compensates thin stands by tillering, 100 plants/m2 give about 92 % of the 250 plants/m2 reference.)"
+    }
+  },
+  "source": "F1d sugar beet (family beet). Annex I.7 Sugar Beet values of the AquaCrop reference manual v7.3 are [C]; the stage table is [D] from DWD phenology (sowing and emergence of the annual reporters, row closure) and the Frankfurt station; nutrient removal is [D] from LfL Bayern Bas22. The yield is the root dry matter (AquaCrop: 'sugar beet yield is expressed as dry matter'; fresh matter = dry matter / 0.23 for the Bas22 beet at 23 %% dry matter). A root crop: harvest index builds from the 'flowering' stage (= start of yield formation), no pollination (yield.pollination 0; the pollination keys are required by the loader and unused)."
+}

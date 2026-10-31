@@ -294,6 +294,7 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         d.hi0 = w.number("hi0", true, 0.0);
         d.hi_build_gdd = w.number("hi_build_gdd", true, 0.0);
         d.straw_harvest_fraction = w.number("straw_harvest_fraction", false, 1.0);
+        d.pollination = w.number("pollination", false, 1.0) != 0.0;
         d.flowering_length_gdd = w.number("flowering_length_gdd", true, 0.0);
         d.excess_fruits_pct = w.number("excess_fruits_pct", true, 0.0);
         d.ppol = w.number("ppol", true, 0.0);

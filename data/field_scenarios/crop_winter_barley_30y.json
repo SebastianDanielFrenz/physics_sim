@@ -1,0 +1,87 @@
+{
+  "format": "physics_sim.field_scenario/1",
+  "climate": "../climates/farm_de_home.json",
+  "seed": 21,
+  "years": 30,
+  "nutrients": true,
+  "soils": [
+    "../soils/silt_loam_loess.json"
+  ],
+  "crops": [
+    "../crops/winter_barley.json"
+  ],
+  "materials": [
+    "../field_materials/can_27.json",
+    "../field_materials/dap_18_46.json",
+    "../field_materials/mop_60.json",
+    "../field_materials/lime_carbonate_90.json"
+  ],
+  "methods": "../field_materials/methods.json",
+  "grid": {
+    "nx": 2,
+    "ny": 2,
+    "cell_size_m": 4.0
+  },
+  "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
+  "operations": [
+    {
+      "op": "apply",
+      "material": "lime_carbonate_90",
+      "method": "incorporated",
+      "rate_t_ha": 4.0,
+      "doy": 250,
+      "every_years": 4
+    },
+    {
+      "op": "apply",
+      "material": "dap_18_46",
+      "method": "broadcast",
+      "rate_t_ha": 0.15,
+      "doy": 262
+    },
+    {
+      "op": "apply",
+      "material": "mop_60",
+      "method": "broadcast",
+      "rate_t_ha": 0.17,
+      "doy": 262
+    },
+    {
+      "op": "sow",
+      "crop": "winter_barley",
+      "doy": 275
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 50,
+      "doy": 60,
+      "first_year": 1
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 60,
+      "doy": 95,
+      "first_year": 1
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 40,
+      "doy": 125,
+      "first_year": 1
+    },
+    {
+      "op": "harvest",
+      "doy": 196,
+      "first_year": 1,
+      "straw_removed": 0.0
+    }
+  ],
+  "source": "F1d single-crop validation run: winter_barley 30 years on the deep loess of the home climate (seed 21) with a good-practice fertiliser plan (CAN 150 kg N/ha in 3 dressings, DAP 0.15 t/ha and MOP 0.17 t/ha each autumn, lime 4 t every fourth year), straw/stover left on the field. Test-only operations, not an agronomic recommendation."
+}

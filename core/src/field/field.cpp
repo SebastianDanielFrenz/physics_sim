@@ -445,7 +445,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                 const real k0 = clampr(100.0 * s.hi_gdd[c] / cr->flowering_length_gdd, 0.0, 100.0);
                 s.hi_gdd[c] += gdd;
                 const real k1 = clampr(100.0 * s.hi_gdd[c] / cr->flowering_length_gdd, 0.0, 100.0);
-                if (k1 > k0) {
+                if (cr->pollination && k1 > k0) {
                     const real fj = flowering_cdf(k1) - flowering_cdf(k0);
                     const real ks_w = dep_frac <= cr->ppol ? 1.0 : std::max(0.0, (1.0 - dep_frac) / (1.0 - cr->ppol));
                     const real ks_c = 1.0 - logistic_s(clamp01((cr->pol_cold_t_c - w.tmin_c) / cr->pol_cold_width_k),
