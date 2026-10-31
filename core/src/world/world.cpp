@@ -704,7 +704,7 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
 }
 
 HitchId World::create_coupling(const machine::CouplingDesc& desc) {
-    return vehicle_system_->create_coupling(desc);
+    return vehicle_system_->create_coupling(desc, *backend_);
 }
 
 void World::set_coupling_options(int passes) {

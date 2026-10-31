@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ps::vehicle {
@@ -156,6 +157,10 @@ public:
     // (a free swing lost 41 % of its energy in 60 s at 240/960). Whatever a contact does to v1 still acts: this sets
     // the start of the backend's step, not its end.
     void align_backend_with_shadow(const VehicleTickWork& tw, IRigidBackend& backend) const;
+
+    // Every chassis of this vehicle's island, its own included: its wheels and ground probes do not see them. Empty
+    // for a vehicle in no coupling, whose queries stay the plain ones. Sim thread, between steps.
+    void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.
@@ -350,6 +355,7 @@ private:
     // sized once at construction (zero-alloc scratch, PLAN.md D8) - wheels_
     // is never resized after the constructor, same invariant this reuses.
     std::vector<real> hub_omega_old_scratch_;
+    std::vector<BodyId> cast_exclusions_;
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value, control_indices_.

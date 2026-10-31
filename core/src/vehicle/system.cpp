@@ -18,7 +18,7 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
     return VehicleId{static_cast<id_index_t>(instances_.size() - 1), 1};
 }
 
-HitchId System::create_coupling(const machine::CouplingDesc& desc) {
+HitchId System::create_coupling(const machine::CouplingDesc& desc, IRigidBackend& backend) {
     if (!contains(desc.towing) || !contains(desc.towed)) throw std::invalid_argument("create_coupling: unknown vehicle");
     if (desc.towing == desc.towed) throw std::invalid_argument("create_coupling: a vehicle cannot tow itself");
     machine::validate_hitch_class(desc.hitch);
@@ -28,6 +28,7 @@ HitchId System::create_coupling(const machine::CouplingDesc& desc) {
     c.towed = desc.towed.index;
     couplings_.push_back(c);
     rebuild_islands();
+    apply_collision_pairs(backend);
     return HitchId{static_cast<id_index_t>(couplings_.size() - 1), 1};
 }
 
@@ -55,6 +56,21 @@ void System::rebuild_islands() {
         islands_[island_of_root[root]].vehicles.push_back(i);
     }
     for (std::size_t i = 0; i < couplings_.size(); ++i) islands_[island_of_root[find(couplings_[i].towing)]].couplings.push_back(i);
+
+    for (const Island& island : islands_) {
+        std::vector<BodyId> chassis;
+        if (!island.couplings.empty()) {
+            for (const std::size_t i : island.vehicles) chassis.push_back(instances_[i]->chassis());
+        }
+        for (const std::size_t i : island.vehicles) instances_[i]->set_cast_exclusions(chassis);
+    }
+}
+
+void System::apply_collision_pairs(IRigidBackend& backend) {
+    // Only directly coupled chassis pass through each other: a tractor still hits its second trailer.
+    std::vector<std::pair<BodyId, BodyId>> pairs;
+    for (const Coupling& c : couplings_) pairs.emplace_back(instances_[c.towing]->chassis(), instances_[c.towed]->chassis());
+    backend.set_disabled_collision_pairs(pairs);
 }
 
 void System::solve_coupling(Coupling& c, real h) {

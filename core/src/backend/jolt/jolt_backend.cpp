@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Collision/PhysicsMaterial.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/GroupFilter.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
@@ -700,6 +701,19 @@ ShapeHandle create_jolt_shape_handle(const ShapeDesc& desc) {
     }
     return ShapeHandle(std::make_shared<const JoltPreparedShape>(shape_kind_of(desc), std::move(shape)));
 }
+
+// Coupled bodies: Jolt asks this for a pair before any narrow phase, so a filtered pair costs one lookup per
+// broad-phase hit and leaves no cached contact behind. Only bodies in a pair carry the filter; every other pair
+// never reaches it. Group ids are ps::BodyId indices.
+class CollisionPairFilter final : public JPH::GroupFilter {
+public:
+    using GroupID = JPH::CollisionGroup::GroupID;
+    bool CanCollide(const JPH::CollisionGroup& a, const JPH::CollisionGroup& b) const override {
+        const auto key = std::minmax({a.GetGroupID(), b.GetGroupID()});
+        return !std::binary_search(pairs_.begin(), pairs_.end(), key);
+    }
+    std::vector<std::pair<GroupID, GroupID>> pairs_; // sorted; written between steps only
+};
 
 class BackendContactListener final : public JPH::ContactListener {
 public:
@@ -1418,9 +1432,16 @@ public:
     }
 
     RayCastHit ray_cast_excluding(const Vec3& origin,const Vec3& direction,real max_distance,BodyId excluded) const override {
+        return ray_cast_filtered(origin,direction,max_distance,JPH::IgnoreSingleBodyFilter(lookup(excluded)));
+    }
+
+    RayCastHit ray_cast_excluding(const Vec3& origin, const Vec3& direction, real max_distance, std::span<const BodyId> excluded) const override {
+        return ray_cast_filtered(origin, direction, max_distance, ExcludedBodies(*this, excluded));
+    }
+
+    RayCastHit ray_cast_filtered(const Vec3& origin,const Vec3& direction,real max_distance,const JPH::BodyFilter& filter) const {
         JPH::RRayCast ray(to_rvec3(origin),to_vec3f(direction.normalized()*max_distance));
         JPH::RayCastResult result;
-        const JPH::IgnoreSingleBodyFilter filter(lookup(excluded));
         RayCastHit out;
         if(physics_system_.GetNarrowPhaseQuery().CastRay(ray,result,{}, {},filter)) {
             const auto* body=physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(result.mBodyID);
@@ -1434,12 +1455,20 @@ public:
     }
 
     ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const override {
+        return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, JPH::BodyFilter{});
+    }
+
+    ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded) const override {
+        return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, ExcludedBodies(*this, excluded));
+    }
+
+    ShapeCastHit shape_cast_filtered(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, const JPH::BodyFilter& filter) const {
         return with_query_shape(shape, [&](const JPH::Shape& jsh) -> ShapeCastHit {
             JPH::RMat44 start = JPH::RMat44::sRotationTranslation(to_jph_quat(start_pose.orientation), to_rvec3(start_pose.position));
             JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&jsh, JPH::Vec3::sReplicate(1.0f), start, to_vec3f(sweep_world.normalized() * max_distance));
             JPH::ShapeCastSettings settings;
             JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-            physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector);
+            physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector, {}, {}, filter);
             // D0 (dog release spike): with the default settings Jolt's GJK cast of a cylinder that is nearly axis
             // aligned against a very large thin box (the 1000 m test-rig ground) occasionally reports a phantom -
             // fraction 0 / "started penetrating" (penetration 0.18 m with 0.07 m true clearance) or a miss with the
@@ -1454,7 +1483,7 @@ public:
                 JPH::ShapeCastSettings recheck_settings;
                 recheck_settings.mUseShrunkenShapeAndConvexRadius = true;
                 JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> recheck;
-                physics_system_.GetNarrowPhaseQuery().CastShape(cast, recheck_settings, to_rvec3(start_pose.position), recheck);
+                physics_system_.GetNarrowPhaseQuery().CastShape(cast, recheck_settings, to_rvec3(start_pose.position), recheck, {}, {}, filter);
                 if (recheck.HadHit() && recheck.mHit.mFraction > 0.0f) collector = recheck;
             }
             ShapeCastHit out;
@@ -1482,6 +1511,20 @@ public:
     }
 
     void drain_contact_events_into(std::vector<ContactEvent>& out) override { contact_listener_.drain_into(out); }
+
+    void set_disabled_collision_pairs(std::span<const std::pair<BodyId, BodyId>> pairs) override {
+        for (const BodyId id : filtered_bodies_) body_interface().SetCollisionGroup(lookup(id), JPH::CollisionGroup{});
+        filtered_bodies_.clear();
+        if (collision_pair_filter_ == nullptr) collision_pair_filter_ = new CollisionPairFilter;
+        collision_pair_filter_->pairs_.clear();
+        for (const auto& [a, b] : pairs) {
+            collision_pair_filter_->pairs_.push_back(std::minmax({a.index, b.index}));
+            filtered_bodies_.push_back(a);
+            filtered_bodies_.push_back(b);
+        }
+        std::sort(collision_pair_filter_->pairs_.begin(), collision_pair_filter_->pairs_.end());
+        for (const BodyId id : filtered_bodies_) body_interface().SetCollisionGroup(lookup(id), JPH::CollisionGroup(collision_pair_filter_, id.index, 0));
+    }
 
     // PLAN.md P1.5b strategy A: pure narrowphase overlap query, no sweep, no
     // side effects. AllHitCollisionCollector (not the ClosestHit collector
@@ -1667,6 +1710,18 @@ private:
     JPH::BodyInterface& body_interface() { return physics_system_.GetBodyInterface(); }
     const JPH::BodyInterface& body_interface() const { return physics_system_.GetBodyInterface(); }
 
+    class ExcludedBodies final : public JPH::BodyFilter {
+    public:
+        ExcludedBodies(const JoltRigidBackend& backend, std::span<const BodyId> excluded) : backend_(backend), excluded_(excluded) {}
+        bool ShouldCollide(const JPH::BodyID& id) const override {
+            return std::none_of(excluded_.begin(), excluded_.end(), [&](BodyId b) { return backend_.lookup(b) == id; });
+        }
+
+    private:
+        const JoltRigidBackend& backend_;
+        std::span<const BodyId> excluded_;
+    };
+
     JPH::BodyID lookup(BodyId id) const {
         assert(id.index < slots_.size() && slots_[id.index].alive && slots_[id.index].generation == id.generation && "stale or invalid BodyId");
         return slots_[id.index].jph_id;
@@ -1746,6 +1801,9 @@ private:
     std::vector<id_index_t> free_list_;
     std::vector<JointSlot> joint_slots_;
     std::vector<id_index_t> joint_free_list_;
+    JPH::Ref<CollisionPairFilter> collision_pair_filter_; // created on first use: a World without couplings never sees it
+    std::vector<BodyId> filtered_bodies_; // every body of a disabled pair, for the next replacement
+
     // Every live heightfield or static mesh body, ascending - collide_body_vs_body's
     // seam-welding candidate set and its canonical collide order.
     std::vector<JPH::BodyID> terrain_surface_body_ids_;

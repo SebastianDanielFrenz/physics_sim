@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace ps::vehicle {
@@ -55,7 +56,7 @@ public:
     // island: one job that steps them substep by substep, the couplings solved in id order (one pass, exact for one
     // coupling, Gauss-Seidel along a chain). A vehicle outside any coupling takes the plain step_tick path, and a
     // World with no coupling never reaches any of this.
-    HitchId create_coupling(const machine::CouplingDesc& desc);
+    HitchId create_coupling(const machine::CouplingDesc& desc, IRigidBackend& backend);
     [[nodiscard]] bool contains(HitchId id) const { return id.generation == 1 && id.index < couplings_.size(); }
     void set_coupling_options(int passes) { coupling_passes_ = passes; }
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
@@ -115,6 +116,7 @@ private:
     };
 
     void rebuild_islands();
+    void apply_collision_pairs(IRigidBackend& backend);
     void step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                      real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air);
     void solve_coupling(Coupling& c, real h);

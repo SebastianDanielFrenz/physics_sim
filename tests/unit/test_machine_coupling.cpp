@@ -75,6 +75,7 @@ struct Cfg {
     bool trailer_brakes = false;
     bool tractor = false;
     bool coast_shell = false; // both vehicles lossless: no powertrain, no rolling resistance, no drag, a box ground
+    bool drawbar_overlap = false; // the trailer's drawbar runs under the towing car, an extra axle stands right below it
 };
 
 // An engine-less wheeled trailer, built in code on the car's own tyre and wheel data. A 1500 kg single axle or a
@@ -231,6 +232,16 @@ Rig build_rig(const Cfg& cfg, real x0 = 0.0) {
     if (cfg.coast_shell) {
         make_lossless(towing);
         make_lossless(trailer.desc);
+    }
+    if (cfg.drawbar_overlap) {
+        // 1.2 m past the socket, into the car's box, and an axle 0.9 m past it under the car's own rear.
+        trailer.half_extents.x = trailer.socket.x + 1.2;
+        for (const real side : {1.0, -1.0}) {
+            vehicle::WheelDesc w = trailer.desc.wheels[0];
+            w.name = side > 0 ? "jockey_L" : "jockey_R";
+            w.attachment_local = Vec3{trailer.socket.x + 0.9, side * 0.2, -0.493};
+            trailer.desc.wheels.push_back(w);
+        }
     }
 
     r.mass_a = cfg.tractor ? 6000.0 : 1500.0;
@@ -945,6 +956,15 @@ TEST_CASE("Coupling: an articulation limit ends a jackknife at the limit", "[mac
     CHECK(reverse.artic_max_deg > 40.0);
     CHECK(reverse.artic_max_deg < 46.0);
     CHECK(reverse.err_max_mm < 1.0);
+
+    // Locked wheels and full lock at 20 m/s: the trailer comes round, hits the class's stop and the hitch stays closed.
+    Cfg hard;
+    hard.hitch = load_class("drawbar_pin");
+    const Metrics lock = scenario_brake_and_lock(hard);
+    CHECK(lock.finite);
+    CHECK(lock.artic_max_deg > 70.0);
+    CHECK(lock.artic_max_deg < 76.0);
+    CHECK(lock.err_max_mm < 2.0);
 }
 
 TEST_CASE("Coupling: the fifth wheel carries roll, the ball does not", "[machine][vehicle]") {
@@ -1017,6 +1037,44 @@ TEST_CASE("Coupling: the shipped hitch classes load, and the loader rejects bad 
     CHECK(stiffer.frequency_hz == 120.0);
     CHECK(stiffer.yaw.mode == HitchAxisMode::Limited);
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("Coupling: bodies overlapping at the hitch neither collide nor stand on each other", "[machine][vehicle]") {
+    Cfg c;
+    c.drawbar_overlap = true;
+    Rig r = build_rig(c);
+    const auto check_tick = [&r](int& contacts) {
+        for (const ContactEvent& e : r.world->last_contact_events()) {
+            if ((e.a == r.a && e.b == r.b) || (e.a == r.b && e.b == r.a)) ++contacts;
+        }
+    };
+    int contacts = 0;
+    for (int i = 0; i < 960; ++i) {
+        r.world->step();
+        check_tick(contacts);
+    }
+    CHECK(contacts == 0);
+    const Metrics rest = run(r, 2.0, {});
+    CHECK(rest.finite);
+    CHECK(rest.err_max_mm < 1.0);
+    CHECK(rest.force_peak_n < 6000.0);
+    // The extra axle carries a load of the same order as the main one, not a wheel forced into full bump.
+    const real main_axle = r.world->wheel_telemetry(r.vb, 0).fz;
+    const real extra_axle = r.world->wheel_telemetry(r.vb, 2).fz;
+    CHECK(main_axle > 1000.0);
+    CHECK(extra_axle > 0.0);
+    CHECK(extra_axle < main_axle);
+
+    // Swinging the trailer about the socket: the same bodies, now moving through each other.
+    r.elements.push_back(std::make_unique<SpeedHold>(Frame(r.a), 2.0, 6000.0, 4000.0));
+    r.world->add_force_element(r.elements.back().get());
+    const Metrics drive = run(r, 6.0, [&contacts, &check_tick](World& w, real t) {
+        w.set_control("steer", 0.3 * std::sin(2.0 * kPi * t / 3.0));
+        check_tick(contacts);
+    });
+    CHECK(drive.finite);
+    CHECK(drive.err_max_mm < 2.0);
+    CHECK(contacts == 0);
 }
 
 TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {
@@ -1189,6 +1247,27 @@ TEST_CASE("Coupling diag hard", "[.][diag][machine][vehicle]") {
                             lock.force_peak_n / 1e3, p.energy_change_percent, jack.finite && lock.finite && p.finite ? "" : "  DIVERGED");
             }
         }
+    }
+}
+
+TEST_CASE("Coupling diag limits", "[.][diag][machine][vehicle]") {
+    print_header();
+    for (const real mass : {1500.0, 7500.0}) {
+        const std::string m = std::to_string(static_cast<int>(mass));
+        for (const char* name : {"ball", "drawbar_pin"}) {
+            Cfg c;
+            c.trailer_mass = mass;
+            c.hitch = load_class(name);
+            print_row(std::string(name) + " " + m + " reverse", scenario_reverse_jackknife(c));
+            print_row(std::string(name) + " " + m + " brake+lock", scenario_brake_and_lock(c));
+        }
+        Cfg free_case;
+        free_case.trailer_mass = mass;
+        print_row("free " + m + " reverse", scenario_reverse_jackknife(free_case));
+        print_row("free " + m + " brake+lock", scenario_brake_and_lock(free_case));
+        Cfg overlap = free_case;
+        overlap.drawbar_overlap = true;
+        print_row("free overlap " + m + " brake+lock", scenario_brake_and_lock(overlap));
     }
 }
 

@@ -519,7 +519,7 @@ void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidB
     // the partner's fresh measurement - wheel_instance.h's comment).
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
         const real delta = ackermann_wheel_angle(i, delta_avg);
-        wheels_[i]->measure_contact(pose_s, delta, backend);
+        wheels_[i]->measure_contact(pose_s, delta, backend, cast_exclusions_);
     }
 
     // PHYS-033 P4 I2 commit 5b (plan section 7 step 4): pre_solve -
@@ -731,7 +731,7 @@ void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidB
         aero::GroundSample result;
         if(range<=0) return result;
         const Vec3 origin=pose_s.transform_point(point), dir=pose_s.transform_direction(direction);
-        const auto hit=backend.ray_cast_excluding(origin,dir,range,chassis_);
+        const auto hit=cast_exclusions_.empty()?backend.ray_cast_excluding(origin,dir,range,chassis_):backend.ray_cast_excluding(origin,dir,range,std::span<const BodyId>(cast_exclusions_));
         // Only a surface facing this probe may form a road/seal. A miss is never ground.
         if(hit.hit&&dot(hit.normal,-dir)>.5) result={true,range*hit.fraction};
         return result;
