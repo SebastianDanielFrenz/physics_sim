@@ -256,7 +256,7 @@
     },
     "gearbox_rating_over_exceeded": {
       "value": 0.15,
-      "source": "[AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused"
+      "source": "[AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused; owner 2026-10-20: also a clutch peak more than 15 % over its static capacity is Exceeded"
     },
     "gearbox_rating_remedy_margin": {
       "value": 1.1,

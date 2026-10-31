@@ -187,7 +187,9 @@ struct DynoResult {
 // torque (the maximum torque_nm over `dyno.points`, taken at the point with that torque) with every clutch of `powertrain`:
 // a clutch holds up to its STATIC capacity capacity_nm * static_factor. Findings (all rpm = the peak point's rpm, slot
 // "clutch", field "/capacity_nm"):
-//   ClutchCapacity   Near when peak >= static capacity / 1.3, Limiting when peak >= static capacity.
+//   ClutchCapacity   Near when peak >= static capacity / 1.3, Limiting when peak >= static capacity, Exceeded when the peak is
+//                    more than 15 % over the static capacity (the gearbox's Exceeded band, gearbox_rating_over_exceeded; owner
+//                    2026-10-20).
 // Each carries a Closed Remedy in the field's own terms (the KINETIC capacity_nm): current = capacity_nm, required_min =
 // peak / static_factor (the smallest capacity that holds the peak), required_margin = 1.3 * peak / static_factor (the
 // table's safety margin, limit_thresholds.h kDrivelineMargin). With static_factor == 1 these are peak and 1.3 * peak.
@@ -197,7 +199,8 @@ struct DynoResult {
 //                       Exceeded (engine_rules_table.h kGearboxOver*; the same grading as BuildRule::GearboxRating).
 //                       Closed Remedy: current = rating, required_min = peak, required_margin = 1.1 * peak.
 // `clutch_file` / `gearbox_file` fill PartRef::file (empty = unknown). `policy` (L0, nullptr = defaults): the x1.3 clutch margin
-// (driveline_torque_margin) and the gearbox rating grades / remedy margin (gearbox_rating_*). A sweep without a positive torque returns {}; a
+// (driveline_torque_margin), the gearbox rating grades / remedy margin (gearbox_rating_*) and the clutch's Exceeded band
+// (gearbox_rating_over_exceeded). A sweep without a positive torque returns {}; a
 // powertrain without a clutch / a rated gearbox produces no such finding. Sorted like DynoResult::limits (by kind, ClutchCapacity
 // before GearboxInputTorque). With a nitrous kit in the sweep (DynoSweepSpec::nitrous) the peak already includes its gain.
 [[nodiscard]] std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain,
