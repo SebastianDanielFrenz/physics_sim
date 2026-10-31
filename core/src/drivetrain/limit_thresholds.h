@@ -11,7 +11,7 @@
 // POLICY - it decides only what the player is told or refused - and is a field of ps::drivetrain::LimitPolicy
 // (ps/drivetrain/limit_policy.h) under the same name; the `value` here is the COMPILED DEFAULT of that field (and
 // data/limit_policies/default.json repeats it; tests/unit/test_limit_policy.cpp pins the two together). The consumers
-// (engine_dyno.cpp, limit_remedies.cpp) read the policy, never these constants. Count: 31 POLICY, 0 NOT POLICY.
+// (engine_dyno.cpp, limit_remedies.cpp) read the policy, never these constants. Count: 34 POLICY, 0 NOT POLICY.
 // A new entry here needs a LimitPolicy field and a row in limit_policy_table.h, or limit_policy.cpp's static_assert fails.
 #pragma once
 
@@ -121,12 +121,20 @@ inline constexpr Threshold kKnockLimiting{"knock_limiting_retard_deg", 5.0, "[AS
 // required_margin / required_min of a solved wastegate area (the N7b procedure: bisected, then +10 %).
 inline constexpr Threshold kWastegateRemedyMargin{"wastegate_remedy_margin", 1.10, "[AS] N7b: the bisected area plus 10 %"};
 
+// --- Hitch ratings (ps/machine/hitch_limits.h) --------------------------------------------------------------------------------
+// A load over a towing point's rating, as a share of it. A maker's rating has a margin in it, so the first percent over it is a
+// warning and not yet a broken hitch; the same 15 % the gearbox rating allows before it counts as exceeded.
+inline constexpr Threshold kHitchNear{"hitch_near_share", 0.90, "[AS] the last 10 % below a rating"};
+inline constexpr Threshold kHitchLimiting{"hitch_limiting_share", 1.00, "[D] the rating itself"};
+inline constexpr Threshold kHitchExceeded{"hitch_exceeded_share", 1.15, "[AS] the gearbox rating's 15 % over"};
+
 inline constexpr Threshold kAllLimitThresholds[] = {
     kGateNear,        kGateFull,        kGateSaturatedFraction, kBoostBandNear,      kBoostBandExceeded, kRotorNear,
     kRotorLimiting,   kSurgeNearMargin, kSurgeMinFraction,      kChokeNear,          kChokeLimiting,     kLimiterNear,
     kSoftCutNearBands, kPistonSpeedNear, kPistonSpeedLimiting,   kPistonSpeedExceeded, kEdgeMinFraction,   kEdgeNearFraction,
     kDrivelineMargin, kKitLambdaNear,   kKitLambdaLimiting,     kKitLambdaExceeded, kKitLambdaTarget,   kBottleDurationTarget, kBottleDurationNearFactor,
     kBottleReserve,   kBottleFlowRetentionNear, kBottleFlowRetentionLimiting, kWastegateRemedyMargin, kKnockNear, kKnockLimiting,
+    kHitchNear,       kHitchLimiting,   kHitchExceeded,
 };
 inline constexpr std::size_t kAllLimitThresholdCount = sizeof(kAllLimitThresholds) / sizeof(kAllLimitThresholds[0]);
 

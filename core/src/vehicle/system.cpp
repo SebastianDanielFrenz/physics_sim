@@ -87,6 +87,11 @@ machine::AttachCheck System::check_attach(const machine::CouplingDesc& desc, con
         }
     }
     if (top == desc.towed.index) refuse("the chain would close a loop");
+    for (const Coupling& c : couplings_) {
+        if (c.alive && c.towing == desc.towing.index && !desc.towing_point.empty() && c.desc.towing_point == desc.towing_point) {
+            refuse(format("'%s' of vehicle %u is in use", desc.towing_point.c_str(), static_cast<unsigned>(desc.towing.index)));
+        }
+    }
 
     const machine::HitchClassDesc& hitch = desc.hitch;
     const machine::SocketBody a = socket_body_now(backend, instances_[desc.towing.index]->chassis(), desc.socket_towing_local, desc.frame_towing_local);
@@ -154,6 +159,52 @@ HitchId System::attach(const machine::CouplingDesc& desc, IRigidBackend& backend
     rebuild_islands();
     apply_collision_pairs(backend);
     return HitchId{static_cast<id_index_t>(slot), generation};
+}
+
+machine::CouplingDesc System::mate_points(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point, std::string& problem) const {
+    machine::CouplingDesc d;
+    if (!contains(towing) || !contains(towed)) {
+        problem = "unknown vehicle";
+        return d;
+    }
+    const machine::HitchPointDesc* a = machine::find_hitch_point(instances_[towing.index]->hitch_points(), towing_point);
+    const machine::HitchPointDesc* b = machine::find_hitch_point(instances_[towed.index]->hitch_points(), towed_point);
+    const std::string a_name(towing_point), b_name(towed_point);
+    if (a == nullptr) problem = "vehicle " + std::to_string(towing.index) + " has no hitch point '" + a_name + "'";
+    else if (b == nullptr) problem = "vehicle " + std::to_string(towed.index) + " has no hitch point '" + b_name + "'";
+    else if (a->role != machine::HitchRole::Towing) problem = "'" + a_name + "' is not a towing point";
+    else if (b->role != machine::HitchRole::Towed) problem = "'" + b_name + "' is not a towed point";
+    else if (a->hitch.name != b->hitch.name) problem = "'" + a_name + "' takes class '" + a->hitch.name + "', '" + b_name + "' class '" + b->hitch.name + "'";
+    if (!problem.empty()) return d;
+    d.towing = towing;
+    d.towed = towed;
+    d.socket_towing_local = a->position_local;
+    d.socket_towed_local = b->position_local;
+    d.hitch = a->hitch;
+    d.towing_point = a_name;
+    d.towed_point = b_name;
+    return d;
+}
+
+machine::HitchLoads System::hitch_loads(HitchId id, const IRigidBackend& backend) const {
+    const Coupling& c = couplings_[id.index];
+    machine::HitchLoads loads;
+    loads.tongue_load_n = -c.state.mean_force_on_towing_world.z;
+    std::vector<std::size_t> behind{c.towed};
+    while (!behind.empty()) {
+        const std::size_t v = behind.back();
+        behind.pop_back();
+        loads.towed_mass_kg += backend.get_mass(instances_[v]->chassis());
+        for (const Coupling& next : couplings_) {
+            if (next.alive && next.towing == v) behind.push_back(next.towed);
+        }
+    }
+    return loads;
+}
+
+const machine::HitchPointDesc* System::towing_point(HitchId id) const {
+    const Coupling& c = couplings_[id.index];
+    return machine::find_hitch_point(instances_[c.towing]->hitch_points(), c.desc.towing_point);
 }
 
 void System::kill_coupling(Coupling& c) {

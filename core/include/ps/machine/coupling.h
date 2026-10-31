@@ -29,6 +29,8 @@ struct CouplingDesc {
     Quat frame_towing_local = Quat::identity();
     Quat frame_towed_local = Quat::identity();
     HitchClassDesc hitch;
+    // The vehicles' hitch points this coupling sits on (World::attach by name fills them); empty for one built by hand.
+    std::string towing_point, towed_point;
 };
 
 // What the hitch would see if it latched now.

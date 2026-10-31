@@ -164,6 +164,7 @@ public:
     void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
 
     [[nodiscard]] const std::optional<machine::TowBrakeDesc>& tow_brake() const { return desc_.tow_brake; }
+    [[nodiscard]] const std::vector<machine::HitchPointDesc>& hitch_points() const { return desc_.hitch_points; }
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.

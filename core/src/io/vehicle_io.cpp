@@ -16,6 +16,7 @@
 #include "ps/io/engine_thermal_io.h"
 #include "ps/io/fuel_io.h"
 #include "ps/io/electronics_io.h"
+#include "ps/io/hitch_io.h"
 #include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/engine_rules.h"
 #include "ps/drivetrain/limiter_range.h"
@@ -334,6 +335,82 @@ WheelDesc read_wheel(const json& j, const std::string& base_dir, const TyreDesc*
     }
     w.is_front = j.value("is_front", w.is_front);
     return w;
+}
+
+machine::TowBrakeDesc read_tow_brake(const json& j, const std::string& path) {
+    const std::string ctx = "vehicle " + path + ": tow_brake";
+    if (!j.is_object()) throw std::runtime_error(ctx + " must be an object");
+    const std::string kind = j.value("kind", std::string());
+    const std::set<std::string> common = {"kind", "lag_s"};
+    std::set<std::string> known = common;
+    machine::TowBrakeDesc d;
+    if (kind == "channel") {
+        d.kind = machine::TowBrakeKind::Channel;
+        known.insert({"channel", "gain"});
+        d.channel = j.value("channel", d.channel);
+        d.gain = j.value("gain", d.gain);
+    } else if (kind == "overrun") {
+        d.kind = machine::TowBrakeKind::Overrun;
+        known.insert({"deadband_n", "full_force_n", "reverse_release_speed_m_s"});
+        d.deadband_n = j.value("deadband_n", d.deadband_n);
+        d.full_force_n = j.value("full_force_n", d.full_force_n);
+        d.reverse_release_speed_m_s = j.value("reverse_release_speed_m_s", d.reverse_release_speed_m_s);
+    } else {
+        throw std::runtime_error(ctx + ": 'kind' must be \"channel\" or \"overrun\"");
+    }
+    d.lag_s = j.value("lag_s", d.lag_s);
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (known.count(it.key()) == 0) throw std::runtime_error(ctx + ": unknown field '" + it.key() + "'");
+    }
+    machine::validate_tow_brake(d);
+    return d;
+}
+
+std::vector<machine::HitchPointDesc> read_hitch_points(const json& j, const std::string& base_dir, const std::string& path) {
+    const std::string list_ctx = "vehicle " + path + ": hitch_points";
+    if (!j.is_array()) throw std::runtime_error(list_ctx + " must be an array");
+    const std::set<std::string> known = {"name", "class", "role", "position", "sockets", "max_towed_mass_kg", "max_tongue_load_n"};
+    std::vector<machine::HitchPointDesc> out;
+    for (const json& p : j) {
+        if (!p.is_object() || !p.contains("name") || !p.at("name").is_string()) throw std::runtime_error(list_ctx + ": every point needs a 'name'");
+        machine::HitchPointDesc d;
+        d.name = p.at("name").get<std::string>();
+        const std::string ctx = list_ctx + ": '" + d.name + "'";
+        for (auto it = p.begin(); it != p.end(); ++it) {
+            if (known.count(it.key()) == 0) throw std::runtime_error(ctx + ": unknown field '" + it.key() + "'");
+        }
+        if (machine::find_hitch_point(out, d.name) != nullptr) throw std::runtime_error(ctx + " is listed twice");
+
+        const std::string role = p.value("role", std::string());
+        if (role != "towing" && role != "towed") throw std::runtime_error(ctx + ": 'role' must be \"towing\" or \"towed\"");
+        d.role = role == "towing" ? machine::HitchRole::Towing : machine::HitchRole::Towed;
+
+        if (!p.contains("class") || !p.at("class").is_string()) throw std::runtime_error(ctx + ": 'class' must be a path to a hitch class file");
+        d.hitch = io::load_hitch_class_json((std::filesystem::path(base_dir) / p.at("class").get<std::string>()).string());
+
+        if (p.contains("position") == p.contains("sockets")) throw std::runtime_error(ctx + ": give 'position' or 'sockets', exactly one of them");
+        if (p.contains("position")) {
+            d.position_local = read_vec3(p.at("position"), Vec3::zero());
+            d.rig_sockets.push_back(d.name);
+        } else {
+            const json& sockets = p.at("sockets");
+            if (!sockets.is_object() || sockets.size() < 2) throw std::runtime_error(ctx + ": 'sockets' must name at least two rig sockets with their positions");
+            for (auto it = sockets.begin(); it != sockets.end(); ++it) {
+                d.position_local += read_vec3(it.value(), Vec3::zero());
+                d.rig_sockets.push_back(it.key());
+            }
+            d.position_local = d.position_local * (real(1) / static_cast<real>(sockets.size()));
+        }
+
+        d.max_towed_mass_kg = p.value("max_towed_mass_kg", d.max_towed_mass_kg);
+        d.max_tongue_load_n = p.value("max_tongue_load_n", d.max_tongue_load_n);
+        if (d.max_towed_mass_kg < 0.0 || d.max_tongue_load_n < 0.0) throw std::runtime_error(ctx + ": a rating must not be negative");
+        if (d.role == machine::HitchRole::Towed && (d.max_towed_mass_kg > 0.0 || d.max_tongue_load_n > 0.0)) {
+            throw std::runtime_error(ctx + ": only a towing point carries ratings");
+        }
+        out.push_back(std::move(d));
+    }
+    return out;
 }
 
 SteeringDesc read_steering(const json& j) {
@@ -3961,6 +4038,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
 
     v.steering = read_steering(j.value("steering", json()));
     v.brake_system = read_brake_system(j.value("brake_system", json()));
+    if (j.contains("tow_brake")) {
+        v.tow_brake = read_tow_brake(j.at("tow_brake"), path);
+        if (v.brake_system.corners.empty()) throw std::runtime_error("vehicle " + path + ": tow_brake needs a brake_system with corners");
+    }
+    if (j.contains("hitch_points")) v.hitch_points = read_hitch_points(j.at("hitch_points"), base_dir, path);
 
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if(j.contains("traction_control")) {

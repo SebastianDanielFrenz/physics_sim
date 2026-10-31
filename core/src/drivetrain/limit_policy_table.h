@@ -97,6 +97,9 @@ inline constexpr Row kRows[] = {
     row("gearbox", rules::kGearboxOverLimiting, &LimitPolicy::gearbox_rating_over_limiting, 0.0, kNoMax),
     row("gearbox", rules::kGearboxOverExceeded, &LimitPolicy::gearbox_rating_over_exceeded, 0.0, kNoMax),
     row("gearbox", rules::kGearboxRemedyMargin, &LimitPolicy::gearbox_rating_remedy_margin, 1.0, kNoMax),
+    row("hitch", limits::kHitchNear, &LimitPolicy::hitch_near_share, 0.0, kNoMax),
+    row("hitch", limits::kHitchLimiting, &LimitPolicy::hitch_limiting_share, 0.0, kNoMax),
+    row("hitch", limits::kHitchExceeded, &LimitPolicy::hitch_exceeded_share, 0.0, kNoMax),
 };
 inline constexpr std::size_t kRowCount = sizeof(kRows) / sizeof(kRows[0]);
 
@@ -129,6 +132,8 @@ inline constexpr Order kOrders[] = {
     {&LimitPolicy::cam_switch_over_limiter_min, &LimitPolicy::cam_switch_over_limiter_max, true},
     {&LimitPolicy::cam_switch_hysteresis_min_rpm, &LimitPolicy::cam_switch_hysteresis_max_rpm, true},
     {&LimitPolicy::gearbox_rating_over_limiting, &LimitPolicy::gearbox_rating_over_exceeded, true},
+    {&LimitPolicy::hitch_near_share, &LimitPolicy::hitch_limiting_share, true},
+    {&LimitPolicy::hitch_limiting_share, &LimitPolicy::hitch_exceeded_share, true},
 };
 inline constexpr std::size_t kOrderCount = sizeof(kOrders) / sizeof(kOrders[0]);
 

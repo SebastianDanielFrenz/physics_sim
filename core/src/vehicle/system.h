@@ -13,6 +13,7 @@
 #include "ps/io/surface_table.h"
 #include "ps/jobs/job_system.h"
 #include "ps/machine/coupling.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/ids.h"
 
@@ -22,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -63,6 +65,12 @@ public:
     HitchId attach(const machine::CouplingDesc& desc, IRigidBackend& backend, real substep_rate_hz); // std::invalid_argument
     void detach(HitchId id, IRigidBackend& backend);
     void set_tow_brake_channel(HitchId id, std::size_t channel_index) { couplings_[id.index].brake_channel = channel_index; }
+    // The coupling two named hitch points make; `problem` says why they do not mate, and then the desc means nothing.
+    [[nodiscard]] machine::CouplingDesc mate_points(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point,
+                                                    std::string& problem) const;
+    [[nodiscard]] machine::HitchLoads hitch_loads(HitchId id, const IRigidBackend& backend) const;
+    // The towing point a live coupling sits on; nullptr for one built by hand.
+    [[nodiscard]] const machine::HitchPointDesc* towing_point(HitchId id) const;
     [[nodiscard]] bool contains(HitchId id) const { return id.index < couplings_.size() && couplings_[id.index].alive && couplings_[id.index].generation == id.generation; }
     [[nodiscard]] bool chassis_is_coupled(BodyId chassis) const;
     void set_coupling_passes(int passes) { coupling_passes_ = passes; }

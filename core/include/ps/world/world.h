@@ -17,6 +17,7 @@
 #include "ps/jobs/task_graph.h"
 #include "ps/io/surface_table.h"
 #include "ps/machine/coupling.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -321,6 +322,14 @@ public:
     // a caller can ask without catching. A refused attach throws std::invalid_argument with the same message.
     [[nodiscard]] machine::AttachCheck check_attach(const machine::CouplingDesc& desc) const;
     HitchId attach(const machine::CouplingDesc& desc);
+    // The same by the names in the vehicles' hitch_points lists: one towing point, one towed point of the same class,
+    // the towing point's class file decides the hitch. A point takes one hitch at a time.
+    [[nodiscard]] machine::AttachCheck check_attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) const;
+    HitchId attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point);
+    // What a live hitch carries, and the findings against its towing point's ratings (none on a hitch built by hand).
+    // Tongue load comes from the last tick; std::invalid_argument for a dead hitch.
+    [[nodiscard]] machine::HitchLoads hitch_loads(HitchId id) const;
+    [[nodiscard]] std::vector<drivetrain::LimitFinding> hitch_limits(HitchId id, const drivetrain::LimitPolicy* policy = nullptr) const;
     void detach(HitchId id);
     [[nodiscard]] bool hitch_alive(HitchId id) const;
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;

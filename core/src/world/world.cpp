@@ -726,6 +726,34 @@ HitchId World::attach(const machine::CouplingDesc& desc) {
     return id;
 }
 
+machine::AttachCheck World::check_attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) const {
+    std::string problem;
+    const machine::CouplingDesc desc = vehicle_system_->mate_points(towing, towing_point, towed, towed_point, problem);
+    if (problem.empty()) return check_attach(desc);
+    machine::AttachCheck check;
+    check.message = "attach: " + problem;
+    return check;
+}
+
+HitchId World::attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) {
+    std::string problem;
+    const machine::CouplingDesc desc = vehicle_system_->mate_points(towing, towing_point, towed, towed_point, problem);
+    if (!problem.empty()) throw std::invalid_argument("attach: " + problem);
+    return attach(desc);
+}
+
+machine::HitchLoads World::hitch_loads(HitchId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("hitch_loads: not a live hitch");
+    return vehicle_system_->hitch_loads(id, *backend_);
+}
+
+std::vector<drivetrain::LimitFinding> World::hitch_limits(HitchId id, const drivetrain::LimitPolicy* policy) const {
+    const machine::HitchLoads loads = hitch_loads(id);
+    const machine::HitchPointDesc* point = vehicle_system_->towing_point(id);
+    if (point == nullptr) return {};
+    return machine::check_hitch_limits(*point, loads, policy);
+}
+
 void World::detach(HitchId id) {
     if (in_step_) throw std::logic_error("detach: only between steps");
     vehicle_system_->detach(id, *backend_);

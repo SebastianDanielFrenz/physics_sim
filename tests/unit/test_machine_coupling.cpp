@@ -13,11 +13,14 @@
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
 #include "ps/machine/coupling.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/world.h"
 #include "vehicle_test_helpers.h"
 
 #include "machine/coupling_solver.h"
+
+#include <nlohmann/json.hpp>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -34,6 +37,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -79,6 +83,7 @@ struct Cfg {
     bool drawbar_overlap = false; // the trailer's drawbar runs under the towing car, an extra axle stands right below it
     std::optional<machine::TowBrakeDesc> tow_brake;
     std::string scope_a, scope_b; // channel scopes
+    bool tipper = false;          // tractor and tipper from their files, coupled at the points they name
     bool trailer_first = false;   // create the trailer before the towing vehicle
 };
 
@@ -195,6 +200,11 @@ const vehicle::VehicleDesc& tractor_desc() {
     return d;
 }
 
+const vehicle::VehicleDesc& tipper_desc() {
+    static const vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/trailer_tipper.json");
+    return d;
+}
+
 machine::CouplingDesc link_desc(const Rig& r) {
     machine::CouplingDesc d;
     d.towing = r.va;
@@ -208,7 +218,8 @@ machine::CouplingDesc link_desc(const Rig& r) {
 }
 
 void add_link(Rig& r) {
-    if (r.cfg.method == Method::Spring) r.coupling = r.world->attach(link_desc(r));
+    if (r.cfg.method != Method::Spring) return;
+    r.coupling = r.cfg.tipper ? r.world->attach(r.va, "socket_hitch", r.vb, "socket_hitch_eye") : r.world->attach(link_desc(r));
 }
 
 // Towing vehicle at (x0, 0) facing +x, trailer behind it with the two sockets level and coincident.
@@ -262,6 +273,13 @@ Rig build_rig(const Cfg& cfg, real x0 = 0.0) {
     r.socket_b = trailer.socket;
     const real height_a = cfg.tractor ? 1.28 : 0.6;
     r.socket_b.z = height_a + r.socket_a.z - trailer.origin_height;
+    if (cfg.tipper) {
+        trailer.desc = tipper_desc();
+        trailer.half_extents = Vec3{2.5, 0.5, 0.3};
+        trailer.origin_height = 1.1;
+        r.socket_a = machine::find_hitch_point(towing.hitch_points, "socket_hitch")->position_local;
+        r.socket_b = machine::find_hitch_point(trailer.desc.hitch_points, "socket_hitch_eye")->position_local;
+    }
 
     BodyDesc a;
     a.shape = BoxShape{cfg.tractor ? Vec3{1.2, 0.35, 0.9} : Vec3{2.0, 0.4, 0.15}};
@@ -277,7 +295,7 @@ Rig build_rig(const Cfg& cfg, real x0 = 0.0) {
     b.pose.position = Vec3{x0 + r.socket_a.x - r.socket_b.x, 0.0, trailer.origin_height};
     r.b = r.world->create_body(b);
 
-    trailer.desc.tow_brake = cfg.tow_brake;
+    if (!cfg.tipper) trailer.desc.tow_brake = cfg.tow_brake;
     if (cfg.trailer_first) r.vb = r.world->create_vehicle(trailer.desc, r.b, {}, cfg.scope_b);
     r.va = r.world->create_vehicle(towing, r.a, {}, cfg.scope_a);
     if (!cfg.trailer_first) r.vb = r.world->create_vehicle(trailer.desc, r.b, {}, cfg.scope_b);
@@ -1809,6 +1827,240 @@ TEST_CASE("Coupling: a tow brake is worker-count independent", "[machine][vehicl
     };
     CHECK(hashes(1, channel_link()) == hashes(10, channel_link()));
     CHECK(hashes(1, overrun()) == hashes(10, overrun()));
+}
+
+TEST_CASE("Coupling: a tractor tows the tipper from the sockets their files name", "[machine][vehicle]") {
+    Cfg c;
+    c.tractor = true;
+    c.tipper = true;
+    c.trailer_mass = 14000.0;
+    Rig r = build_rig(c, -700.0);
+    settle(r, 3.0);
+    const machine::HitchLoads rest = r.world->hitch_loads(r.coupling);
+    // 0.45 m ahead of the bogie, 4.95 m from it to the eye, if the pin stood where the trailer's own wheels hold the eye.
+    // It stands lower, the tractor's rear settles under the load, and the eye and two axles share it three ways: the lever
+    // is an upper bound. What must hold exactly is the sum.
+    const real lever_tongue = 14000.0 * 9.81 * 0.45 / 4.95;
+    real wheels = 0.0;
+    for (std::size_t i = 0; i < r.world->vehicle_wheel_count(r.vb); ++i) wheels += r.world->wheel_telemetry(r.vb, i).fz;
+    std::printf("tipper at rest: %.0f N on the pin (%.0f N by the lever), %.0f N on the wheels, %.0f N weight, %.3f mm\n", rest.tongue_load_n, lever_tongue, wheels, 14000.0 * 9.81,
+                hitch_error(r).length() * 1e3);
+    CHECK(rest.towed_mass_kg == Catch::Approx(14000.0));
+    CHECK(rest.tongue_load_n + wheels == Catch::Approx(14000.0 * 9.81).epsilon(0.005));
+    CHECK(rest.tongue_load_n > 0.7 * lever_tongue);
+    CHECK(rest.tongue_load_n < lever_tongue);
+    CHECK(hitch_error(r).length() < 1e-3);
+
+    // Weaving at 8 m/s, then a stop on the tractor's pedal alone: the file's air line brakes the trailer.
+    launch(r, 8.0);
+    const Metrics weave = run(r, 6.0, [](World& w, real t) { w.set_control("steer", 0.1 * std::sin(2.0 * kPi * t / 3.0)); });
+    const real speed = r.world->get_motion(r.a).linear.length();
+    r.world->set_control("steer", 0.0);
+    r.world->set_control("brake", 0.6);
+    const Metrics stop = run(r, 3.0, {});
+    std::printf("tipper weave at %.2f m/s: %.3f mm, %.1f kN, %.1f deg; stop: %.2f m/s left, %.3f mm, %.1f kN, line %.2f\n", speed, weave.err_max_mm, weave.force_peak_n / 1e3,
+                weave.artic_max_deg, r.world->get_motion(r.a).linear.length(), stop.err_max_mm, stop.force_peak_n / 1e3, r.world->coupling_state(r.coupling).tow_brake);
+    CHECK(weave.finite);
+    CHECK(speed > 5.0);
+    CHECK(weave.artic_max_deg > 2.0);
+    CHECK(weave.err_max_mm < 2.0);
+    CHECK(stop.err_max_mm < 2.0);
+    CHECK(r.world->coupling_state(r.coupling).tow_brake > 0.5);
+    CHECK(r.world->get_motion(r.a).linear.length() < 0.5 * speed);
+}
+
+TEST_CASE("Coupling: hitch points mate by role and class, one hitch at a time", "[machine][vehicle]") {
+    using Catch::Matchers::ContainsSubstring;
+    Cfg c;
+    c.tractor = true;
+    c.tipper = true;
+    c.trailer_mass = 14000.0;
+    c.method = Method::None;
+    Rig r = build_rig(c);
+
+    const auto refused = [&r](VehicleId a, const char* pa, VehicleId b, const char* pb) { return r.world->check_attach(a, pa, b, pb).message; };
+    CHECK_THAT(refused(r.va, "nothing", r.vb, "socket_hitch_eye"), ContainsSubstring("no hitch point 'nothing'"));
+    CHECK_THAT(refused(r.va, "socket_hitch", r.vb, "nothing"), ContainsSubstring("no hitch point 'nothing'"));
+    CHECK_THAT(refused(r.vb, "socket_hitch_eye", r.va, "socket_hitch"), ContainsSubstring("is not a towing point"));
+    CHECK_THAT(refused(r.va, "socket_hitch", r.va, "socket_3pt"), ContainsSubstring("is not a towed point"));
+    CHECK_THAT(refused(r.va, "socket_3pt", r.vb, "socket_hitch_eye"), ContainsSubstring("takes class 'three_point_locked'"));
+    CHECK_THAT(refused(VehicleId{9, 1}, "socket_hitch", r.vb, "socket_hitch_eye"), ContainsSubstring("unknown vehicle"));
+    CHECK_THROWS_WITH(r.world->attach(r.va, "socket_3pt", r.vb, "socket_hitch_eye"), ContainsSubstring("takes class"));
+
+    REQUIRE(r.world->check_attach(r.va, "socket_hitch", r.vb, "socket_hitch_eye").ok);
+    const HitchId id = r.world->attach(r.va, "socket_hitch", r.vb, "socket_hitch_eye");
+
+    // A second trailer on the same pin: the point is taken whatever the socket error would say.
+    TrailerGeometry second = make_trailer(car_desc(), 1500.0, false);
+    machine::HitchPointDesc eye = tipper_desc().hitch_points[0];
+    eye.position_local = second.socket;
+    second.desc.hitch_points.push_back(eye);
+    BodyDesc body;
+    body.shape = BoxShape{second.half_extents};
+    body.mass = 1500.0;
+    body.pose.position = Vec3{-30.0, 0.0, 1.0};
+    const VehicleId third = r.world->create_vehicle(second.desc, r.world->create_body(body));
+    CHECK_THAT(r.world->check_attach(r.va, "socket_hitch", third, "socket_hitch_eye").message, ContainsSubstring("'socket_hitch' of vehicle 0 is in use"));
+
+    // Free again once it is detached: what stands in the way then is only the distance.
+    r.world->detach(id);
+    CHECK_THAT(r.world->check_attach(r.va, "socket_hitch", third, "socket_hitch_eye").message, ContainsSubstring("apart"));
+}
+
+TEST_CASE("Coupling: hitch point data is read and checked", "[machine][vehicle]") {
+    using Catch::Matchers::ContainsSubstring;
+    const std::vector<machine::HitchPointDesc>& points = tractor_desc().hitch_points;
+    const machine::HitchPointDesc* three = machine::find_hitch_point(points, "socket_3pt");
+    REQUIRE(three != nullptr);
+    CHECK(three->hitch.name == "three_point_locked");
+    CHECK(three->role == machine::HitchRole::Towing);
+    CHECK(three->rig_sockets == std::vector<std::string>{"socket_3pt_L", "socket_3pt_R", "socket_3pt_top"});
+    CHECK(three->position_local.x == Catch::Approx((-2.12 - 2.04 - 2.04) / 3.0));
+    CHECK(three->position_local.y == Catch::Approx(0.0).margin(1e-12));
+    CHECK(three->position_local.z == Catch::Approx((-0.04 - 0.68 - 0.68) / 3.0));
+    REQUIRE(tipper_desc().tow_brake.has_value());
+    CHECK(tipper_desc().tow_brake->kind == machine::TowBrakeKind::Channel);
+    CHECK(tipper_desc().tow_brake->lag_s == 0.4);
+
+    // The file's positions are the rig's: chassis origin from the front wheel, whose static compression the file's
+    // spring and 35 % of 6000 kg give.
+    const auto rig = [](const char* model) {
+        std::ifstream f(std::string(PS_SOURCE_DIR) + "/data/models/" + model);
+        return nlohmann::json::parse(f);
+    };
+    const nlohmann::json tractor = rig("tractor/tractor.rig.json");
+    const vehicle::WheelDesc& fl = tractor_desc().wheels[0];
+    Vec3 pivot;
+    for (const auto& n : tractor.at("nodes")) {
+        if (n.at("name") == "wheel_FL") pivot = Vec3{n.at("pivot")[0].get<real>(), n.at("pivot")[1].get<real>(), n.at("pivot")[2].get<real>()};
+    }
+    const real compression = 0.35 * 6000.0 * 9.81 / 2.0 / fl.suspension.spring_rate;
+    const Vec3 origin = pivot - fl.attachment_local - Vec3{0.0, 0.0, compression};
+    const auto in_rig = [](const nlohmann::json& file, const std::string& name) {
+        for (const auto& s : file.at("sockets")) {
+            if (s.at("name") == name) return Vec3{s.at("position")[0].get<real>(), s.at("position")[1].get<real>(), s.at("position")[2].get<real>()};
+        }
+        FAIL("no socket " << name);
+        return Vec3{};
+    };
+    const auto near = [](const Vec3& a, const Vec3& b) { return (a - b).length() < 2e-3; };
+    const machine::HitchPointDesc* pin = machine::find_hitch_point(points, "socket_hitch");
+    REQUIRE(pin != nullptr);
+    CHECK(near(pin->position_local + origin, in_rig(tractor, "socket_hitch")));
+    Vec3 mean{};
+    for (const std::string& s : three->rig_sockets) mean += in_rig(tractor, s) * (1.0 / 3.0);
+    CHECK(near(three->position_local + origin, mean));
+    const nlohmann::json tipper = rig("trailer_tipper/trailer_tipper.rig.json");
+    CHECK(near(tipper_desc().hitch_points[0].position_local + Vec3{0.45, 0.0, 1.1}, in_rig(tipper, "socket_hitch_eye")));
+
+    // Rejections, on a copy of the fixture in its own folder so the relative paths still hold.
+    const std::string dir = std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/";
+    std::ifstream source(dir + "trailer_tipper.json");
+    const nlohmann::json good = nlohmann::json::parse(source);
+    const std::string path = (std::filesystem::temp_directory_path() / ("ps_hitch_points_" + std::to_string(std::random_device{}()) + ".json")).string();
+    const auto load_with = [&](const std::function<void(nlohmann::json&)>& change) {
+        nlohmann::json j = good;
+        for (auto& w : j["wheels"]) w["tyre"] = dir + w["tyre"].get<std::string>();
+        for (auto& p : j["hitch_points"]) p["class"] = dir + p["class"].get<std::string>();
+        change(j);
+        std::ofstream(path) << j.dump();
+        (void)io::load_vehicle_json(path);
+    };
+    const auto rejects = [&](const std::function<void(nlohmann::json&)>& change, const char* text) {
+        CHECK_THROWS_WITH(load_with(change), ContainsSubstring(text));
+    };
+    CHECK_NOTHROW(load_with([](nlohmann::json&) {}));
+    rejects([](nlohmann::json& j) { j["hitch_points"][0]["role"] = "pushed"; }, "'role' must be");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0].erase("position"); }, "exactly one");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0]["sockets"] = {{"a", {0, 0, 0}}, {"b", {0, 0, 0}}}; }, "exactly one");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0].erase("position"); j["hitch_points"][0]["sockets"] = {{"a", {0, 0, 0}}}; }, "at least two");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0]["max_towed_mass_kg"] = 100.0; }, "only a towing point");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0]["wrong"] = 1; }, "unknown field 'wrong'");
+    rejects([](nlohmann::json& j) { j["hitch_points"].push_back(j["hitch_points"][0]); }, "listed twice");
+    rejects([](nlohmann::json& j) { j["hitch_points"][0].erase("class"); }, "'class' must be");
+    rejects([](nlohmann::json& j) { j["tow_brake"]["kind"] = "magnetic"; }, "'kind' must be");
+    rejects([](nlohmann::json& j) { j["tow_brake"]["deadband_n"] = 1.0; }, "unknown field 'deadband_n'");
+    rejects([](nlohmann::json& j) { j["tow_brake"] = {{"kind", "overrun"}, {"gain", 1.0}}; }, "unknown field 'gain'");
+    rejects([](nlohmann::json& j) { j["tow_brake"]["gain"] = 0.0; }, "gain");
+    rejects([](nlohmann::json& j) { j.erase("brake_system"); }, "brake_system");
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("Coupling: a towing point's ratings are limit findings", "[machine][vehicle]") {
+    using drivetrain::LimitFinding;
+    using drivetrain::LimitKind;
+    using drivetrain::LimitSeverity;
+    machine::HitchPointDesc point;
+    point.name = "socket_hitch";
+    point.max_towed_mass_kg = 10000.0;
+    point.max_tongue_load_n = 20000.0;
+    const auto grade = [&point](real mass, real tongue) { return machine::check_hitch_limits(point, machine::HitchLoads{mass, tongue}); };
+    CHECK(grade(8999.0, 17999.0).empty());
+    for (const auto& [share, severity] : std::vector<std::pair<real, LimitSeverity>>{{0.95, LimitSeverity::Near}, {1.1, LimitSeverity::Limiting}, {1.2, LimitSeverity::Exceeded}}) {
+        const std::vector<LimitFinding> f = grade(share * 10000.0, share * 20000.0);
+        REQUIRE(f.size() == 2);
+        CHECK(f[0].kind == LimitKind::TowedMass);
+        CHECK(f[0].severity == severity);
+        CHECK(f[0].value == Catch::Approx(share * 10000.0));
+        CHECK(f[0].limit == 10000.0);
+        CHECK(f[0].unit == drivetrain::LimitUnit::Kilogram);
+        CHECK(f[0].part.slot == "socket_hitch");
+        CHECK(f[0].part.field == "max_towed_mass_kg");
+        CHECK(f[1].kind == LimitKind::TongueLoad);
+        CHECK(f[1].severity == severity);
+        CHECK(f[1].unit == drivetrain::LimitUnit::Newton);
+    }
+    CHECK(std::string(drivetrain::to_string(LimitKind::TowedMass)) == "TowedMass");
+    CHECK(std::string(drivetrain::to_string(LimitKind::TongueLoad)) == "TongueLoad");
+    CHECK(std::string(drivetrain::to_string(drivetrain::LimitUnit::Newton)) == "N");
+    // Not rated, not graded.
+    point.max_towed_mass_kg = 0.0;
+    point.max_tongue_load_n = 0.0;
+    CHECK(grade(1e9, 1e9).empty());
+
+    // Live: the file's 14 t against a 14 t tipper, then a hitch built by hand has no rating to read, then a chain.
+    Cfg c;
+    c.tractor = true;
+    c.tipper = true;
+    c.trailer_mass = 14000.0;
+    Rig r = build_rig(c, -700.0);
+    settle(r, 2.0);
+    std::vector<LimitFinding> live = r.world->hitch_limits(r.coupling);
+    REQUIRE(live.size() == 1);
+    CHECK(live[0].kind == LimitKind::TowedMass);
+    CHECK(live[0].severity == LimitSeverity::Near);
+    CHECK(live[0].value == Catch::Approx(14000.0));
+    drivetrain::LimitPolicy strict = drivetrain::default_limit_policy();
+    strict.hitch_near_share = 0.1;
+    strict.hitch_limiting_share = 0.2;
+    strict.hitch_exceeded_share = 0.3;
+    live = r.world->hitch_limits(r.coupling, &strict);
+    REQUIRE(live.size() == 2);
+    CHECK(live[0].severity == LimitSeverity::Exceeded);
+    CHECK(live[1].kind == LimitKind::TongueLoad);
+    CHECK(live[1].value == Catch::Approx(r.world->hitch_loads(r.coupling).tongue_load_n));
+
+    // A hitch on the tipper's tail behind which hangs a car trailer counts on the tractor's pin too.
+    TrailerGeometry second = make_trailer(car_desc(), 1500.0, false);
+    BodyDesc body;
+    body.shape = BoxShape{second.half_extents};
+    body.mass = 1500.0;
+    const Pose tipper = r.world->get_pose(r.b);
+    body.pose.position = tipper.transform_point(Vec3{-3.0, 0.0, -0.6}) - second.socket;
+    const VehicleId rear = r.world->create_vehicle(second.desc, r.world->create_body(body));
+    machine::CouplingDesc tail;
+    tail.towing = r.vb;
+    tail.towed = rear;
+    tail.socket_towing_local = Vec3{-3.0, 0.0, -0.6};
+    tail.socket_towed_local = second.socket;
+    tail.hitch = free_hitch();
+    const HitchId tail_id = r.world->attach(tail);
+    CHECK(r.world->hitch_loads(r.coupling).towed_mass_kg == Catch::Approx(15500.0));
+    CHECK(r.world->hitch_loads(tail_id).towed_mass_kg == Catch::Approx(1500.0));
+    CHECK(r.world->hitch_limits(tail_id).empty());
+    r.world->detach(r.coupling);
+    CHECK_THROWS_AS(r.world->hitch_loads(r.coupling), std::invalid_argument);
+    CHECK_THROWS_AS(r.world->hitch_limits(r.coupling), std::invalid_argument);
 }
 
 TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {
