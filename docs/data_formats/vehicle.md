@@ -30,6 +30,8 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `wheels` | array of [wheel objects](#wheel) | **required** | — | must exist, be an array, and be non-empty, else `"vehicle <path> has no 'wheels' array"` | one entry per wheel |
 | `steering` | [steering object](#steering) | optional | all fields at their own defaults | see below | Ackermann steering geometry |
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
+| `tow_brake` | [tow_brake object](#tow-brake) | optional | none | needs `brake_system` corners | what drives this vehicle's brakes while it is towed |
+| `hitch_points` | array of [hitch point objects](#hitch-points) | optional | none | see below | where hitches go on this vehicle |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
 | `controllers` | array of [controller objects](#controllers) | optional | empty | at most one `manual_tcu` or `automatic_tcu` entry (else `"vehicle '<name>': at most one controller (manual_tcu or automatic_tcu) is supported"`); `electronics` entries are additional and are not counted by that cap | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
@@ -1079,7 +1081,8 @@ at vehicle-creation time (`core/src/world/world.cpp`) — `"steer"`,
 `"throttle"`, `"brake"`, `"handbrake"`, `"clutch"`, `"shift_up_count"`,
 `"shift_down_count"`, `"gear_request"`, `"ignition"`, `"starter"`,
 `"assist.auto_clutch"`, `"assist.auto_blip"`, `"assist.auto_shift"`, `"assist.traction_control"`. The
-first vehicle created in a `World` reads the bare names; every subsequent
+first vehicle created in a `World` reads the bare names, unless `create_vehicle` was given a `channel_scope`, which makes
+them `"<scope>.<name>"`, and `World::vehicle_channel(id, name)` returns the full name either way; every subsequent
 vehicle reads a `"v<index>."`-prefixed version (e.g. `"v1.steer"`).
 The three `assist.auto_*` channels (> 0.5 means on) are the runtime on/off
 switches for the `manual_tcu` driver aids; each one's value when the
@@ -1150,6 +1153,52 @@ PHYS-033 P4 I7a C6: a vehicle with a `fuel_tank` adds
 `vehicle<i>.fuel.{flow_g_s,energy_in,heat}` channels. A vehicle without a
 tank registers no such channel, so every shipped vehicle's CSV header is
 unchanged.
+
+## Hitch points
+
+`ps::machine::HitchPointDesc`, top-level `"hitch_points"`. A hitch's frames and sockets for `World::attach(towing, "socket_hitch",
+towed, "socket_hitch_eye")`: two points mate when one tows, the other is towed and both name the same class
+([hitch.md](hitch.md)). The towing point's class file decides the hitch. Unknown keys are rejected.
+
+| Field | Type | Req./opt. | Default | Validation | Meaning |
+|---|---|---|---|---|---|
+| `name` | string | required | — | unique in the list | the socket's name in the vehicle's rig (`data/models/*/*.rig.json`) |
+| `class` | string | required | — | a `physics_sim.hitch_class/1` file, relative to this file | the class it takes |
+| `role` | string | required | — | `"towing"` or `"towed"` | which side of a hitch it is |
+| `position` | `[x, y, z]` | one of the two | — | exactly one of `position`, `sockets` | chassis-local, like a wheel's `attachment_local`. The rig's position, moved to the chassis origin |
+| `sockets` | object name -> `[x, y, z]` | one of the two | — | at least two | a linkage standing on several rig sockets; the point sits at their centroid |
+| `max_towed_mass_kg` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
+| `max_tongue_load_n` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
+
+A point takes one hitch at a time. The ratings never refuse a hitch: `World::hitch_limits(id, policy)` returns `TowedMass` and
+`TongueLoad` limit findings against them, the whole chain behind the hitch in the mass and last tick's vertical socket force in the
+load; `ps::machine::check_hitch_limits` does the same for loads you bring yourself, before anything is attached. The grades are
+`hitch_near_share`, `hitch_limiting_share` and `hitch_exceeded_share` of [limit_policy.md](limit_policy.md).
+
+```json
+"hitch_points": [
+  { "name": "socket_hitch", "class": "../hitch_classes/drawbar_pin.json", "role": "towing", "position": [-2.03, 0.0, -0.78],
+    "max_towed_mass_kg": 14000.0, "max_tongue_load_n": 20000.0 },
+  { "name": "socket_3pt", "class": "../hitch_classes/three_point_locked.json", "role": "towing",
+    "sockets": { "socket_3pt_top": [-2.12, 0.0, -0.04], "socket_3pt_L": [-2.04, 0.5, -0.68], "socket_3pt_R": [-2.04, -0.5, -0.68] } }
+]
+```
+
+## Tow brake
+
+`ps::machine::TowBrakeDesc`, top-level `"tow_brake"`. A trailer has no driver, and a heavy one without brakes pushes the tow
+vehicle round. The block says what presses the brakes while the vehicle is towed; the demand adds to its own `brake` channel as a
+second driver would, the larger of the two wins. It ends with the hitch: a detached trailer has no breakaway brake.
+
+| Field | Kind | Default | Validation | Meaning |
+|---|---|---|---|---|
+| `kind` | both | — | `"channel"` or `"overrun"` | |
+| `lag_s` | both | 0.25 | >= 0 | first-order lag: a line filling, an overrun damper stroking |
+| `channel` | channel | `"brake"` | not empty | a channel of the towing vehicle, read in that vehicle's scope. A towing vehicle that is itself towed passes its own demand on |
+| `gain` | channel | 1 | > 0 | demand per unit of channel |
+| `deadband_n` | overrun | 300 | >= 0 | hitch compression that does nothing yet |
+| `full_force_n` | overrun | 6000 | above `deadband_n` | hitch compression of full braking |
+| `reverse_release_speed_m_s` | overrun | 0.5 | >= 0 | reversing faster than this lets go, as a real coupling's reverse latch does |
 
 ## Contents mass
 

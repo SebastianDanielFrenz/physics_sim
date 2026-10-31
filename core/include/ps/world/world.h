@@ -502,7 +502,7 @@ public:
     [[nodiscard]] const jobs::TaskGraph& pipeline() const { return *pipeline_; }
 
 private:
-    // Contents mass, one entry per vehicle (index == VehicleId.index; vehicles are never destroyed).
+    // Contents mass, one entry per vehicle (index == VehicleId.index; a destroyed vehicle keeps its slot).
     struct ContentsMassState {
         bool enabled = false;
         BodyId chassis{};

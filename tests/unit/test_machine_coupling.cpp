@@ -111,7 +111,7 @@ TrailerGeometry make_trailer(const vehicle::VehicleDesc& car, real mass, bool br
     const real c = 0.4 * std::sqrt(k * wheel_load / 9.81);
 
     g.desc.name = "trailer";
-    g.desc.source = "spike A0 fixture";
+    g.desc.source = "coupling test fixture";
     int axle_index = 0;
     for (const real x : axles) {
         for (const real side : {1.0, -1.0}) {
@@ -768,7 +768,7 @@ PendulumResult scenario_pendulum(const Cfg& c, real seconds = 60.0) {
 
     vehicle::VehicleDesc empty;
     empty.name = "shell";
-    empty.source = "spike A0 fixture";
+    empty.source = "coupling test fixture";
     r.va = r.world->create_vehicle(empty, r.a);
     r.vb = r.world->create_vehicle(empty, r.b);
     add_link(r);
@@ -2143,22 +2143,33 @@ TEST_CASE("Coupling: a coupled pair is worker-count independent and allocates no
     CHECK(hashes(1) == hashes(10));
 
     if (!jobs::debug_alloc::hook_available()) return;
-    Cfg c;
-    Rig r = build_rig(c, -700.0);
-    settle(r, 0.5);
-    launch(r, k100KmH);
-    ps_test::settle(*r.world, 0.5);
-    // The ticks below run with a latch ramping in.
-    r.world->detach(r.coupling);
-    r.coupling = r.world->attach(link_desc(r));
-    jobs::debug_alloc::reset();
-    jobs::debug_alloc::set_armed(true);
-    for (int i = 0; i < 240; ++i) {
-        r.world->set_control("steer", 0.03 * std::sin(2.0 * kPi * static_cast<real>(i) / 240.0));
-        r.world->step();
-    }
-    jobs::debug_alloc::set_armed(false);
-    CHECK(jobs::debug_alloc::own_violation_count() == 0);
+    const auto own_allocations = [](std::optional<machine::TowBrakeDesc> link, bool chain) {
+        Cfg c;
+        c.trailer_brakes = link.has_value();
+        c.tow_brake = link;
+        Rig r = chain ? build_chain(c, -700.0) : build_rig(c, -700.0);
+        settle(r, 0.5);
+        if (!chain) {
+            launch(r, k100KmH);
+            ps_test::settle(*r.world, 0.5);
+            // The ticks below run with a latch ramping in.
+            r.world->detach(r.coupling);
+            r.coupling = r.world->attach(link_desc(r));
+        }
+        jobs::debug_alloc::reset();
+        jobs::debug_alloc::set_armed(true);
+        for (int i = 0; i < 240; ++i) {
+            r.world->set_control("steer", 0.03 * std::sin(2.0 * kPi * static_cast<real>(i) / 240.0));
+            r.world->set_control("brake", 0.5);
+            r.world->step();
+        }
+        jobs::debug_alloc::set_armed(false);
+        return jobs::debug_alloc::own_violation_count();
+    };
+    CHECK(own_allocations({}, false) == 0);
+    CHECK(own_allocations(channel_link(), false) == 0);
+    CHECK(own_allocations(overrun(), false) == 0);
+    CHECK(own_allocations(channel_link(), true) == 0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

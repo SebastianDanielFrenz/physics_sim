@@ -931,7 +931,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // every wheel by its vehicle index and the wheel's own name (e.g.
     // "vehicle0.front_left.slip_ratio") before the first step() records a
     // row - VehicleId.index doubles as wheel_telemetry_channels_'s outer
-    // index (vehicles are never destroyed, same invariant
+    // index (a destroyed vehicle keeps its slot, same invariant
     // articulation_contacts_ relies on above).
     if (wheel_telemetry_channels_.size() <= id.index) wheel_telemetry_channels_.resize(id.index + 1);
     std::vector<WheelTelemetryChannels>& channels = wheel_telemetry_channels_[id.index];

@@ -324,7 +324,6 @@ public:
     // scenario's between-forces hook, or a test's set_motion).
     [[nodiscard]] real shadow_dv_error() const { return shadow_dv_error_; }
     [[nodiscard]] real shadow_dw_error() const { return shadow_dw_error_; }
-    // Diagnostic (attachment spike A0): the shadow's pose at the end of the last tick.
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value, control_indices_.
