@@ -10,12 +10,14 @@
 #pragma once
 
 #include "ps/machine/hitch_class.h"
+#include "ps/machine/linkage.h"
 #include "ps/math/quat.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
 #include "ps/world/ids.h"
 
 #include <array>
+#include <optional>
 #include <string>
 
 namespace ps::machine {
@@ -31,6 +33,10 @@ struct CouplingDesc {
     HitchClassDesc hitch;
     // The vehicles' hitch points this coupling sits on (World::attach by name fills them); empty for one built by hand.
     std::string towing_point, towed_point;
+    // A three-point linkage instead of the socket rows: the pins move on the links and the lift holds them. The class
+    // still gives the frequency, the latch and the yaw and roll modes; pitch is the linkage's.
+    std::optional<LinkageGeometry> linkage;
+    LinkageDesc linkage_lift; // read only with `linkage`
 };
 
 // What the hitch would see if it latched now.
@@ -42,6 +48,12 @@ struct AttachCheck {
     std::string message;  // why not, with the measured and allowed values; empty when ok
 };
 
+// Whether a PTO shaft would go on.
+struct PtoCheck {
+    bool ok = false;
+    std::string message; // why not; empty when ok
+};
+
 // Last tick's outcome (sim thread only, unhashed: everything in it is derived).
 struct CouplingState {
     Vec3 mean_force_on_towing_world{};
@@ -51,6 +63,7 @@ struct CouplingState {
     real work_j = 0.0;      // cumulative work the coupling did on the relative motion (negative = removed energy)
     real latch_progress = 1.0; // 0 at attach, 1 once the rows hold the sockets themselves
     real tow_brake = 0.0;      // the towed vehicle's brake demand through this hitch, 0..1
+    LinkageState linkage;      // only on a hitch with a linkage
 };
 
 } // namespace ps::machine

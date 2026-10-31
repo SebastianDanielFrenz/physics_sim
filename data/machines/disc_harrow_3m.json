@@ -1,0 +1,69 @@
+{
+  "format": "physics_sim.machine/1",
+  "name": "disc_harrow_3m",
+  "source": "A tandem disc harrow. Its width comes from the model's two work sockets, its mass from the vehicle.",
+  "tools": [
+    {
+      "name": "discs",
+      "operation": "stubble_cultivator",
+      "edge_left": "socket_work_L",
+      "edge_right": "socket_work_R",
+      "range": {
+        "source": "[AS] D497's field speed table was not found; these are the usual working figures for the machine class.",
+        "depth_min_m": 0.04,
+        "depth_nominal_m": 0.08,
+        "depth_max_m": 0.12,
+        "speed_min_km_h": 6.0,
+        "speed_max_km_h": 12.0,
+        "overspeed_quality_per_km_h": 0.08,
+        "quality_floor": 0.4
+      },
+      "draft": {
+        "source": "[AS] Draft form of ASABE D497 with the coefficients of the University of Arizona Extension table (ag.arizona.edu/crop/equipment/agmgttable1.pdf), which reproduces D497 in SI units. Tagged [AS] because neither was read: D497 is paywalled and that PDF was only seen as search-engine extracts, so the digits are one remove from any primary source. Row tandem disk harrow: N per metre per cm, primary and secondary tillage. moisture_factor, compaction_gain, lateral_ratio and creep_speed_m_s are assumptions: the literature found disagrees even on the sign of the moisture effect, so the curve only raises draft above field capacity. ",
+        "width_unit": "metre",
+        "depth_term": true,
+        "primary": {
+          "a": 309.0,
+          "b": 16.0,
+          "c": 0.0
+        },
+        "secondary": {
+          "a": 216.0,
+          "b": 11.2,
+          "c": 0.0
+        },
+        "texture_factor": {
+          "fine": 1.0,
+          "medium": 0.88,
+          "coarse": 0.78
+        },
+        "moisture_factor": {
+          "wetness": [
+            0.0,
+            0.8,
+            1.0,
+            1.3
+          ],
+          "factor": [
+            1.0,
+            1.0,
+            1.15,
+            1.4
+          ]
+        },
+        "compaction_gain": 0.3,
+        "lateral_ratio": 0.5,
+        "creep_speed_m_s": 0.1
+      },
+      "soil": {
+        "source": "[AS] nothing cited: bearing is soft enough that the weight on the edge and the suction take the tool down onto its roller or gauge wheel at the set depth, the roller stiff and the damping high enough to stay stable at 960 Hz; suction is a share of draft.",
+        "suction_ratio": 0.2,
+        "bearing_n_m2": 25000.0,
+        "gauge_n_m2": 1000000.0,
+        "hard_n_m2": 10000000.0,
+        "hard_friction": 0.6,
+        "damping_n_s_m2": 20000.0
+      }
+    }
+  ]
+}
