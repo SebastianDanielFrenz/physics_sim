@@ -430,7 +430,6 @@ public:
     // shadow_dv_error's own comment for what these mean and their one-tick
     // offset.
     [[nodiscard]] real vehicle_shadow_dv_error(VehicleId id) const;
-    [[nodiscard]] Pose vehicle_shadow_end_pose(VehicleId id) const; // diagnostic, attachment spike A0
     [[nodiscard]] real vehicle_shadow_dw_error(VehicleId id) const;
 
     // Registration order is the element's fixed evaluation/gather id

@@ -1064,7 +1064,6 @@ void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
     shadow_end_pred_.linear = twist_s.linear * std::max(real(0.0), real(1.0) - ip.linear_damping * tick_dt);
     shadow_end_pred_.angular = twist_s.angular * std::max(real(0.0), real(1.0) - ip.angular_damping * tick_dt);
     shadow_valid_ = true;
-    shadow_end_pose_ = tw.pose_s;
 
     const real n = static_cast<real>(num_substeps);
     aero_telemetry_.wrench_world={aero_force_sum/n,aero_torque_sum/n};
@@ -1075,6 +1074,13 @@ void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
     aero_telemetry_.downforce_n=aero_telemetry_.front_downforce_n+aero_telemetry_.rear_downforce_n;
     aero_telemetry_.front_balance=std::abs(aero_telemetry_.downforce_n)>1e-9 ? aero_telemetry_.front_downforce_n/aero_telemetry_.downforce_n : real(0);
     backend.apply_wrench(chassis_, Wrench{force_sum / n, torque_sum / n});
+}
+
+void VehicleInstance::align_backend_with_shadow(const VehicleTickWork& tw, IRigidBackend& backend) const {
+    Pose start;
+    start.position = tw.pose_s.position - shadow_end_pred_.linear * tw.tick_dt;
+    start.orientation = integrate_orientation(tw.pose_s.orientation, shadow_end_pred_.angular, -tw.tick_dt);
+    backend.set_pose(chassis_, start);
 }
 
 void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRigidBackend& backend) {

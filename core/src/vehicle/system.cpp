@@ -153,6 +153,13 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
     });
 }
 
+void System::pre_backend_step(IRigidBackend& backend) {
+    for (const Island& island : islands_) {
+        if (island.couplings.empty()) continue;
+        for (const std::size_t i : island.vehicles) instances_[i]->align_backend_with_shadow(tick_work_[i], backend);
+    }
+}
+
 void System::apply_pending_engine_maps_swaps() {
     for (const auto& inst : instances_) inst->apply_pending_engine_maps_swap();
 }

@@ -57,6 +57,10 @@ public:
     [[nodiscard]] bool contains(HitchId id) const { return id.generation == 1 && id.index < couplings_.size(); }
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
 
+    // Called by World right before the backend steps, sequential: see VehicleInstance::align_backend_with_shadow.
+    // Nothing happens to a vehicle outside a coupling.
+    void pre_backend_step(IRigidBackend& backend);
+
     [[nodiscard]] bool empty() const { return instances_.empty(); }
     // PHYS-033 P4 I7c C16b (D9): applies every vehicle's queued engine-maps
     // hot swap and drops the old maps. Called by World::step BEFORE the tick

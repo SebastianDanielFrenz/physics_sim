@@ -274,6 +274,7 @@ void World::stage_contact_coupling_pre() {
         const ArticulationId id{static_cast<id_index_t>(i), 1};
         articulation_contacts_[i]->pre_backend_step(articulation_system_->at(id), *backend_);
     }
+    vehicle_system_->pre_backend_step(*backend_);
 }
 
 void World::stage_contact_coupling_post() {
@@ -1143,10 +1144,6 @@ drivetrain::PowertrainDebug World::powertrain_debug(VehicleId id) const {
 
 void World::reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts) {
     vehicle_system_->at(id).reset(opts, *backend_);
-}
-
-Pose World::vehicle_shadow_end_pose(VehicleId id) const {
-    return vehicle_system_->at(id).shadow_end_pose();
 }
 
 real World::vehicle_shadow_dv_error(VehicleId id) const {

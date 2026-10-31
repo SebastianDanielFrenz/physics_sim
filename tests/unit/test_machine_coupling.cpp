@@ -1,16 +1,11 @@
-// tests/unit/test_machine_coupling.cpp — attachment spike A0: how two vehicles
-// are coupled at a hitch.
+// tests/unit/test_machine_coupling.cpp — two vehicles coupled at a hitch: an
+// implicit socket spring-damper solved per substep with both shadow chassis
+// stepped together in one island (core/src/machine/coupling_solver.h,
+// vehicle::System::step_island). Commit 3a27366 holds the comparison against
+// Jolt constraints this design rests on.
 //
-// Candidate A (Method::Spring): an implicit socket spring-damper solved per
-// substep with both shadow chassis stepped together in one island
-// (core/src/machine/coupling_solver.h, vehicle::System::step_island).
-// Candidate B (Method::JoltPoint, JoltHinge): a Jolt constraint between the two
-// chassis bodies at the tick rate; the wheels of both vehicles never see it
-// inside the tick.
-//
-// The hidden [.][diag] cases print the tables the decision rests on; every
-// number is measured on Jolt's own poses at the tick boundary, the same way for
-// every method. The normal cases pin the recommended method.
+// The hidden [.][diag] cases print measurement tables; every number is measured
+// on Jolt's own poses at the tick boundary. The normal cases pin the behaviour.
 
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/io/surface_table.h"
@@ -41,17 +36,7 @@ namespace {
 constexpr real kPi = 3.14159265358979323846;
 constexpr real k100KmH = 100.0 / 3.6;
 
-enum class Method { None, Spring, JoltPoint, JoltHinge };
-
-const char* method_name(Method m) {
-    switch (m) {
-        case Method::None: return "none";
-        case Method::Spring: return "A spring";
-        case Method::JoltPoint: return "B point";
-        case Method::JoltHinge: return "B hinge";
-    }
-    return "?";
-}
+enum class Method { None, Spring };
 
 struct Cfg {
     Method method = Method::Spring;
@@ -65,7 +50,6 @@ struct Cfg {
     real trailer_mass = 1500.0;
     bool trailer_brakes = false;
     bool tractor = false;
-    bool pose_write_back = false; // spike experiment: after each tick the chassis takes its shadow's end pose
     bool coast_shell = false; // both vehicles lossless: no powertrain, no rolling resistance, no drag, a box ground
 };
 
@@ -178,28 +162,17 @@ const vehicle::VehicleDesc& tractor_desc() {
 
 void add_link(Rig& r) {
     const Cfg& c = r.cfg;
-    if (c.method == Method::Spring) {
-        machine::CouplingDesc d;
-        d.towing = r.va;
-        d.towed = r.vb;
-        d.socket_towing_local = r.socket_a;
-        d.socket_towed_local = r.socket_b;
-        d.frequency_hz = c.frequency_hz;
-        d.damping_ratio = c.damping_ratio;
-        d.stiffness_n_m = c.stiffness;
-        d.damping_n_s_m = c.damping;
-        r.coupling = r.world->create_coupling(d);
-    } else if (c.method == Method::JoltPoint || c.method == Method::JoltHinge) {
-        JointDesc j;
-        j.type = c.method == Method::JoltPoint ? JointType::Point : JointType::Hinge;
-        j.body_a = r.a;
-        j.body_b = r.b;
-        j.anchor_a_local = r.socket_a;
-        j.anchor_b_local = r.socket_b;
-        j.axis_a_local = Vec3::unit_z();
-        j.axis_b_local = Vec3::unit_z();
-        r.world->create_joint(j);
-    }
+    if (c.method != Method::Spring) return;
+    machine::CouplingDesc d;
+    d.towing = r.va;
+    d.towed = r.vb;
+    d.socket_towing_local = r.socket_a;
+    d.socket_towed_local = r.socket_b;
+    d.frequency_hz = c.frequency_hz;
+    d.damping_ratio = c.damping_ratio;
+    d.stiffness_n_m = c.stiffness;
+    d.damping_n_s_m = c.damping;
+    r.coupling = r.world->create_coupling(d);
 }
 
 // Towing vehicle at (x0, 0) facing +x, trailer behind it with the two sockets level and coincident.
@@ -355,10 +328,6 @@ Metrics run(Rig& r, real seconds, const Before& before, const std::function<bool
         const real t = static_cast<real>(i) * dt;
         if (before) before(*r.world, t);
         r.world->step();
-        if (r.cfg.pose_write_back) {
-            r.world->backend().set_pose(r.a, r.world->vehicle_shadow_end_pose(r.va));
-            r.world->backend().set_pose(r.b, r.world->vehicle_shadow_end_pose(r.vb));
-        }
         rec.sample(i > 2);
         if (!rec.metrics().finite) break;
         if (stop && stop()) break;
@@ -412,8 +381,6 @@ Metrics scenario_lane_change(const Cfg& c, real speed = k100KmH, real amplitude 
 }
 
 // A parked pair with the trailer pushed `offset` metres along x: how long until the hitch is back at its rest error?
-// Above about 60 Hz the shadow closes the error inside a tick and ends the tick at rest, so Jolt's position, the only
-// one that survives the tick, hardly moves. This is what a very stiff hitch costs.
 struct RecoveryResult {
     real seconds_to_1mm = -1.0; // -1: not within the run
     real error_after_1s_mm = 0.0;
@@ -561,19 +528,7 @@ PendulumResult scenario_pendulum(const Cfg& c, real seconds = 60.0) {
     empty.source = "spike A0 fixture";
     r.va = r.world->create_vehicle(empty, r.a);
     r.vb = r.world->create_vehicle(empty, r.b);
-    if (c.method == Method::JoltHinge) {
-        JointDesc j;
-        j.type = JointType::Hinge;
-        j.body_a = r.a;
-        j.body_b = r.b;
-        j.anchor_a_local = r.socket_a;
-        j.anchor_b_local = r.socket_b;
-        j.axis_a_local = Vec3::unit_y();
-        j.axis_b_local = Vec3::unit_y();
-        r.world->create_joint(j);
-    } else {
-        add_link(r);
-    }
+    add_link(r);
 
     const real swing = r.mass_b * 9.81 * kLength;
     const auto energy = [&r] {
@@ -589,10 +544,6 @@ PendulumResult scenario_pendulum(const Cfg& c, real seconds = 60.0) {
     real last = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
         r.world->step();
-        if (c.pose_write_back) {
-            r.world->backend().set_pose(r.a, r.world->vehicle_shadow_end_pose(r.va));
-            r.world->backend().set_pose(r.b, r.world->vehicle_shadow_end_pose(r.vb));
-        }
         const real err = hitch_error(r).length();
         if (!std::isfinite(err) || err > 50.0) {
             out.finite = false;
@@ -615,10 +566,8 @@ void print_row(const std::string& label, const Metrics& m) {
                 m.ring_accel, m.dv_a, m.dv_b, m.force_peak_n / 1e3, m.artic_max_deg, m.ay_peak, m.finite ? "" : "  DIVERGED");
 }
 
-real reduced_mass(real a, real b) { return a * b / (a + b); }
-
-// A lane-change speed the combination survives. "A0 diag sway": the 7500 kg trailer behind a 1500 kg car is stable at
-// 60 km/h and jackknifes at 80 km/h with every hitch method, so above that the rows measure box contact, not the hitch.
+// A lane-change speed the combination survives: the 7500 kg trailer behind a 1500 kg car is stable at 60 km/h and
+// jackknifes at 80 km/h with any hitch, so above that the rows measure the jackknife, not the hitch.
 real stable_speed(real trailer_mass) { return trailer_mass > 3000.0 ? 60.0 / 3.6 : k100KmH; }
 
 // The hitch scenarios for one configuration, one row each.
@@ -635,7 +584,7 @@ void print_scenarios(const Cfg& c, const std::string& label) {
 // Pinned behaviour of the recommended method.
 // ---------------------------------------------------------------------------------------------------------------------
 
-TEST_CASE("A0: a vehicle without engine, driven wheels or wheels at all builds and rolls", "[machine][vehicle]") {
+TEST_CASE("Coupling: a vehicle without engine, driven wheels or wheels at all builds and rolls", "[machine][vehicle]") {
     // The tandem stands on its own: its centre of mass lies between the axles.
     Cfg c;
     c.method = Method::None;
@@ -659,7 +608,7 @@ TEST_CASE("A0: a vehicle without engine, driven wheels or wheels at all builds a
     CHECK(p.finite);
 }
 
-TEST_CASE("A0: the socket solve satisfies its implicit equation at any mass ratio", "[machine][vehicle]") {
+TEST_CASE("Coupling: the socket solve satisfies its implicit equation at any mass ratio", "[machine][vehicle]") {
     machine::SocketBody a;
     a.linear = Vec3{10.0, 0.5, -0.1};
     a.angular = Vec3{0.1, -0.2, 0.3};
@@ -709,7 +658,7 @@ TEST_CASE("A0: the socket solve satisfies its implicit equation at any mass rati
     }
 }
 
-TEST_CASE("A0: a car holds a 5x trailer within millimetres, without tick ringing, and the shadows see the force", "[machine][vehicle]") {
+TEST_CASE("Coupling: a car holds a 5x trailer within millimetres, without tick ringing, and the shadows see the force", "[machine][vehicle]") {
     Cfg c;
     c.trailer_mass = 7500.0;
 
@@ -723,7 +672,7 @@ TEST_CASE("A0: a car holds a 5x trailer within millimetres, without tick ringing
     CHECK(brake.end_speed < 0.6);
     CHECK(brake.err_max_mm < 0.5);
     CHECK(brake.ring_err_mm < 0.01);
-    CHECK(brake.dv_a < 1e-5); // a Jolt constraint: 4e-2
+    CHECK(brake.dv_a < 1e-5);
     CHECK(brake.dv_b < 1e-5);
 
     const Metrics lane = scenario_lane_change(c, stable_speed(c.trailer_mass));
@@ -752,20 +701,64 @@ TEST_CASE("A0: a car holds a 5x trailer within millimetres, without tick ringing
     CHECK(draft.ring_err_mm < 0.01);
 }
 
-TEST_CASE("A0: a position error closes within tenths of a second, the reason not to go stiffer", "[machine][vehicle]") {
+TEST_CASE("Coupling: a position error closes at the hitch frequency, however stiff", "[machine][vehicle]") {
     Cfg c;
     c.trailer_mass = 7500.0;
     const RecoveryResult good = scenario_recovery(c);
     CHECK(good.seconds_to_1mm > 0.0);
     CHECK(good.seconds_to_1mm < 0.05);
-    // Far too stiff for the tick: the shadow closes the error inside a tick, ends it at rest, and Jolt's position, the
-    // only one that survives the tick, hardly moves.
+    // Without the shadow's end pose reaching the backend, the shadow closed this error inside a tick, ended it at rest
+    // and Jolt's position hardly moved: 0.092 s at 480 Hz against 0.021 s at 60 Hz.
     c.frequency_hz = 480.0;
     const RecoveryResult stiff = scenario_recovery(c);
-    CHECK(stiff.seconds_to_1mm > 2.0 * good.seconds_to_1mm);
+    CHECK(stiff.seconds_to_1mm > 0.0);
+    CHECK(stiff.seconds_to_1mm <= good.seconds_to_1mm);
 }
 
-TEST_CASE("A0: a jackknife stays finite and a slow manoeuvre stays quiet", "[machine][vehicle]") {
+TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {
+    // The bar swings about the anchor for 10 s, a few full periods. -41.4 % of m g L in 60 s before the backend's step
+    // was made to land on the shadow's end pose; a socket spring then fought the difference between the two paths.
+    const PendulumResult p = scenario_pendulum(Cfg{}, 10.0);
+    CHECK(p.finite);
+    CHECK(std::abs(p.energy_change_percent) < 1.0);
+    CHECK(std::abs(p.worst_percent) < 1.5);
+    CHECK(p.err_max_mm < 0.5);
+}
+
+TEST_CASE("Coupling: a contact still acts on a coupled chassis", "[machine][vehicle]") {
+    // The shadow knows no contact: it lets a wheel-less chassis fall. Starting the backend's step from where it lands
+    // on the shadow must leave the contact's effect on v1 in place, or the pair sinks through the floor.
+    Rig r;
+    WorldConfig wc;
+    wc.job_workers = 2;
+    r.world = std::make_unique<World>(wc);
+    BodyDesc ground;
+    ground.motion = BodyMotionType::Static;
+    ground.shape = BoxShape{Vec3{50.0, 50.0, 0.5}};
+    ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    r.world->create_body(ground);
+    BodyDesc a;
+    a.shape = BoxShape{Vec3{1.0, 1.0, 0.25}};
+    a.mass = 1500.0;
+    a.pose.position = Vec3{0.0, 0.0, 0.5};
+    r.a = r.world->create_body(a);
+    a.pose.position = Vec3{-4.0, 0.0, 0.5};
+    r.b = r.world->create_body(a);
+    vehicle::VehicleDesc shell;
+    shell.name = "shell";
+    shell.source = "test fixture";
+    r.va = r.world->create_vehicle(shell, r.a);
+    r.vb = r.world->create_vehicle(shell, r.b);
+    r.socket_a = Vec3{-2.0, 0.0, 0.0};
+    r.socket_b = Vec3{2.0, 0.0, 0.0};
+    add_link(r);
+    for (int i = 0; i < 720; ++i) r.world->step();
+    CHECK(r.world->get_pose(r.a).position.z == Catch::Approx(0.25).margin(0.02));
+    CHECK(r.world->get_pose(r.b).position.z == Catch::Approx(0.25).margin(0.02));
+    CHECK(hitch_error(r).length() < 0.002);
+}
+
+TEST_CASE("Coupling: a jackknife stays finite and a slow manoeuvre stays quiet", "[machine][vehicle]") {
     Cfg c;
     c.trailer_mass = 7500.0;
     const Metrics slow = scenario_manoeuvre(c);
@@ -783,7 +776,7 @@ TEST_CASE("A0: a jackknife stays finite and a slow manoeuvre stays quiet", "[mac
     CHECK(hard.err_max_mm < 100.0);
 }
 
-TEST_CASE("A0: a coupled pair is worker-count independent and allocates nothing in the tick", "[machine][vehicle]") {
+TEST_CASE("Coupling: a coupled pair is worker-count independent and allocates nothing in the tick", "[machine][vehicle]") {
     const auto hashes = [](int workers) {
         Cfg c;
         c.trailer_mass = 7500.0;
@@ -818,74 +811,30 @@ TEST_CASE("A0: a coupled pair is worker-count independent and allocates nothing 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Measurements. Run with: ps_unit_tests "A0 diag*"
+// Measurements. Run with: ps_unit_tests "Coupling diag*"
 // ---------------------------------------------------------------------------------------------------------------------
 
-TEST_CASE("A0 diag table", "[.][diag][machine][vehicle]") {
+TEST_CASE("Coupling diag table", "[.][diag][machine][vehicle]") {
     print_header();
     for (const real mass : {1500.0, 7500.0}) {
-        for (const Method method : {Method::Spring, Method::JoltPoint, Method::JoltHinge}) {
+        for (const real f : {60.0, 120.0}) {
             Cfg c;
-            c.method = method;
+            c.frequency_hz = f;
             c.trailer_mass = mass;
-            print_scenarios(c, std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)));
+            const std::string label = std::to_string(static_cast<int>(mass)) + " f" + std::to_string(static_cast<int>(f));
+            print_scenarios(c, label);
             c.trailer_brakes = true;
-            print_row(std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)) + " brake+trl brakes", scenario_brake(c));
+            print_row(label + " brake+trl brakes", scenario_brake(c));
             c.trailer_brakes = false;
-            print_row(std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)) + " reverse jackknife", scenario_reverse_jackknife(c));
-            print_row(std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)) + " brake+lock", scenario_brake_and_lock(c));
-            print_row(std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)) + " tractor 15 kN", scenario_tractor_draft(c, 15000.0));
-            print_row(std::string(method_name(method)) + " " + std::to_string(static_cast<int>(mass)) + " tractor after 2 s", scenario_tractor_draft(c, 15000.0, 2.0));
+            print_row(label + " reverse jackknife", scenario_reverse_jackknife(c));
+            print_row(label + " brake+lock", scenario_brake_and_lock(c));
+            print_row(label + " tractor 15 kN", scenario_tractor_draft(c, 15000.0));
+            print_row(label + " tractor after 2 s", scenario_tractor_draft(c, 15000.0, 2.0));
         }
     }
 }
 
-TEST_CASE("A0 diag sway", "[.][diag][machine][vehicle]") {
-    // Is the 5x trailer stable behind this car at all? The same with every method means it is the vehicle, not the hitch.
-    for (const real mass : {1500.0, 3000.0, 7500.0}) {
-        for (const real kmh : {40.0, 60.0, 80.0, 100.0, 120.0}) {
-            for (const Method method : {Method::Spring, Method::JoltPoint}) {
-                Cfg c;
-                c.method = method;
-                c.trailer_mass = mass;
-                const Metrics m = scenario_lane_change(c, kmh / 3.6);
-                std::printf("  %-9s m %5.0f %3.0f km/h: art max %6.1f end %6.1f deg, ay %6.2f, hitch max %7.3f mm, ring %.4f mm, dv %.2e\n", method_name(method), mass, kmh, m.artic_max_deg,
-                            m.artic_end_deg, m.ay_peak, m.err_max_mm, m.ring_err_mm, m.dv_a);
-            }
-        }
-    }
-}
-
-TEST_CASE("A0 diag stiffness", "[.][diag][machine][vehicle]") {
-    print_header();
-    for (const real mass : {1500.0, 7500.0}) {
-        for (const real k : {1e5, 1e6, 1e7, 3e7, 1e8, 1e9, 1e10}) {
-            Cfg c;
-            c.frequency_hz = 0.0;
-            c.trailer_mass = mass;
-            c.stiffness = k;
-            c.damping = 2.0 * std::sqrt(k * reduced_mass(1500.0, mass));
-            char label[64];
-            std::snprintf(label, sizeof(label), "m %.0f k %.0e", mass, k);
-            print_row(std::string(label) + " brake", scenario_brake(c));
-            print_row(std::string(label) + " lane", scenario_lane_change(c, stable_speed(mass)));
-        }
-        for (const real f : {2.0, 5.0, 10.0, 20.0, 30.0, 40.0, 60.0, 80.0, 120.0, 240.0, 480.0}) {
-            for (const real zeta : {0.3, 1.0, 3.0}) {
-                Cfg c;
-                c.frequency_hz = f;
-                c.damping_ratio = zeta;
-                c.trailer_mass = mass;
-                char label[64];
-                std::snprintf(label, sizeof(label), "m %.0f f %.0f z %.1f", mass, f, zeta);
-                print_row(std::string(label) + " brake", scenario_brake(c));
-                print_row(std::string(label) + " lane", scenario_lane_change(c, stable_speed(mass)));
-            }
-        }
-    }
-}
-
-TEST_CASE("A0 diag hard", "[.][diag][machine][vehicle]") {
+TEST_CASE("Coupling diag hard", "[.][diag][machine][vehicle]") {
     // Stiffer always looks better in the lane change and braking rows; these are the cases that can say no.
     std::printf("  %-22s %12s %10s %10s %10s %10s %9s %10s\n", "case", "recover s", "1 s mm", "jk max mm", "lock mm", "lock ring", "F kN", "swing %");
     for (const real mass : {1500.0, 7500.0}) {
@@ -911,41 +860,16 @@ TEST_CASE("A0 diag hard", "[.][diag][machine][vehicle]") {
     }
 }
 
-TEST_CASE("A0 diag rates", "[.][diag][machine][vehicle]") {
-    print_header();
-    const std::pair<real, real> rates[] = {{240.0, 240.0}, {240.0, 960.0}, {240.0, 1920.0}, {480.0, 960.0}, {960.0, 960.0}, {960.0, 3840.0}};
-    for (const Method method : {Method::Spring, Method::JoltPoint}) {
-        for (const auto& [tick, sub] : rates) {
-            Cfg c;
-            c.method = method;
-            c.trailer_mass = 7500.0;
-            c.tick_hz = tick;
-            c.substep_hz = sub;
-            char label[64];
-            std::snprintf(label, sizeof(label), "%s %.0f/%.0f", method_name(method), tick, sub);
-            print_row(std::string(label) + " brake", scenario_brake(c));
-            print_row(std::string(label) + " lane", scenario_lane_change(c, stable_speed(c.trailer_mass)));
-        }
-    }
-    for (const int steps : {1, 2, 4}) {
-        Cfg c;
-        c.method = Method::JoltPoint;
-        c.trailer_mass = 7500.0;
-        c.collision_steps = steps;
-        print_row("B point collision_steps " + std::to_string(steps) + " lane", scenario_lane_change(c, stable_speed(c.trailer_mass)));
-    }
-}
-
-TEST_CASE("A0 diag energy", "[.][diag][machine][vehicle]") {
-    for (const Method method : {Method::None, Method::Spring, Method::JoltPoint, Method::JoltHinge}) {
+TEST_CASE("Coupling diag energy", "[.][diag][machine][vehicle]") {
+    for (const Method method : {Method::None, Method::Spring}) {
         for (const real mass : {1500.0, 7500.0}) {
             if (method == Method::None && mass < 3000.0) continue; // the single axle cannot stand alone
             Cfg c;
             c.method = method;
             c.trailer_mass = mass;
             const CoastResult r = scenario_coast(c);
-            std::printf("  coast %-10s m %5.0f: lost %.4f %% in 30 s, hitch max %.3f mm, dv %.2e / %.2e%s\n", method_name(method), mass, r.loss_percent, r.m.err_max_mm, r.m.dv_a, r.m.dv_b,
-                        r.m.finite ? "" : "  DIVERGED");
+            std::printf("  coast %-10s m %5.0f: lost %.4f %% in 30 s, hitch max %.3f mm, dv %.2e / %.2e%s\n", method == Method::None ? "none" : "hitch", mass, r.loss_percent, r.m.err_max_mm, r.m.dv_a,
+                        r.m.dv_b, r.m.finite ? "" : "  DIVERGED");
         }
     }
     const auto pendulum = [](const char* label, const Cfg& c) {
@@ -958,7 +882,7 @@ TEST_CASE("A0 diag energy", "[.][diag][machine][vehicle]") {
             c.frequency_hz = f;
             c.damping_ratio = zeta;
             char label[64];
-            std::snprintf(label, sizeof(label), "A f %.0f z %.1f", f, zeta);
+            std::snprintf(label, sizeof(label), "f %.0f z %.1f", f, zeta);
             pendulum(label, c);
         }
     }
@@ -967,124 +891,7 @@ TEST_CASE("A0 diag energy", "[.][diag][machine][vehicle]") {
         c.tick_hz = tick;
         c.substep_hz = sub;
         char label[64];
-        std::snprintf(label, sizeof(label), "A %.0f/%.0f", tick, sub);
+        std::snprintf(label, sizeof(label), "%.0f/%.0f", tick, sub);
         pendulum(label, c);
-    }
-    Cfg wb;
-    wb.pose_write_back = true;
-    pendulum("A + pose write-back", wb);
-    print_header();
-    print_row("A write-back 1500 lane", scenario_lane_change(wb, stable_speed(wb.trailer_mass)));
-    print_row("A write-back 1500 brake", scenario_brake(wb));
-    wb.trailer_mass = 7500.0;
-    print_row("A write-back 7500 lane", scenario_lane_change(wb, stable_speed(wb.trailer_mass)));
-    print_row("A write-back 7500 brake", scenario_brake(wb));
-    wb.trailer_mass = 1500.0;
-    wb.substep_hz = 3840.0;
-    pendulum("A + write-back 240/3840", wb);
-    Cfg b;
-    b.method = Method::JoltHinge;
-    pendulum("B hinge", b);
-    b.method = Method::JoltPoint;
-    pendulum("B point", b);
-    b.collision_steps = 4;
-    pendulum("B point collision_steps 4", b);
-    b.collision_steps = 1;
-    b.tick_hz = 960.0;
-    pendulum("B point 960 Hz tick", b);
-}
-
-TEST_CASE("A0 diag cost hash alloc", "[.][diag][machine][vehicle]") {
-    const auto cost = [](Method method, int workers) {
-        Cfg c;
-        c.method = method;
-        c.trailer_mass = 7500.0;
-        c.workers = workers;
-        Rig r = build_rig(c, -700.0);
-        settle(r, 0.5);
-        launch(r, stable_speed(c.trailer_mass));
-        ps_test::settle(*r.world, 0.5);
-        double best = 1e30;
-        for (int run_index = 0; run_index < 8; ++run_index) {
-            const auto t0 = std::chrono::steady_clock::now();
-            const int ticks = 600;
-            for (int i = 0; i < ticks; ++i) {
-                r.world->set_control("steer", 0.02 * std::sin(2.0 * kPi * static_cast<real>(i) / 720.0));
-                r.world->step();
-            }
-            const std::chrono::duration<double, std::micro> us = std::chrono::steady_clock::now() - t0;
-            best = std::min(best, us.count() / ticks); // best of 8: the machine is shared
-        }
-        return best;
-    };
-    for (const Method method : {Method::None, Method::Spring, Method::JoltPoint, Method::JoltHinge}) {
-        for (const int workers : {1, 4}) {
-            std::printf("  cost %-10s %2d workers: %.1f us/tick\n", method_name(method), workers, cost(method, workers));
-        }
-    }
-    {
-        machine::SocketBody a, b;
-        a.inv_mass = 1.0 / 1500.0;
-        a.inv_inertia_world = Mat3::diagonal(1.0 / 500.0, 1.0 / 1800.0, 1.0 / 2000.0);
-        a.socket_offset = Vec3{-2.5, 0.0, -0.2};
-        b = a;
-        b.inv_mass = 1.0 / 7500.0;
-        machine::CouplingDesc d;
-        d.frequency_hz = 60.0;
-        const int count = 10000000;
-        real sink = 0.0;
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < count; ++i) {
-            a.linear.x = static_cast<real>(i) * 1e-7;
-            sink += machine::solve_socket_coupling(a, b, d, 1.0 / 960.0).force_on_a.x;
-        }
-        const std::chrono::duration<double, std::nano> ns = std::chrono::steady_clock::now() - t0;
-        std::printf("  solve_socket_coupling: %.1f ns per call (sink %.3g)\n", ns.count() / count, sink);
-    }
-    for (const Method method : {Method::None, Method::Spring, Method::JoltPoint, Method::JoltHinge}) {
-        const auto hashes = [method](int workers) {
-            Cfg c;
-            c.method = method;
-            c.trailer_mass = 7500.0;
-            c.workers = workers;
-            Rig r = build_rig(c, -700.0);
-            settle(r, 0.5);
-            launch(r, k100KmH);
-            std::vector<std::uint64_t> out;
-            for (int i = 0; i < 960; ++i) {
-                r.world->set_control("steer", 0.03 * std::sin(2.0 * kPi * static_cast<real>(i) / 480.0));
-                r.world->step();
-                out.push_back(r.world->state_hash());
-            }
-            return out;
-        };
-        const auto one = hashes(1), ten = hashes(10);
-        std::size_t first_diff = one.size();
-        for (std::size_t i = 0; i < one.size(); ++i) {
-            if (one[i] != ten[i]) {
-                first_diff = i;
-                break;
-            }
-        }
-        std::printf("  hash %-10s 1 vs 10 workers: %s (end %016llx)\n", method_name(method), first_diff == one.size() ? "equal over 960 ticks" : ("differ at " + std::to_string(first_diff)).c_str(),
-                    static_cast<unsigned long long>(one.back()));
-
-        if (!jobs::debug_alloc::hook_available()) continue;
-        Cfg c;
-        c.method = method;
-        c.trailer_mass = 7500.0; // the tandem stands without a hitch too, so Method::None is a fair baseline
-        Rig r = build_rig(c, -700.0);
-        settle(r, 0.5);
-        launch(r, stable_speed(c.trailer_mass));
-        ps_test::settle(*r.world, 0.5);
-        jobs::debug_alloc::reset();
-        jobs::debug_alloc::set_armed(true);
-        for (int i = 0; i < 960; ++i) {
-            r.world->set_control("steer", 0.03 * std::sin(2.0 * kPi * static_cast<real>(i) / 480.0));
-            r.world->step();
-        }
-        jobs::debug_alloc::set_armed(false);
-        std::printf("  alloc %-10s own %llu external %llu (external = Jolt's QuadTree gap)\n", method_name(method),
-                    static_cast<unsigned long long>(jobs::debug_alloc::own_violation_count()), static_cast<unsigned long long>(jobs::debug_alloc::external_violation_count()));
     }
 }

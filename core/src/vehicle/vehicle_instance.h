@@ -150,6 +150,13 @@ public:
     static void substep_advance(VehicleTickWork& tw);
     void tick_end(VehicleTickWork& tw, IRigidBackend& backend);
 
+    // Coupled vehicles only, after tick_end and before the backend steps: moves the chassis to the pose from which the
+    // backend's own x1 = x0 + dt*v1 lands on the shadow's end pose. The shadow took another path through the tick, the
+    // force on it is known only there, and a socket spring that sees the difference next tick fights a phantom error
+    // (a free swing lost 41 % of its energy in 60 s at 240/960). Whatever a contact does to v1 still acts: this sets
+    // the start of the backend's step, not its end.
+    void align_backend_with_shadow(const VehicleTickWork& tw, IRigidBackend& backend) const;
+
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.
     [[nodiscard]] std::span<const PendingChannelWrite> pending_channel_writes() const {
@@ -309,7 +316,6 @@ public:
     [[nodiscard]] real shadow_dv_error() const { return shadow_dv_error_; }
     [[nodiscard]] real shadow_dw_error() const { return shadow_dw_error_; }
     // Diagnostic (attachment spike A0): the shadow's pose at the end of the last tick.
-    [[nodiscard]] const Pose& shadow_end_pose() const { return shadow_end_pose_; }
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value, control_indices_.
@@ -434,7 +440,6 @@ private:
     // (re-seeded every tick from already-hashed state, same reasoning as
     // articulation::Instance's external-wrench accumulator).
     Wrench ext_wrench_accum_{};
-    Pose shadow_end_pose_{};
     Motion shadow_end_pred_{};   // shadow's predicted Jolt velocity at the end of the last tick (diagnostic only)
     bool shadow_valid_ = false;  // false until the first tick has run once (no prediction to compare against yet)
     real shadow_dv_error_ = 0.0;
