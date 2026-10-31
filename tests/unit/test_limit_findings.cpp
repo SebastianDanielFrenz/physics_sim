@@ -133,7 +133,7 @@ TEST_CASE("L1 thresholds: every entry is sourced ([C]/[D]/[AS]/[M]), named, fini
         CHECK(src.size() > 8); // a tag alone is not a source
         CHECK(names.insert(t.name).second);
     }
-    CHECK(limits::kAllLimitThresholdCount == 31); // P7: + kKnockNear, kKnockLimiting
+    CHECK(limits::kAllLimitThresholdCount == 34); // P7: + kKnockNear, kKnockLimiting; coupling: + the three hitch thresholds
     // The ordered pairs a severity ladder depends on.
     CHECK(limits::kGateNear.value < limits::kGateFull.value);
     CHECK(limits::kBoostBandNear.value < limits::kBoostBandExceeded.value);

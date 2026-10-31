@@ -23,6 +23,13 @@
                  { "wheel": "RL", "max_torque_nm": 8000.0 }, { "wheel": "RR", "max_torque_nm": 8000.0 } ],
     "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 8000.0 }
   },
+  "hitch_points": [
+    { "name": "socket_hitch", "class": "../hitch_classes/drawbar_pin.json", "role": "towing", "position": [-2.03, 0.0, -0.78],
+      "max_towed_mass_kg": 14000.0, "max_tongue_load_n": 20000.0 },
+    { "name": "socket_3pt", "class": "../hitch_classes/three_point_locked.json", "role": "towing",
+      "sockets": { "socket_3pt_top": [-2.12, 0.0, -0.04], "socket_3pt_L": [-2.04, 0.5, -0.68], "socket_3pt_R": [-2.04, -0.5, -0.68] },
+      "max_tongue_load_n": 30000.0 }
+  ],
   "aero": { "drag_area_m2": 4.0 },
   "powertrain": {
     "components": [

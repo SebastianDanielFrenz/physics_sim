@@ -25,6 +25,8 @@ const char* to_string(LimitKind k) {
     case LimitKind::MapGridEdge: return "MapGridEdge";
     case LimitKind::Knock: return "Knock";
     case LimitKind::BeyondEngineData: return "BeyondEngineData";
+    case LimitKind::TowedMass: return "TowedMass";
+    case LimitKind::TongueLoad: return "TongueLoad";
     }
     return "Unknown";
 }
@@ -52,6 +54,7 @@ const char* to_string(LimitUnit u) {
     case LimitUnit::Kilogram: return "kg";
     case LimitUnit::Second: return "s";
     case LimitUnit::CrankDegree: return "deg";
+    case LimitUnit::Newton: return "N";
     }
     return "Unknown";
 }

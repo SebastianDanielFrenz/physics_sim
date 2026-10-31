@@ -1,0 +1,32 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "trailer_tipper",
+  "source": "Test fixture: the tandem tipper of data/models/trailer_tipper/trailer_tipper.rig.json, carrying 14 t on its drawbar pin. Wheel and hitch eye positions are the rig's, shifted so the chassis origin sits at the loaded centre of mass, 0.45 m ahead of the bogie and 1.10 m above the ground: x = x_rig - 0.45, z = z_rig - 1.10. That puts 12.5 kN on the drawbar [AS]. Springs give 30 mm static compression at that load, dampers about 0.2 of critical on a wheel's share of the mass [AS]. Tyres are the tractor's rear ones for want of a trailer tyre file; 5 t brake torque per corner is [AS]. An attachment is the wheel centre at full extension, so z = -(1.10 - 0.62) - 0.03.",
+  "wheels": [
+    { "name": "1L", "attachment_local": [0.35, 0.95, -0.51], "wheel_radius": 0.62, "wheel_width": 0.56, "wheel_mass": 120.0, "wheel_inertia": 23.0,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.1, "spring_rate": 1040000.0, "damper_bump_rate": 23000.0, "damper_rebound_rate": 34500.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false },
+    { "name": "1R", "attachment_local": [0.35, -0.95, -0.51], "wheel_radius": 0.62, "wheel_width": 0.56, "wheel_mass": 120.0, "wheel_inertia": 23.0,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.1, "spring_rate": 1040000.0, "damper_bump_rate": 23000.0, "damper_rebound_rate": 34500.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false },
+    { "name": "2L", "attachment_local": [-1.25, 0.95, -0.51], "wheel_radius": 0.62, "wheel_width": 0.56, "wheel_mass": 120.0, "wheel_inertia": 23.0,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.1, "spring_rate": 1040000.0, "damper_bump_rate": 23000.0, "damper_rebound_rate": 34500.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false },
+    { "name": "2R", "attachment_local": [-1.25, -0.95, -0.51], "wheel_radius": 0.62, "wheel_width": 0.56, "wheel_mass": 120.0, "wheel_inertia": 23.0,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.1, "spring_rate": 1040000.0, "damper_bump_rate": 23000.0, "damper_rebound_rate": 34500.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false }
+  ],
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      { "wheel": "1L", "max_torque_nm": 5000.0 },
+      { "wheel": "1R", "max_torque_nm": 5000.0 },
+      { "wheel": "2L", "max_torque_nm": 5000.0 },
+      { "wheel": "2R", "max_torque_nm": 5000.0 }
+    ]
+  },
+  "tow_brake": { "kind": "channel", "channel": "brake", "gain": 1.0, "lag_s": 0.4 },
+  "hitch_points": [
+    { "name": "socket_hitch_eye", "class": "../../../../data/hitch_classes/drawbar_pin.json", "role": "towed", "position": [4.5, 0.0, -0.6] }
+  ]
+}

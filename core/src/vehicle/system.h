@@ -12,12 +12,19 @@
 #include "ps/environment/vehicle_air.h"
 #include "ps/io/surface_table.h"
 #include "ps/jobs/job_system.h"
+#include "ps/machine/coupling.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/ids.h"
 
+#include "../machine/coupling_solver.h"
+
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ps::vehicle {
@@ -48,6 +55,31 @@ public:
                   const VehicleTickEnv& env, real tick_dt, real substep_rate_hz,
                   std::span<const environment::VehicleAir> air = {});
 
+    // Couples two vehicles at their sockets, sim thread between steps. Vehicles joined by couplings form an
+    // island: one job that steps them substep by substep, the couplings solved in id order (one pass, exact for one
+    // coupling, coupling_passes Gauss-Seidel sweeps along a chain). A vehicle outside any coupling takes the plain
+    // step_tick path, and a World with no coupling never reaches any of this.
+    // Each change rebuilds the islands, outside the tick. A towed vehicle has one tow vehicle, a tow vehicle any number
+    // of towed ones, and no chain closes a loop.
+    [[nodiscard]] machine::AttachCheck check_attach(const machine::CouplingDesc& desc, const IRigidBackend& backend) const;
+    HitchId attach(const machine::CouplingDesc& desc, IRigidBackend& backend, real substep_rate_hz); // std::invalid_argument
+    void detach(HitchId id, IRigidBackend& backend);
+    void set_tow_brake_channel(HitchId id, std::size_t channel_index) { couplings_[id.index].brake_channel = channel_index; }
+    // The coupling two named hitch points make; `problem` says why they do not mate, and then the desc means nothing.
+    [[nodiscard]] machine::CouplingDesc mate_points(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point,
+                                                    std::string& problem) const;
+    [[nodiscard]] machine::HitchLoads hitch_loads(HitchId id, const IRigidBackend& backend) const;
+    // The towing point a live coupling sits on; nullptr for one built by hand.
+    [[nodiscard]] const machine::HitchPointDesc* towing_point(HitchId id) const;
+    [[nodiscard]] bool contains(HitchId id) const { return id.index < couplings_.size() && couplings_[id.index].alive && couplings_[id.index].generation == id.generation; }
+    [[nodiscard]] bool chassis_is_coupled(BodyId chassis) const;
+    void set_coupling_passes(int passes) { coupling_passes_ = passes; }
+    [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
+
+    // Called by World right before the backend steps, sequential: see VehicleInstance::align_backend_with_shadow.
+    // Nothing happens to a vehicle outside a coupling.
+    void pre_backend_step(IRigidBackend& backend);
+
     [[nodiscard]] bool empty() const { return instances_.empty(); }
     // PHYS-033 P4 I7c C16b (D9): applies every vehicle's queued engine-maps
     // hot swap and drops the old maps. Called by World::step BEFORE the tick
@@ -57,9 +89,13 @@ public:
     // step_all, i.e. inside the vehicle_islands_substep job.
     void apply_pending_engine_maps_swaps();
     [[nodiscard]] std::size_t count() const { return instances_.size(); }
-    // True iff id names a vehicle this System created. Vehicles are never
-    // destroyed, so every issued id has generation 1 (create()).
-    [[nodiscard]] bool contains(VehicleId id) const { return id.generation == 1 && id.index < instances_.size(); }
+    // True iff id names a vehicle this System created and has not retired.
+    // Every issued id has generation 1 (create()): a slot is never reused.
+    [[nodiscard]] bool contains(VehicleId id) const { return id.generation == 1 && id.index < instances_.size() && retired_[id.index] == 0; }
+    // Takes a vehicle out of the simulation and detaches its couplings. Its instance stays, frozen, so that every other
+    // vehicle keeps its index, channels and telemetry columns. The chassis body stays a plain body, the caller's to
+    // destroy.
+    void retire(VehicleId id, IRigidBackend& backend);
     [[nodiscard]] VehicleInstance& at(VehicleId id) { return *instances_[id.index]; }
     [[nodiscard]] const VehicleInstance& at(VehicleId id) const { return *instances_[id.index]; }
 
@@ -84,7 +120,47 @@ public:
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
 private:
+    struct Coupling {
+        machine::CouplingDesc desc;
+        std::size_t towing = 0, towed = 0; // indices into instances_
+        bool alive = false;
+        id_generation_t generation = 1;
+        machine::CouplingState state;
+        // A latch ramps the rows' target from what attach measured down to zero: position and rate both match at each
+        // end, so nothing jumps, and the force is what the ramp's acceleration takes. The linear part lives in the
+        // towing chassis' axes because the pair may turn meanwhile.
+        int latch_left = 0, latch_total = 0; // substeps
+        Vec3 latch_error_local{}, latch_rate_local{};
+        std::array<real, 3> latch_angle{}, latch_angle_rate{}; // locked axes
+        std::size_t brake_channel = 0; // a tow_brake channel link: resolved in the towing vehicle's scope
+        real brake_state = 0.0;
+        // This substep's wrench so far: a later pass replaces it, it does not add to it.
+        Vec3 force{}, torque_towing{}, torque_towed{};
+        machine::SocketSolve last{};
+    };
+    // Sorted by lowest vehicle index; vehicles and couplings ascending. Built at setup, read only during the tick.
+    struct Island {
+        std::vector<std::size_t> vehicles;
+        std::vector<std::size_t> couplings;
+    };
+
+    void rebuild_islands();
+    void apply_collision_pairs(IRigidBackend& backend);
+    void kill_coupling(Coupling& c);
+    void update_tow_brakes(const Island& island, const IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt);
+    [[nodiscard]] machine::LatchTarget latch_target(const Coupling& c, const VehicleTickWork& towing, real h) const;
+    void step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
+                     real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air);
+    void solve_coupling(Coupling& c, real h);
+
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
+    std::vector<Coupling> couplings_;  // slots: a dead one is reused with the next generation
+    std::size_t alive_couplings_ = 0;
+    std::vector<unsigned char> retired_; // one per instance
+    std::vector<real> tow_brake_demand_; // one per instance; each entry touched by its island's job only
+    int coupling_passes_ = 2;
+    std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
+    std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only
     std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs
     // PHYS-033 I1 W1: index == BodyId::index -> that vehicle's index into
     // instances_, or -1 if that body is not a vehicle chassis. Built/grown

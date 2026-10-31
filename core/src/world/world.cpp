@@ -71,6 +71,8 @@ World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / confi
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers, config.job_queue_capacity);
     articulation_system_ = std::make_unique<articulation::System>();
     vehicle_system_ = std::make_unique<vehicle::System>();
+    if (config.coupling_passes < 1) throw std::invalid_argument("WorldConfig::coupling_passes must be at least 1");
+    vehicle_system_->set_coupling_passes(config.coupling_passes);
     RigidBackendSettings backend_settings;
     backend_settings.baumgarte = config.baumgarte;
     backend_settings.num_velocity_steps = config.num_velocity_steps;
@@ -274,6 +276,7 @@ void World::stage_contact_coupling_pre() {
         const ArticulationId id{static_cast<id_index_t>(i), 1};
         articulation_contacts_[i]->pre_backend_step(articulation_system_->at(id), *backend_);
     }
+    vehicle_system_->pre_backend_step(*backend_);
 }
 
 void World::stage_contact_coupling_post() {
@@ -305,6 +308,7 @@ void World::stage_freeze_tick_start_state() {
     const std::size_t n = vehicle_system_->count();
     for (std::size_t i = 0; i < n; ++i) {
         const VehicleId id{static_cast<id_index_t>(i), 1};
+        if (!vehicle_system_->contains(id)) continue;
         vehicle_air_[i] = environment_->sample_air(backend_->get_pose(vehicle_system_->at(id).chassis()).position);
     }
 }
@@ -424,8 +428,12 @@ void World::stage_snapshot() {
         const VehicleId id{static_cast<id_index_t>(vi), 1};
         const vehicle::VehicleInstance& vinst = vehicle_system_->at(id);
         VehicleSnapshot& vsnap = snap.vehicles[vi];
-        vsnap.id = id;
         vsnap.wheels.clear();
+        if (!vehicle_system_->contains(id)) {
+            vsnap.id = VehicleId{};
+            continue;
+        }
+        vsnap.id = id;
         const std::size_t wc = vinst.wheel_count();
         for (std::size_t w = 0; w < wc; ++w) vsnap.wheels.push_back(vinst.wheel_state(w));
         // PHYS-033 P4 I3 plan section 4.3 commit 5: default-constructed
@@ -452,6 +460,7 @@ void World::stage_snapshot() {
 }
 
 void World::step() {
+    in_step_ = true;
     job_system_->reset_worker_stats();
     const auto tick_t0 = std::chrono::steady_clock::now();
 
@@ -465,13 +474,14 @@ void World::step() {
     if (!doors_.empty()) step_doors();
 
     pipeline_->run(*job_system_);
+    in_step_ = false;
 
     // Assists I7c: control-channel writes the vehicles queued during their step (a drive-mode change writes its TC /
     // launch-control default into the channel itself). Applied HERE - sequentially, on the sim thread, after every job
-    // has finished - in vehicle id order, straight into the flat channel array (no allocation). When two vehicles name
-    // the same (global) channel the later vehicle overwrites the earlier one. A set_control made before the next
-    // step() therefore wins over the physics' write from the next tick on.
+    // has finished - in vehicle id order, straight into the flat channel array (no allocation). A set_control made
+    // before the next step() therefore wins over the physics' write from the next tick on.
     for (std::size_t vi = 0; vi < vehicle_system_->count(); ++vi) {
+        if (!vehicle_system_->contains(VehicleId{static_cast<id_index_t>(vi), 1})) continue;
         for (const vehicle::PendingChannelWrite& w : vehicle_system_->at(VehicleId{static_cast<id_index_t>(vi), 1}).pending_channel_writes()) {
             control_channel_values_[w.index] = w.value;
         }
@@ -770,23 +780,97 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
     return articulation_system_->link_frame(id, link_index, local_offset);
 }
 
+machine::AttachCheck World::check_attach(const machine::CouplingDesc& desc) const {
+    return vehicle_system_->check_attach(desc, *backend_);
+}
+
+HitchId World::attach(const machine::CouplingDesc& desc) {
+    if (in_step_) throw std::logic_error("attach: only between steps");
+    const HitchId id = vehicle_system_->attach(desc, *backend_, config_.substep_rate_hz);
+    const std::optional<machine::TowBrakeDesc>& link = vehicle_system_->at(desc.towed).tow_brake();
+    if (link && link->kind == machine::TowBrakeKind::Channel) {
+        vehicle_system_->set_tow_brake_channel(id, ensure_control_channel_index(vehicle_channel(desc.towing, link->channel)));
+    }
+    return id;
+}
+
+machine::AttachCheck World::check_attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) const {
+    std::string problem;
+    const machine::CouplingDesc desc = vehicle_system_->mate_points(towing, towing_point, towed, towed_point, problem);
+    if (problem.empty()) return check_attach(desc);
+    machine::AttachCheck check;
+    check.message = "attach: " + problem;
+    return check;
+}
+
+HitchId World::attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) {
+    std::string problem;
+    const machine::CouplingDesc desc = vehicle_system_->mate_points(towing, towing_point, towed, towed_point, problem);
+    if (!problem.empty()) throw std::invalid_argument("attach: " + problem);
+    return attach(desc);
+}
+
+machine::HitchLoads World::hitch_loads(HitchId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("hitch_loads: not a live hitch");
+    return vehicle_system_->hitch_loads(id, *backend_);
+}
+
+std::vector<drivetrain::LimitFinding> World::hitch_limits(HitchId id, const drivetrain::LimitPolicy* policy) const {
+    const machine::HitchLoads loads = hitch_loads(id);
+    const machine::HitchPointDesc* point = vehicle_system_->towing_point(id);
+    if (point == nullptr) return {};
+    return machine::check_hitch_limits(*point, loads, policy);
+}
+
+void World::detach(HitchId id) {
+    if (in_step_) throw std::logic_error("detach: only between steps");
+    vehicle_system_->detach(id, *backend_);
+}
+
+bool World::hitch_alive(HitchId id) const { return vehicle_system_->contains(id); }
+
+void World::destroy_vehicle(VehicleId id) {
+    if (in_step_) throw std::logic_error("destroy_vehicle: only between steps");
+    vehicle_system_->retire(id, *backend_);
+    if (id.index < contents_mass_.size()) contents_mass_[id.index].enabled = false;
+}
+
+const machine::CouplingState& World::coupling_state(HitchId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("coupling_state: unknown hitch");
+    return vehicle_system_->coupling_state(id);
+}
+
+std::string World::vehicle_channel(VehicleId id, std::string_view name) const {
+    if (id.index >= vehicle_channel_prefix_.size()) throw std::invalid_argument("vehicle_channel: unknown vehicle");
+    std::string full = vehicle_channel_prefix_[id.index];
+    full += name;
+    return full;
+}
+
 VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
-                                 const std::vector<std::pair<std::string, real>>& test_only_extra_channels) {
+                                 const std::vector<std::pair<std::string, real>>& test_only_extra_channels,
+                                 std::string_view channel_scope) {
     aero::validate(desc.aero);
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): resolve this vehicle's four
     // control channels to indices ONCE, here (setup time, off the tick
-    // path - never called from inside a job). Vehicle index 0 (the next
-    // instance's index, since vehicles are never destroyed - same
-    // invariant wheel_telemetry_channels_ below relies on) is the
-    // designated input vehicle and reads bare global names ("steer", ...);
-    // every other vehicle reads its own "v<i>." prefixed names. The
-    // string API (World::set_control/get_control) is unaffected - a
-    // caller may still set "v1.steer" etc. at any time, before or after
-    // this vehicle is created (ensure_control_channel_index handles both
-    // orders).
+    // path - never called from inside a job). A scoped vehicle reads
+    // "<scope>.<name>". Otherwise vehicle index 0 (the next instance's index:
+    // a destroyed vehicle keeps its slot, the invariant
+    // wheel_telemetry_channels_ below relies on too) is the designated input
+    // vehicle and reads bare names ("steer", ...), and every other vehicle
+    // reads its own "v<i>." prefixed names. A caller may set a channel at any
+    // time, before or after this vehicle is created
+    // (ensure_control_channel_index handles both orders).
     constexpr id_index_t kDesignatedInputVehicle = 0;
     const id_index_t vehicle_index = static_cast<id_index_t>(vehicle_system_->count());
-    const std::string channel_prefix = vehicle_index == kDesignatedInputVehicle ? std::string() : ("v" + std::to_string(vehicle_index) + ".");
+    if (channel_scope.find('.') != std::string_view::npos) throw std::invalid_argument("create_vehicle: a channel scope has no dots");
+    const std::string channel_prefix = !channel_scope.empty() ? std::string(channel_scope) + "."
+                                       : vehicle_index == kDesignatedInputVehicle ? std::string()
+                                                                                   : ("v" + std::to_string(vehicle_index) + ".");
+    if (std::find(vehicle_channel_prefix_.begin(), vehicle_channel_prefix_.end(), channel_prefix) != vehicle_channel_prefix_.end()) {
+        throw std::invalid_argument("create_vehicle: another vehicle already reads the channels '" + channel_prefix + "*'");
+    }
+    vehicle_channel_prefix_.push_back(channel_prefix);
     vehicle::ControlChannelIndices channel_indices;
     channel_indices.steer = ensure_control_channel_index(channel_prefix + "steer");
     channel_indices.throttle = ensure_control_channel_index(channel_prefix + "throttle");
@@ -915,7 +999,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // every wheel by its vehicle index and the wheel's own name (e.g.
     // "vehicle0.front_left.slip_ratio") before the first step() records a
     // row - VehicleId.index doubles as wheel_telemetry_channels_'s outer
-    // index (vehicles are never destroyed, same invariant
+    // index (a destroyed vehicle keeps its slot, same invariant
     // articulation_contacts_ relies on above).
     if (wheel_telemetry_channels_.size() <= id.index) wheel_telemetry_channels_.resize(id.index + 1);
     std::vector<WheelTelemetryChannels>& channels = wheel_telemetry_channels_[id.index];
@@ -1233,6 +1317,7 @@ BodyId World::create_body(const BodyDesc& desc, const ShapeHandle& shape) {
 }
 
 void World::destroy_body(BodyId id) {
+    if (vehicle_system_->chassis_is_coupled(id)) throw std::logic_error("destroy_body: this chassis is coupled; detach it first");
     const bool was_static = terrain_manager_ && backend_->is_static(id);
     backend_->destroy_body(id);
     if (was_static) terrain_manager_->on_static_geometry_changed();
