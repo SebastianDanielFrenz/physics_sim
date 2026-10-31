@@ -573,7 +573,7 @@ TEST_CASE("seam crossing diagnostics: car", "[.][diag][terrain][vehicle]") {
 // boundary kick. Preserve that path; reject the extra O(100) m/s^2 edge kick.
 // Rigid-body support force is inferred from vertical momentum plus gravity;
 // ContactEvent::normal_impulse is currently unpopulated and must not be used.
-TEST_CASE("Flush heightfield mesh boundary crosses without a contact kick", "[terrain][validation][mesh_boundary]") {
+TEST_CASE("Flush heightfield mesh boundary crosses without a contact kick", "[terrain][validation][mesh_boundary][long]") {
     GroundParams gp;
     gp.tx0 = -1; gp.ty0 = 0; gp.m = 3;
     for (const real speed : {10.0, -10.0, 20.0, -20.0, 40.0, -40.0}) {
@@ -595,7 +595,7 @@ TEST_CASE("Flush heightfield mesh boundary crosses without a contact kick", "[te
         }
     }
 }
-TEST_CASE("Flush heightfield mesh wheel crossings and worker determinism", "[terrain][validation][mesh_boundary]") {
+TEST_CASE("Flush heightfield mesh wheel crossings and worker determinism", "[terrain][validation][mesh_boundary][long]") {
     GroundParams gp;
     gp.tx0 = -1; gp.ty0 = 0; gp.m = 3;
     for (const real speed : {10.0, -10.0, 20.0, -20.0}) {

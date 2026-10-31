@@ -240,7 +240,7 @@ void check_all_together(const Script& s) {
 } // namespace
 
 TEST_CASE("V11-all: car_hyper_n2o with every assist live - 1 vs 10 workers equal hash every tick, zero own allocation (12.5 s)",
-          "[assist][vehicle][drivetrain][determinism]") {
+          "[assist][vehicle][drivetrain][determinism][long]") {
     check_all_together(full_script());
 }
 
