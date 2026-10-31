@@ -1,0 +1,45 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "mounted_cultivator",
+  "source": "Test fixture: a mounted implement on the geometry of farming_sim's disc harrow model. Origin at the centre of mass, 1.2 m behind the lower pins and 0.6 m above the working edge, sockets in chassis axes.",
+  "wheels": [],
+  "hitch_points": [
+    {
+      "name": "socket_3pt",
+      "class": "../../../../data/hitch_classes/three_point_locked.json",
+      "role": "towed",
+      "sockets": {
+        "socket_3pt_top": [
+          1.12,
+          0.0,
+          0.64
+        ],
+        "socket_3pt_L": [
+          1.2,
+          0.5,
+          0.0
+        ],
+        "socket_3pt_R": [
+          1.2,
+          -0.5,
+          0.0
+        ]
+      }
+    }
+  ],
+  "machine": {
+    "ref": "../../../../data/machines/cultivator_3m.json",
+    "sockets": {
+      "socket_work_L": [
+        -1.55,
+        1.495,
+        -0.6
+      ],
+      "socket_work_R": [
+        -1.55,
+        -1.495,
+        -0.6
+      ]
+    }
+  }
+}

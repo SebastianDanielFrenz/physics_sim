@@ -443,6 +443,12 @@ private:
 // `engagement_`/`mode_1000_` are the only persistent, hash-relevant state;
 // `lambda_row_prev_` is additionally hashed only when efficiency < 1 (same
 // shape as GearPair's lambda_mesh_prev_).
+// What an implement hangs on pto.out: a rotor's inertia and the torque it takes, set between ticks. Zero: nothing on.
+struct PtoLoad {
+    real inertia_kgm2 = 0.0;
+    real torque_nm = 0.0; // against the shaft's rotation
+};
+
 class Pto final : public IComponent {
 public:
     Pto(NodeId in, NodeId out, FrictionRowId row, PtoDesc desc, int channel_slot, int speed_channel_slot, real out_node_inertia)
@@ -463,11 +469,15 @@ public:
     [[nodiscard]] real current_ratio() const { return mode_1000_ ? desc_.ratio_1000 : desc_.ratio_540; }
     [[nodiscard]] NodeId out_node() const { return out_; }
     [[nodiscard]] NodeId in_node() const { return in_; }
+    [[nodiscard]] bool offers(real rpm) const { return (rpm == real(540.0) && desc_.has_540) || (rpm == real(1000.0) && desc_.has_1000); }
+    void set_external_load(const PtoLoad& load) { load_ = load; }
 
 private:
     NodeId in_, out_;
     FrictionRowId row_;
     PtoDesc desc_;
+    PtoLoad load_{};
+    real load_tau0_ = 0.0, load_d_ = 0.0; // this substep's, for post_solve
     int channel_slot_ = -1;       // into ComponentSubstepCtx::channels ("pto")
     int speed_channel_slot_ = -1; // into ComponentSubstepCtx::channels ("pto_speed")
     real out_node_inertia_ = 0.0; // J of the `out` node, fixed at build time (disengaged stub-brake coefficient)

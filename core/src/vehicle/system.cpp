@@ -25,6 +25,22 @@ constexpr real kRadToDeg = 180.0 / 3.14159265358979323846;
     return b;
 }
 
+[[nodiscard]] machine::LinkageBody linkage_body_now(const IRigidBackend& backend, BodyId chassis, const Quat& frame_local) {
+    const Pose pose = backend.get_pose(chassis);
+    const Motion motion = backend.get_motion(chassis);
+    machine::LinkageBody b;
+    b.position = pose.position;
+    b.orientation = pose.orientation;
+    b.hitch_frame = pose.orientation * frame_local;
+    b.linear = motion.linear;
+    b.angular = motion.angular;
+    return b;
+}
+
+// How many quads a tool can hold between two drains: a second and a bit at 240 Hz would be 300; a farm that drains once a
+// game minute at time scale 1 needs more.
+constexpr std::size_t kWorkQuadCapacity = 4096;
+
 template <typename... Args>
 [[nodiscard]] std::string format(const char* pattern, Args... args) {
     char text[200];
@@ -51,10 +67,19 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
     tick_work_.resize(instances_.size());
     retired_.resize(instances_.size(), 0);
     tow_brake_demand_.resize(instances_.size(), 0.0);
+    tools_.emplace_back();
+    if (desc.machine) {
+        machine::validate_machine(*desc.machine);
+        const VehicleId id{static_cast<id_index_t>(instances_.size() - 1), 1};
+        std::vector<machine::ToolRuntime>& list = tools_.back();
+        list.reserve(desc.machine->tools.size());
+        for (std::size_t t = 0; t < desc.machine->tools.size(); ++t) list.emplace_back(desc.machine->tools[t], id, static_cast<std::uint32_t>(t), kWorkQuadCapacity);
+        ++tool_vehicles_;
+    }
     const auto vehicle_index = static_cast<std::int32_t>(instances_.size() - 1);
     if (vehicle_for_body_index_.size() <= chassis.index) vehicle_for_body_index_.resize(chassis.index + 1, -1);
     vehicle_for_body_index_[chassis.index] = vehicle_index;
-    if (alive_couplings_ > 0) rebuild_islands();
+    if (alive_couplings_ > 0 || tool_vehicles_ > 0) rebuild_islands();
     return VehicleId{static_cast<id_index_t>(instances_.size() - 1), 1};
 }
 
@@ -94,6 +119,25 @@ machine::AttachCheck System::check_attach(const machine::CouplingDesc& desc, con
     }
 
     const machine::HitchClassDesc& hitch = desc.hitch;
+    if (desc.linkage) {
+        const machine::LinkageBody a = linkage_body_now(backend, instances_[desc.towing.index]->chassis(), desc.frame_towing_local);
+        const machine::LinkageBody b = linkage_body_now(backend, instances_[desc.towed.index]->chassis(), desc.frame_towed_local);
+        const machine::LinkageMeasure m = machine::measure_linkage(a, b, *desc.linkage);
+        check.error_m = m.error.length();
+        check.speed_m_s = m.error_rate.length();
+        check.angle_rad = m.angle;
+        const char* name = hitch.name.c_str();
+        if (check.error_m > hitch.max_latch_error_m) refuse(format("links %.3f m off their pins, class '%s' latches within %.3f m", check.error_m, name, hitch.max_latch_error_m));
+        if (check.speed_m_s > hitch.max_latch_speed_m_s) refuse(format("pins closing at %.3f m/s, class '%s' latches below %.3f m/s", check.speed_m_s, name, hitch.max_latch_speed_m_s));
+        for (const std::size_t k : {std::size_t{0}, std::size_t{2}}) {
+            if (std::abs(m.angle[k]) > hitch.max_latch_angle_rad) refuse(format("%s %.2f deg, class '%s' latches within %.2f deg", k == 0 ? "yaw" : "roll", m.angle[k] * kRadToDeg, name, hitch.max_latch_angle_rad * kRadToDeg));
+        }
+        if (m.lift_angle > desc.linkage->max_angle_rad || m.lift_angle < desc.linkage->min_angle_rad) {
+            refuse(format("the pins need the lower links at %.2f deg, the stops are %.2f..%.2f deg", m.lift_angle * kRadToDeg, desc.linkage->min_angle_rad * kRadToDeg, desc.linkage->max_angle_rad * kRadToDeg));
+        }
+        check.ok = check.message.empty();
+        return check;
+    }
     const machine::SocketBody a = socket_body_now(backend, instances_[desc.towing.index]->chassis(), desc.socket_towing_local, desc.frame_towing_local);
     const machine::SocketBody b = socket_body_now(backend, instances_[desc.towed.index]->chassis(), desc.socket_towed_local, desc.frame_towed_local);
     const machine::HitchMeasure m = machine::measure_hitch(a, b, hitch);
@@ -141,18 +185,37 @@ HitchId System::attach(const machine::CouplingDesc& desc, IRigidBackend& backend
     c.towed = desc.towed.index;
 
     const BodyId towing = instances_[c.towing]->chassis();
-    const machine::SocketBody a = socket_body_now(backend, towing, desc.socket_towing_local, desc.frame_towing_local);
-    const machine::SocketBody b = socket_body_now(backend, instances_[c.towed]->chassis(), desc.socket_towed_local, desc.frame_towed_local);
-    const machine::HitchMeasure m = machine::measure_hitch(a, b, desc.hitch);
-    const Quat towing_rotation = backend.get_pose(towing).orientation;
     c.latch_total = c.latch_left = std::max(1, static_cast<int>(desc.hitch.latch_time_s * substep_rate_hz + 0.5));
-    c.latch_error_local = towing_rotation.conjugate().rotate(m.error);
-    c.latch_rate_local = towing_rotation.conjugate().rotate(m.error_rate - cross(a.angular, m.error));
-    const std::array<const machine::HitchAxis*, 3> axes = {&desc.hitch.yaw, &desc.hitch.pitch, &desc.hitch.roll};
-    for (std::size_t k = 0; k < 3; ++k) {
-        if (axes[k]->mode != machine::HitchAxisMode::Locked) continue;
-        c.latch_angle[k] = m.angle[k];
-        c.latch_angle_rate[k] = m.angle_rate[k];
+    if (desc.linkage) {
+        // A linkage's rows are link lengths, not a vector: their latch stays as measured whatever the pair does. The lift
+        // takes over the height the implement has.
+        const machine::LinkageBody a = linkage_body_now(backend, towing, desc.frame_towing_local);
+        const machine::LinkageBody b = linkage_body_now(backend, instances_[c.towed]->chassis(), desc.frame_towed_local);
+        const machine::LinkageMeasure m = machine::measure_linkage(a, b, *desc.linkage);
+        c.latch_error_local = m.error;
+        c.latch_rate_local = m.error_rate;
+        for (const std::size_t k : {std::size_t{0}, std::size_t{2}}) {
+            c.latch_angle[k] = m.angle[k];
+            c.latch_angle_rate[k] = m.angle_rate[k];
+        }
+        const machine::LinkageGeometry& g = *desc.linkage;
+        c.lift_target = m.lift_angle;
+        c.state.linkage.angle_rad = m.lift_angle;
+        c.state.linkage.target_rad = m.lift_angle;
+        c.state.linkage.position = (m.lift_angle - g.min_angle_rad) / (g.max_angle_rad - g.min_angle_rad);
+    } else {
+        const machine::SocketBody a = socket_body_now(backend, towing, desc.socket_towing_local, desc.frame_towing_local);
+        const machine::SocketBody b = socket_body_now(backend, instances_[c.towed]->chassis(), desc.socket_towed_local, desc.frame_towed_local);
+        const machine::HitchMeasure m = machine::measure_hitch(a, b, desc.hitch);
+        const Quat towing_rotation = backend.get_pose(towing).orientation;
+        c.latch_error_local = towing_rotation.conjugate().rotate(m.error);
+        c.latch_rate_local = towing_rotation.conjugate().rotate(m.error_rate - cross(a.angular, m.error));
+        const std::array<const machine::HitchAxis*, 3> axes = {&desc.hitch.yaw, &desc.hitch.pitch, &desc.hitch.roll};
+        for (std::size_t k = 0; k < 3; ++k) {
+            if (axes[k]->mode != machine::HitchAxisMode::Locked) continue;
+            c.latch_angle[k] = m.angle[k];
+            c.latch_angle_rate[k] = m.angle_rate[k];
+        }
     }
     c.state.latch_progress = 0.0;
     ++alive_couplings_;
@@ -175,6 +238,7 @@ machine::CouplingDesc System::mate_points(VehicleId towing, std::string_view tow
     else if (a->role != machine::HitchRole::Towing) problem = "'" + a_name + "' is not a towing point";
     else if (b->role != machine::HitchRole::Towed) problem = "'" + b_name + "' is not a towed point";
     else if (a->hitch.name != b->hitch.name) problem = "'" + a_name + "' takes class '" + a->hitch.name + "', '" + b_name + "' class '" + b->hitch.name + "'";
+    else if (a->linkage && !b->three_point) problem = "'" + a_name + "' is a linkage, '" + b_name + "' has no three pins";
     if (!problem.empty()) return d;
     d.towing = towing;
     d.towed = towed;
@@ -183,6 +247,23 @@ machine::CouplingDesc System::mate_points(VehicleId towing, std::string_view tow
     d.hitch = a->hitch;
     d.towing_point = a_name;
     d.towed_point = b_name;
+    if (a->linkage) {
+        const machine::LinkageDesc& lift = *a->linkage;
+        machine::LinkageGeometry g;
+        g.lower_pivot_local = lift.lower_pivot_local;
+        g.top_pivot_local = lift.top_pivot_local;
+        g.lower_pin_local = b->lower_pin_local;
+        g.top_pin_local = b->top_pin_local;
+        const Vec3 lower = a->lower_pin_local - lift.lower_pivot_local;
+        g.lower_length_m = lower.length();
+        g.top_length_m = (a->top_pin_local - lift.top_pivot_local).length();
+        g.reference_angle_rad = machine::linkage_angle(lower);
+        g.min_angle_rad = lift.min_angle_rad;
+        g.max_angle_rad = lift.max_angle_rad;
+        g.max_lift_torque_nm = lift.max_lift_force_n * g.lower_length_m;
+        d.linkage = g;
+        d.linkage_lift = lift;
+    }
     return d;
 }
 
@@ -190,6 +271,8 @@ machine::HitchLoads System::hitch_loads(HitchId id, const IRigidBackend& backend
     const Coupling& c = couplings_[id.index];
     machine::HitchLoads loads;
     loads.tongue_load_n = -c.state.mean_force_on_towing_world.z;
+    loads.lift_force_n = c.state.linkage.lift_force_n;
+    loads.lift_saturated = c.state.linkage.saturated;
     std::vector<std::size_t> behind{c.towed};
     while (!behind.empty()) {
         const std::size_t v = behind.back();
@@ -208,6 +291,11 @@ const machine::HitchPointDesc* System::towing_point(HitchId id) const {
 }
 
 void System::kill_coupling(Coupling& c) {
+    if (c.pto_tool != kNoTool) {
+        instances_[c.towing]->set_pto_load({});
+        tools_[c.towed][c.pto_tool].disconnect_shaft();
+        c.pto_tool = kNoTool;
+    }
     c.alive = false;
     tow_brake_demand_[c.towed] = 0.0;
     ++c.generation;
@@ -227,6 +315,7 @@ void System::retire(VehicleId id, IRigidBackend& backend) {
         if (c.alive && (c.towing == id.index || c.towed == id.index)) kill_coupling(c);
     }
     retired_[id.index] = 1;
+    if (!tools_[id.index].empty()) --tool_vehicles_;
     const BodyId chassis = instances_[id.index]->chassis();
     if (chassis.index < vehicle_for_body_index_.size()) vehicle_for_body_index_[chassis.index] = -1;
     rebuild_islands();
@@ -268,12 +357,9 @@ void System::rebuild_islands() {
         if (couplings_[i].alive) islands_[island_of_root[find(couplings_[i].towing)]].couplings.push_back(i);
     }
 
-    for (const Island& island : islands_) {
-        std::vector<BodyId> chassis;
-        if (!island.couplings.empty()) {
-            for (const std::size_t i : island.vehicles) chassis.push_back(instances_[i]->chassis());
-        }
-        for (const std::size_t i : island.vehicles) instances_[i]->set_cast_exclusions(chassis);
+    for (Island& island : islands_) {
+        for (const std::size_t i : island.vehicles) island.chassis.push_back(instances_[i]->chassis());
+        for (const std::size_t i : island.vehicles) instances_[i]->set_cast_exclusions(island.couplings.empty() ? std::vector<BodyId>{} : island.chassis);
     }
 }
 
@@ -298,8 +384,13 @@ machine::LatchTarget System::latch_target(const Coupling& c, const VehicleTickWo
     const real rate_rate = (3.0 * u - 1.0) * (u - 1.0);
     const Vec3 local = c.latch_error_local * position_gain + c.latch_rate_local * rate_gain;
     const Vec3 local_rate = c.latch_error_local * position_rate + c.latch_rate_local * rate_rate;
-    t.error = towing.pose_s.orientation.rotate(local);
-    t.error_rate = cross(towing.twist_s.angular, t.error) + towing.pose_s.orientation.rotate(local_rate);
+    if (c.desc.linkage) {
+        t.error = local;
+        t.error_rate = local_rate;
+    } else {
+        t.error = towing.pose_s.orientation.rotate(local);
+        t.error_rate = cross(towing.twist_s.angular, t.error) + towing.pose_s.orientation.rotate(local_rate);
+    }
     for (std::size_t k = 0; k < 3; ++k) {
         t.angle[k] = c.latch_angle[k] * position_gain + c.latch_angle_rate[k] * rate_gain;
         t.angle_rate[k] = c.latch_angle[k] * position_rate + c.latch_angle_rate[k] * rate_rate;
@@ -330,6 +421,126 @@ void System::update_tow_brakes(const Island& island, const IRigidBackend& backen
     }
 }
 
+void System::set_lift_channels(HitchId id, std::size_t position, std::size_t mode, std::size_t draft) {
+    Coupling& c = couplings_[id.index];
+    c.lift_position_channel = position;
+    c.lift_mode_channel = mode;
+    c.lift_draft_channel = draft;
+}
+
+void System::update_lifts(const Island& island, const std::vector<real>& channel_values, real tick_dt) {
+    for (const std::size_t ci : island.couplings) {
+        Coupling& c = couplings_[ci];
+        if (!c.desc.linkage) continue;
+        const machine::LinkageGeometry& g = *c.desc.linkage;
+        const machine::LinkageDesc& lift = c.desc.linkage_lift;
+        machine::LinkageState& state = c.state.linkage;
+        const real span = g.max_angle_rad - g.min_angle_rad;
+        const real lever_angle = g.min_angle_rad + std::clamp(channel_values[c.lift_position_channel], real(0.0), real(1.0)) * span;
+        const real stroke_rate = span / lift.full_stroke_s;
+        const int mode = std::clamp(static_cast<int>(channel_values[c.lift_mode_channel] + 0.5), 0, 2);
+        state.mode = static_cast<machine::LiftMode>(mode);
+
+        c.lift_sensed_n += (state.lower_tension_n - c.lift_sensed_n) * tick_dt / (lift.draft_filter_s + tick_dt);
+        state.sensed_draft_n = c.lift_sensed_n;
+
+        real goal = lever_angle;
+        if (state.mode == machine::LiftMode::Float) {
+            c.lift_target = state.angle_rad;
+            c.lift_target_rate = 0.0;
+            c.lift_command = machine::LiftCommand{false, c.lift_target, 0.0};
+            state.target_rad = c.lift_target;
+            continue;
+        }
+        if (state.mode == machine::LiftMode::Draft) {
+            const real setpoint = std::max(channel_values[c.lift_draft_channel], real(1.0));
+            const real error = (c.lift_sensed_n - setpoint) / setpoint;
+            const real rate = std::abs(error) <= lift.draft_band ? real(0.0) : std::clamp(lift.draft_gain_per_s * error, real(-1.0), real(1.0)) * stroke_rate;
+            goal = std::clamp(c.lift_target + rate * tick_dt, lever_angle, g.max_angle_rad);
+        }
+        const real step = std::clamp(goal - c.lift_target, -stroke_rate * tick_dt, stroke_rate * tick_dt);
+        c.lift_target += step;
+        c.lift_target_rate = step / tick_dt;
+        // The ground holds the implement above where the lift would have it: the held height must not run away below
+        // it, or raising the lever would first have to wind all that back.
+        if (state.angle_rad - c.lift_target > lift.follow_slack_rad) {
+            c.lift_target = state.angle_rad - lift.follow_slack_rad;
+            c.lift_target_rate = 0.0;
+        }
+        c.lift_command = machine::LiftCommand{true, c.lift_target, c.lift_target_rate};
+        state.target_rad = c.lift_target;
+    }
+}
+
+void System::update_pto_shafts(const Island& island) {
+    for (const std::size_t ci : island.couplings) {
+        const Coupling& c = couplings_[ci];
+        if (c.pto_tool == kNoTool) continue;
+        machine::ToolRuntime& tool = tools_[c.towed][c.pto_tool];
+        const real torque = tool.pto_load_nm(instances_[c.towing]->pto_out_omega());
+        instances_[c.towing]->set_pto_load({tool.desc().pto.inertia_kgm2, torque});
+    }
+}
+
+machine::PtoCheck System::check_pto(HitchId id) const {
+    machine::PtoCheck check;
+    if (!contains(id)) {
+        check.message = "pto: not a live hitch";
+        return check;
+    }
+    const Coupling& c = couplings_[id.index];
+    const std::vector<machine::ToolRuntime>& tools = tools_[c.towed];
+    const auto tool = std::find_if(tools.begin(), tools.end(), [](const machine::ToolRuntime& t) { return t.desc().pto.present; });
+    if (!instances_[c.towing]->has_pto()) check.message = "pto: the towing vehicle has no PTO";
+    else if (tool == tools.end()) check.message = "pto: the towed vehicle has no tool on a shaft";
+    else if (c.pto_tool != kNoTool) check.message = "pto: this hitch's shaft is on";
+    else if (!instances_[c.towing]->pto_offers(tool->desc().pto.nominal_rpm)) check.message = format("pto: the tractor has no %.0f rpm mode", tool->desc().pto.nominal_rpm);
+    check.ok = check.message.empty();
+    return check;
+}
+
+void System::connect_pto(HitchId id) {
+    const machine::PtoCheck check = check_pto(id);
+    if (!check.ok) throw std::invalid_argument(check.message);
+    Coupling& c = couplings_[id.index];
+    const std::vector<machine::ToolRuntime>& tools = tools_[c.towed];
+    for (std::size_t t = 0; t < tools.size(); ++t) {
+        if (tools[t].desc().pto.present) {
+            c.pto_tool = t;
+            break;
+        }
+    }
+    instances_[c.towing]->set_pto_load({tools[c.pto_tool].desc().pto.inertia_kgm2, 0.0});
+}
+
+void System::disconnect_pto(HitchId id) {
+    Coupling& c = couplings_[id.index];
+    if (c.pto_tool == kNoTool) return;
+    instances_[c.towing]->set_pto_load({});
+    tools_[c.towed][c.pto_tool].disconnect_shaft();
+    c.pto_tool = kNoTool;
+}
+
+void System::drain_work(std::vector<machine::WorkQuad>& out) {
+    const std::size_t first = out.size();
+    for (std::vector<machine::ToolRuntime>& list : tools_) {
+        for (machine::ToolRuntime& tool : list) tool.drain(out);
+    }
+    std::stable_sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(), [](const machine::WorkQuad& a, const machine::WorkQuad& b) {
+        if (a.tick != b.tick) return a.tick < b.tick;
+        if (a.vehicle.index != b.vehicle.index) return a.vehicle.index < b.vehicle.index;
+        return a.tool < b.tool;
+    });
+}
+
+std::uint64_t System::work_dropped() const {
+    std::uint64_t dropped = 0;
+    for (const std::vector<machine::ToolRuntime>& list : tools_) {
+        for (const machine::ToolRuntime& tool : list) dropped += tool.dropped();
+    }
+    return dropped;
+}
+
 void System::solve_coupling(Coupling& c, real h) {
     VehicleTickWork& wa = tick_work_[c.towing];
     VehicleTickWork& wb = tick_work_[c.towed];
@@ -345,9 +556,27 @@ void System::solve_coupling(Coupling& c, real h) {
         b.inv_inertia_world = w.ip.inv_inertia_world;
         return b;
     };
-    const machine::SocketBody a = socket_body(wa, c.desc.socket_towing_local, c.desc.frame_towing_local, c.force, c.torque_towing);
-    const machine::SocketBody b = socket_body(wb, c.desc.socket_towed_local, c.desc.frame_towed_local, -c.force, c.torque_towed);
-    c.last = machine::solve_socket_coupling(a, b, c.desc.hitch, h, latch_target(c, wa, h));
+    if (c.desc.linkage) {
+        const auto linkage_body = [h](const VehicleTickWork& w, const Quat& frame_local, const Vec3& own_force, const Vec3& own_torque) {
+            machine::LinkageBody b;
+            b.position = w.pose_s.position;
+            b.orientation = w.pose_s.orientation;
+            b.hitch_frame = w.pose_s.orientation * frame_local;
+            b.linear = w.twist_s.linear + ((w.force_s - own_force) * w.ip.inv_mass + w.a_ext) * h;
+            b.angular = w.twist_s.angular + (w.ip.inv_inertia_world * (w.torque_s - own_torque) + w.alpha_ext) * h;
+            b.inv_mass = w.ip.inv_mass;
+            b.inv_inertia_world = w.ip.inv_inertia_world;
+            return b;
+        };
+        const machine::LinkageBody a = linkage_body(wa, c.desc.frame_towing_local, c.force, c.torque_towing);
+        const machine::LinkageBody b = linkage_body(wb, c.desc.frame_towed_local, -c.force, c.torque_towed);
+        c.linkage_last = machine::solve_linkage(a, b, *c.desc.linkage, c.desc.hitch, h, c.lift_command, latch_target(c, wa, h));
+        c.last = c.linkage_last.wrench;
+    } else {
+        const machine::SocketBody a = socket_body(wa, c.desc.socket_towing_local, c.desc.frame_towing_local, c.force, c.torque_towing);
+        const machine::SocketBody b = socket_body(wb, c.desc.socket_towed_local, c.desc.frame_towed_local, -c.force, c.torque_towed);
+        c.last = machine::solve_socket_coupling(a, b, c.desc.hitch, h, latch_target(c, wa, h));
+    }
     VehicleInstance::substep_add_wrench(wa, c.last.force_on_a - c.force, c.last.torque_on_a - c.torque_towing);
     VehicleInstance::substep_add_wrench(wb, c.force - c.last.force_on_a, c.last.torque_on_b - c.torque_towed);
     c.force = c.last.force_on_a;
@@ -358,6 +587,7 @@ void System::solve_coupling(Coupling& c, real h) {
 void System::step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                          real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air) {
     update_tow_brakes(island, backend, channel_values, tick_dt);
+    update_lifts(island, channel_values, tick_dt);
     for (const std::size_t i : island.vehicles) {
         VehicleTickEnv e = env;
         e.brake_link = tow_brake_demand_[i];
@@ -369,18 +599,33 @@ void System::step_island(Island& island, IRigidBackend& backend, const std::vect
         }
         tick_work_[i] = VehicleTickWork{};
         instances_[i]->tick_begin(tick_work_[i], backend, channel_values, e, tick_dt, substep_rate_hz);
+        for (machine::ToolRuntime& tool : tools_[i]) tool.tick_begin(tick_work_[i].pose_s, backend, island.chassis, soil_.get());
     }
+    update_pto_shafts(island);
     for (const std::size_t ci : island.couplings) {
-        couplings_[ci].state.mean_force_on_towing_world = Vec3::zero();
-        couplings_[ci].state.max_error_m = 0.0;
+        Coupling& c = couplings_[ci];
+        c.state.mean_force_on_towing_world = Vec3::zero();
+        c.state.max_error_m = 0.0;
+        c.state.linkage.lift_force_n = c.state.linkage.lower_tension_n = c.state.linkage.top_force_n = 0.0;
+        c.state.linkage.saturated = false;
     }
     const std::size_t num_substeps = tick_work_[island.vehicles.front()].num_substeps;
     const real h = tick_work_[island.vehicles.front()].substep_dt;
     for (std::size_t s = 0; s < num_substeps; ++s) {
-        for (const std::size_t i : island.vehicles) instances_[i]->substep_forces(tick_work_[i], s, backend);
+        for (const std::size_t i : island.vehicles) {
+            VehicleTickWork& tw = tick_work_[i];
+            instances_[i]->substep_forces(tw, s, backend);
+            for (machine::ToolRuntime& tool : tools_[i]) {
+                Vec3 force, torque;
+                tool.substep(tw.pose_s, tw.twist_s, force, torque);
+                VehicleInstance::substep_add_wrench(tw, force, torque);
+            }
+        }
         for (const std::size_t ci : island.couplings) {
             Coupling& c = couplings_[ci];
             c.force = c.torque_towing = c.torque_towed = Vec3::zero();
+            // The lift's target moves along the tick instead of in a step.
+            if (c.desc.linkage) c.lift_command.target_rad = c.lift_target - c.lift_target_rate * h * static_cast<real>(num_substeps - 1 - s);
         }
         const int passes = island.couplings.size() > 1 ? coupling_passes_ : 1;
         for (int pass = 0; pass < passes; ++pass) {
@@ -389,6 +634,15 @@ void System::step_island(Island& island, IRigidBackend& backend, const std::vect
         for (const std::size_t ci : island.couplings) {
             Coupling& c = couplings_[ci];
             c.state.mean_force_on_towing_world += c.last.force_on_a;
+            if (c.desc.linkage) {
+                const machine::LinkageSolve& l = c.linkage_last;
+                machine::LinkageState& state = c.state.linkage;
+                state.angle_rad = l.lift_angle;
+                state.lift_force_n += l.lift_torque_nm / c.desc.linkage->lower_length_m;
+                state.lower_tension_n += l.lower_tension_n;
+                state.top_force_n += l.top_compression_n;
+                state.saturated = state.saturated || l.saturated;
+            }
             c.state.error_world = c.last.error;
             c.state.max_error_m = std::max(c.state.max_error_m, c.last.error.length());
             c.state.yaw_rad = c.last.angle[0];
@@ -400,8 +654,23 @@ void System::step_island(Island& island, IRigidBackend& backend, const std::vect
         }
         for (const std::size_t i : island.vehicles) VehicleInstance::substep_advance(tick_work_[i]);
     }
-    for (const std::size_t ci : island.couplings) couplings_[ci].state.mean_force_on_towing_world /= static_cast<real>(num_substeps);
-    for (const std::size_t i : island.vehicles) instances_[i]->tick_end(tick_work_[i], backend);
+    for (const std::size_t ci : island.couplings) {
+        Coupling& c = couplings_[ci];
+        const real per_substep = 1.0 / static_cast<real>(num_substeps);
+        c.state.mean_force_on_towing_world /= static_cast<real>(num_substeps);
+        if (c.desc.linkage) {
+            machine::LinkageState& state = c.state.linkage;
+            const machine::LinkageGeometry& g = *c.desc.linkage;
+            state.lift_force_n *= per_substep;
+            state.lower_tension_n *= per_substep;
+            state.top_force_n *= per_substep;
+            state.position = (state.angle_rad - g.min_angle_rad) / (g.max_angle_rad - g.min_angle_rad);
+        }
+    }
+    for (const std::size_t i : island.vehicles) {
+        for (machine::ToolRuntime& tool : tools_[i]) tool.tick_end(tick_work_[i].pose_s, work_tick_);
+        instances_[i]->tick_end(tick_work_[i], backend);
+    }
 }
 
 void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
@@ -409,6 +678,7 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
                        std::span<const environment::VehicleAir> air) {
     if (instances_.empty()) return;
     const std::size_t n = instances_.size();
+    ++work_tick_;
     for(std::size_t i=0;i<n;++i) {
         if(retired_[i]!=0) {
             aero_wakes_[i]=aero::WakeSource{};
@@ -421,7 +691,7 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
     VehicleTickEnv tick_env=env; tick_env.wakes=aero_wakes_;
 
     const int workers = std::max(1, job_system.worker_count());
-    if (alive_couplings_ > 0) {
+    if (alive_couplings_ > 0 || tool_vehicles_ > 0) {
         // One job per island; each job touches only its own vehicles, couplings and tick_work_ entries.
         const std::size_t count = islands_.size();
         const std::size_t island_grain = std::max<std::size_t>(1, (count + static_cast<std::size_t>(workers) * 4 - 1) / (static_cast<std::size_t>(workers) * 4));
@@ -491,6 +761,17 @@ std::uint64_t System::fold_state_hash(std::uint64_t seed) const {
         const std::optional<machine::TowBrakeDesc>& link = instances_[c.towed]->tow_brake();
         if (link) h = fold(h, c.brake_state);
         if (link && link->kind == machine::TowBrakeKind::Overrun) h = fold(h, c.state.mean_force_on_towing_world);
+        if (c.desc.linkage) {
+            h = fold(h, c.lift_target);
+            h = fold(h, c.lift_sensed_n);
+            h = fold(h, c.state.linkage.lower_tension_n);
+            h = fold(h, c.state.linkage.angle_rad);
+        }
+        if (c.pto_tool != kNoTool) h = fold(h, c.pto_tool);
+    }
+    // Likewise only a vehicle with tools.
+    for (const std::vector<machine::ToolRuntime>& list : tools_) {
+        for (const machine::ToolRuntime& tool : list) h = tool.fold_state_hash(h);
     }
     return h;
 }

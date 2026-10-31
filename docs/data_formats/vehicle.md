@@ -31,6 +31,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `steering` | [steering object](#steering) | optional | all fields at their own defaults | see below | Ackermann steering geometry |
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
 | `tow_brake` | [tow_brake object](#tow-brake) | optional | none | needs `brake_system` corners | what drives this vehicle's brakes while it is towed |
+| `machine` | object `{ref, sockets}` | optional | none | a `physics_sim.machine/1` file and the model's sockets in chassis axes; `"wheels": []` is legal only with it | an implement's tools, [machine.md](machine.md) |
 | `hitch_points` | array of [hitch point objects](#hitch-points) | optional | none | see below | where hitches go on this vehicle |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
@@ -1169,6 +1170,7 @@ towed, "socket_hitch_eye")`: two points mate when one tows, the other is towed a
 | `sockets` | object name -> `[x, y, z]` | one of the two | — | at least two | a linkage standing on several rig sockets; the point sits at their centroid |
 | `max_towed_mass_kg` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
 | `max_tongue_load_n` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
+| `linkage` | object | optional | none | towing points of a three-point class | the lift and the links, [linkage.md](linkage.md) |
 
 A point takes one hitch at a time. The ratings never refuse a hitch: `World::hitch_limits(id, policy)` returns `TowedMass` and
 `TongueLoad` limit findings against them, the whole chain behind the hitch in the mass and last tick's vertical socket force in the

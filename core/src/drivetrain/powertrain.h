@@ -450,6 +450,11 @@ public:
     // every vehicle without one - same nullable-pointer pattern as
     // transfer_case_/park_lock_ above.
     [[nodiscard]] bool has_pto() const { return pto_ != nullptr; }
+    [[nodiscard]] bool pto_offers(real rpm) const { return pto_ != nullptr && pto_->offers(rpm); }
+    [[nodiscard]] real pto_out_omega() const { return pto_ ? network_.omega(pto_->out_node()) : real(0.0); }
+    void set_pto_load(const PtoLoad& load) {
+        if (pto_) pto_->set_external_load(load);
+    }
     [[nodiscard]] real pto_engagement() const { return pto_ ? pto_->engagement() : real(0.0); }
     [[nodiscard]] real pto_mode() const { return pto_ ? (pto_->mode_1000() ? real(1000.0) : real(540.0)) : real(0.0); }
     [[nodiscard]] real pto_rpm() const {

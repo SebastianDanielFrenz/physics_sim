@@ -26,10 +26,24 @@
 // A limited axis has a row only while it is at its stop or would pass it within
 // the substep, and the row only ever pushes back: one that would pull comes out
 // and the system is solved again.
+//
+// A linkage (solve_linkage) has the same rows on other geometry. The two links are
+// distance rows between the tractor's pivot and the implement's pin; a lateral row
+// and the yaw and roll rows hold the implement in the tractor's centre plane; the
+// sixth row is the lift, on the lower link's angle q in the towing chassis:
+//
+//     q_dot = t . (v_pin - v_pivot) / l - y . omega_a,    t = y x (pin - pivot) / l
+//
+// so lambda on it is the torque about the lower pivot, a force lambda / l across
+// the link at the pin and its reaction at the pivot plus the couple on the tractor.
+// The row lifts only, up to what the lift can give: past that it comes out of the
+// matrix as a known force. Past a link stop it turns into a unilateral stop row,
+// and in float that is all that is left of it.
 
 #pragma once
 
 #include "ps/machine/hitch_class.h"
+#include "ps/machine/linkage.h"
 #include "ps/math/mat3.h"
 #include "ps/math/quat.h"
 #include "ps/math/vec3.h"
@@ -72,5 +86,42 @@ struct SocketSolve {
 };
 
 [[nodiscard]] SocketSolve solve_socket_coupling(const SocketBody& a, const SocketBody& b, const HitchClassDesc& hitch, real h, const LatchTarget& latch = {});
+
+// A chassis as the linkage rows see it.
+struct LinkageBody {
+    Vec3 position{}; // centre of mass
+    Quat orientation = Quat::identity();
+    Quat hitch_frame = Quat::identity(); // world
+    Vec3 linear{}, angular{};
+    real inv_mass = 0.0;
+    Mat3 inv_inertia_world = Mat3::zero();
+};
+
+// The linkage rows' positions and rates. Row order: lower link, top link, lateral.
+struct LinkageMeasure {
+    Vec3 error{}, error_rate{};
+    std::array<real, 3> angle{}, angle_rate{}; // yaw, pitch, roll of the towed frame
+    real lift_angle = 0.0, lift_rate = 0.0;    // the lower link, from the hitch point's pose
+};
+
+[[nodiscard]] LinkageMeasure measure_linkage(const LinkageBody& a, const LinkageBody& b, const LinkageGeometry& g);
+
+struct LiftCommand {
+    bool active = true; // false: float, no lift row between the stops
+    real target_rad = 0.0, target_rate = 0.0;
+};
+
+struct LinkageSolve {
+    SocketSolve wrench; // its error holds the rows' errors in LinkageMeasure's order
+    real lift_angle = 0.0;
+    real lift_torque_nm = 0.0;    // the lift's about the lower pivot; one out of force on the lower stop: what it would take
+    real lower_tension_n = 0.0;   // positive pulls the pin towards the pivot
+    real top_compression_n = 0.0; // positive pushes the top pin away from the pivot
+    bool lift_acting = false;     // the lift row carried force
+    bool saturated = false;       // the lift ran out of force
+};
+
+[[nodiscard]] LinkageSolve solve_linkage(const LinkageBody& a, const LinkageBody& b, const LinkageGeometry& g, const HitchClassDesc& hitch, real h,
+                                         const LiftCommand& lift, const LatchTarget& latch = {});
 
 } // namespace ps::machine

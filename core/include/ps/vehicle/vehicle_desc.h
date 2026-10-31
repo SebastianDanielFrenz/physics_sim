@@ -15,6 +15,7 @@
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/machine/hitch_point.h"
+#include "ps/machine/tool.h"
 #include "ps/machine/tow_brake.h"
 #include "ps/math/pose.h"
 #include "ps/math/vec3.h"
@@ -199,6 +200,8 @@ struct VehicleDesc {
     std::optional<machine::TowBrakeDesc> tow_brake;
     // Where hitches go on this vehicle.
     std::vector<machine::HitchPointDesc> hitch_points;
+    // Working tools (docs/data_formats/machine.md). A vehicle with a machine may have no wheels: a mounted implement.
+    std::optional<machine::MachineDesc> machine;
 };
 
 } // namespace ps::vehicle

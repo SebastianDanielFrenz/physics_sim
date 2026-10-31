@@ -17,6 +17,9 @@
 #include "ps/jobs/task_graph.h"
 #include "ps/io/surface_table.h"
 #include "ps/machine/coupling.h"
+#include "ps/machine/soil_source.h"
+#include "ps/machine/tool.h"
+#include "ps/machine/work.h"
 #include "ps/machine/hitch_limits.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
@@ -350,6 +353,26 @@ public:
     void detach(HitchId id);
     [[nodiscard]] bool hitch_alive(HitchId id) const;
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
+    // A linkage's lift reads the towing vehicle's channels (LinkageDesc): attach sets the lever to where the implement
+    // hangs and the mode to Position, so that nothing moves until someone asks.
+    // The PTO shaft across a live hitch. On it, the implement's rotor is on the tractor's pto.out: engaging is the
+    // tractor's "pto" channel. The shaft comes off with the hitch. Sim thread, between steps.
+    [[nodiscard]] machine::PtoCheck check_pto(HitchId id) const;
+    void connect_pto(HitchId id); // std::invalid_argument with check_pto's message
+    void disconnect_pto(HitchId id);
+    [[nodiscard]] bool pto_connected(HitchId id) const;
+    // What the tools work in. Read from the vehicle jobs, concurrently; replaced only between steps. nullptr: no tool
+    // has soil under it. The source stays alive through this pointer.
+    void set_soil_source(std::shared_ptr<const machine::ISoilSource> soil);
+    [[nodiscard]] std::size_t vehicle_tool_count(VehicleId id) const;
+    [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const;
+    [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const;
+    // A roller or gauge wheel's depth setting, metres.
+    void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m);
+    // Appends the quads the tools swept since the last drain, in (tick, vehicle, tool) order. Between steps; machine::
+    // WorkLedger turns them into cells. Each tool holds 4096 quads; a fuller buffer drops the newest and counts them.
+    void drain_work(std::vector<machine::WorkQuad>& out);
+    [[nodiscard]] std::uint64_t work_dropped() const;
     // Takes a vehicle out of the simulation, detaching its hitches. Its chassis stays a plain body, for the caller to
     // destroy or reuse; every other vehicle keeps its index and channels. Whatever checks a VehicleId refuses the stale
     // one, and WorldSnapshot::vehicles keeps its slot with an invalid id and no wheels.

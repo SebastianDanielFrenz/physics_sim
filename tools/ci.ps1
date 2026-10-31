@@ -814,7 +814,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/environment/'; Kind = 'topics'; Topics = @('environment', 'vehicle') },  # weather plan W1+: ps_environment (+ _io); the wheel reads its surface condition
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/aero/|^core/src/io/aero_io\.(cpp|h)$|^core/include/ps/io/aero_coefficient_map_io\.h$'; Kind = 'topics'; Topics = @('aero', 'vehicle') },  # 8b04f0e aerodynamics + a949346 coefficient maps
-    @{ Re = '^core/(include/ps|src)/machine/|^core/src/io/hitch_io\.cpp$|^core/include/ps/io/hitch_io\.h$|^data/hitch_classes/'; Kind = 'topics'; Topics = @('machine', 'vehicle') },  # attachment A1: hitches between vehicles
+    @{ Re = '^core/(include/ps|src)/machine/|^core/src/io/(hitch|machine)_io\.cpp$|^core/include/ps/io/(hitch|machine)_io\.h$|^data/(hitch_classes|machines)/'; Kind = 'topics'; Topics = @('machine', 'vehicle') },  # attachment A1: hitches between vehicles
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
     @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
     @{ Re = '^engine_tools/'; Kind = 'topics'; Topics = @('engine_tools', 'audio', 'drivetrain') },  # engine garage P6: ps_engine_tools audio bank baker
