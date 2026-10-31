@@ -25,6 +25,7 @@
 #include "ps/vehicle/wheel_state.h"
 #include "ps/vehicle/wheel_telemetry.h"
 #include "ps/world/ambient.h"
+#include "ps/world/door.h"
 #include "ps/world/force_element.h"
 #include "ps/world/ids.h"
 #include "ps/world/snapshot.h"
@@ -130,6 +131,22 @@ public:
     BodyId create_body(const BodyDesc& desc, const ShapeHandle& shape);
     JointId create_joint(const JointDesc& desc) { return backend_->create_joint(desc); }
     void destroy_joint(JointId id) { backend_->destroy_joint(id); }
+
+    // Kinematic bodies (moving doors). Sim thread, between steps. move_kinematic drives a Kinematic body to `target`
+    // over the next tick (Jolt MoveKinematic), so contacts see a real velocity and push dynamic bodies; set_pose would
+    // teleport. Throws std::invalid_argument for an invalid/stale id or a non-Kinematic body. A body that is never
+    // moved stays asleep (a stopped kinematic body is not in the active set). Kinematic bodies are not Static, so they
+    // never suppress terrain and are not folded into any suppression cache; a World with none is unchanged.
+    void move_kinematic(BodyId id, const Pose& target);
+    [[nodiscard]] bool body_is_active(BodyId id) const { return backend_->is_active(id); } // false once asleep/stopped
+    // Door driver (ps/world/door.h): the World steps the door once per tick before the pipeline, from the tick clock,
+    // moving its Kinematic body toward the commanded fraction and holding (blocked) if a dynamic body is in the way.
+    // Door state is hashed only while a door exists. create_door throws std::invalid_argument for a bad desc or a
+    // body that is not a live Kinematic body.
+    DoorId create_door(BodyId kinematic_body, const DoorDesc& desc);
+    void set_door_command(DoorId id, real fraction_0_to_1); // clamped; throws for an invalid id
+    [[nodiscard]] DoorState door_state(DoorId id) const;    // throws for an invalid id
+    [[nodiscard]] Pose door_pose_at(DoorId id, real fraction) const;
 
     [[nodiscard]] Pose get_pose(BodyId id) const { return backend_->get_pose(id); }
     [[nodiscard]] Motion get_motion(BodyId id) const { return backend_->get_motion(id); }
@@ -511,6 +528,15 @@ private:
         real threshold_kg = 0.1;
     };
     std::vector<ContentsMassState> contents_mass_;
+    // Kinematic doors (ps/world/door.h); empty == nothing hashed, nothing stepped.
+    struct DoorEntry {
+        BodyId body;
+        DoorDriver driver;
+        DoorState state;
+    };
+    std::vector<DoorEntry> doors_;
+    std::vector<ShapeContactHit> door_scratch_; // reused overlap-query output
+    void step_doors();
     void apply_contents_mass(bool force);
     void build_pipeline();
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): returns channel's index into

@@ -208,6 +208,14 @@ private:
             in.command=in.pedal;
             in.scale=in.pedal>0&&ceiling<in.pedal?ceiling/in.pedal:real(1);
         }
+        // Launch control owns wheel propulsion while staging / launching a hybrid too.
+        // The crank generator must remain available to start the combustion engine.
+        // Scale drive after the power corner; never scale regeneration.
+        if (!desc_.crank_assist) {
+            if (ctx.launch_hold_clutch) in.scale = real(0);
+            else if (in.pedal > real(0))
+                in.scale = std::min(in.scale, std::clamp(ctx.launch_throttle_ceiling, real(0), real(1)) / in.pedal);
+        }
         return in;
     }
     real regen_d_=0;

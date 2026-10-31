@@ -554,7 +554,7 @@ TEST_CASE("P10 L3: extends on a lift-family cam, and a cam that removes the fami
 // A PIPE engine with a lift family (the brief: lumped and pipe engines): demo_i4_pipes with its intake lift as the u = 1
 // node and a small-lift node at u = 0.5 [AS] (0.3 of the lift over half the duration, same centre line). Each node set is that node's single-lift pipe generation, with the P7d
 // wide-open-throttle row (an ambient-fed pipe engine), and the engine runs through the lift strategy.
-TEST_CASE("P10 L4: a pipe engine with a two-node lift family", "[vvl][drivetrain][cycle][pipe]") {
+TEST_CASE("P10 L4: a pipe engine with a two-node lift family", "[vvl][drivetrain][cycle][pipe][long]") {
     json e = read_json(kEngineDir + "/demo_i4_pipes.json");
     const json full = e["cycle"]["intake_lift"];
     json half = full;

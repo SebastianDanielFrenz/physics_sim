@@ -97,6 +97,7 @@ add_executable(ps_unit_tests
   test_fuel_tank.cpp
   test_contents_mass.cpp
   test_ambient.cpp
+  test_kinematic_door.cpp
   test_cited_engine_data.cpp
   test_simulated_engine_io.cpp
   test_simulated_engine.cpp
@@ -132,6 +133,7 @@ add_executable(ps_unit_tests
   test_engine_map_generator.cpp
   test_engine_map_cache.cpp
   test_engine_map_gen_v2.cpp
+  test_held_rpm_rows.cpp
   test_engine_map_control.cpp
   test_engine_dyno.cpp
   test_limit_findings.cpp

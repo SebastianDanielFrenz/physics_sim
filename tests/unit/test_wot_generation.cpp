@@ -455,7 +455,7 @@ TEST_CASE("P7d W8b: the Mazda pipe experiment's Preview maps are identical on 1 
 // generation job also CONSTRUCTS its CycleEngine (pipe network, steppers), which allocates - on every pipe engine since
 // A5 ("run() single-use and allocation-free"), so the whole-generation count is reported for the v3 and v4 paths, and the
 // assertion is on the run (progress file section 1, deviation from the declared "zero allocation inside generation jobs").
-TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel contract", "[cycle][pipe][drivetrain]") {
+TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel contract", "[cycle][pipe][drivetrain][long]") {
     const SimulatedEngineDesc& sd = mazda_pipes_desc();
     const CycleModelDesc& d = *sd.cycle;
     CycleModelDesc no_wot = d;
