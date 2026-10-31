@@ -126,6 +126,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     for (const CropDesc& cr : cfg_.crops) co2_f_.push_back(cr.co2_factor(cfg_.co2_ppm));
     if (cfg_.management_enabled && !cfg_.nutrients_enabled) throw std::invalid_argument("Field: management_enabled needs nutrients_enabled");
     if (cfg_.pathogens_enabled && !cfg_.management_enabled) throw std::invalid_argument("Field: pathogens_enabled needs management_enabled");
+    if (cfg_.soc_enabled && !cfg_.management_enabled) throw std::invalid_argument("Field: soc_enabled needs management_enabled");
     if (cfg_.nutrients_enabled) {
         for (const SoilDesc& so : cfg_.soils)
             if (!so.has_nutrients) throw std::invalid_argument("Field: soil " + so.name + " has no nutrient block");
@@ -176,6 +177,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     if (cfg_.management_enabled) init_management();   // before the nutrients: their initial N includes the weeds'
     if (cfg_.nutrients_enabled) init_nutrients();
     if (cfg_.pathogens_enabled) init_pathogens();
+    if (cfg_.soc_enabled) init_soc();
 }
 
 int Field::cell_at_world(real x, real y) const {
@@ -269,7 +271,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         }
         if (mgmt && s.sow_seeds[c] > 0.0 && st < cr->stage_emergence) {   // a sown seed needs a moist seed layer
             const CropManagementDesc& cm = cr->management;
-            const real tew_s = so.tew_mm();
+            const real tew_s = tew_of(c);
             const real wet = tew_s > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew_s) : 1.0;
             dev *= clamp01((wet - cm.germ_wet_min) / (cm.germ_wet_full - cm.germ_wet_min));
             if (wet < cm.germ_wet_min) s.sow_viab[c] *= 1.0 - cm.dry_hazard_per_day;
@@ -295,7 +297,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         }
     }
 
-    const real taw1 = so.taw_mm_per_m() * s.zr[c];
+    const real taw1 = taw_per_m_of(c) * s.zr[c];
     const real dep_frac = taw1 > 0.0 ? clamp01(s.d_root[c] / taw1) : 1.0;
 
     // --- canopy --------------------------------------------------------------------
@@ -343,7 +345,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     const real infil = liquid - runoff;
 
     // --- evaporation and transpiration demand (dual crop coefficient) -----------------
-    const real tew = so.tew_mm();
+    const real tew = tew_of(c);
     const real cc_star = std::min(1.0, 1.72 * cc - cc * cc + 0.3 * cc * cc * cc);   // AquaCrop micro-advection adjustment
     const real kcb = emerged ? cr->kc_tr_x * cc_star : 0.0;
     const real height = emerged ? cr->height_max_m * clamp01(cc / cr->ccx) : 0.0;
@@ -492,6 +494,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         step_nutrients(c, w, fl);
         if (mgmt) manage_poststep(c, w, fl);
         if (cfg_.pathogens_enabled) step_pathogens(c, fl);
+        if (cfg_.soc_enabled) step_soc(c);
     }
 }
 
@@ -667,7 +670,6 @@ void Field::set_stress(int cell, const StressFactors& f) {
 CellView Field::view(int cell) const {
     if (cell < 0 || cell >= cell_count()) throw std::out_of_range("Field::view: bad cell");
     const std::size_t c = static_cast<std::size_t>(cell);
-    const SoilDesc& so = soil_of(c);
     CellView v;
     v.soil = soil_idx_[c];
     v.crop_id = s_.crop[c];
@@ -688,8 +690,8 @@ CellView Field::view(int cell) const {
     v.d_sub_mm = s_.d_sub[c];
     v.d_evap_mm = s_.d_evap[c];
     v.swe_mm = s_.swe[c];
-    v.taw_root_mm = so.taw_mm_per_m() * s_.zr[c];
-    v.tew_mm = so.tew_mm();
+    v.taw_root_mm = taw_per_m_of(c) * s_.zr[c];
+    v.tew_mm = tew_of(c);
     v.last_tr_mm = s_.last_tr[c];
     v.last_e_mm = s_.last_e[c];
     v.last_runoff_mm = s_.last_runoff[c];
@@ -701,12 +703,12 @@ CellView Field::view(int cell) const {
 
 real Field::storage_mm(int cell) const {
     const std::size_t c = static_cast<std::size_t>(cell);
-    return s_.swe[c] + soil_of(c).total_taw_mm() - s_.d_root[c] - s_.d_sub[c];
+    return s_.swe[c] + total_taw_of(c) - s_.d_root[c] - s_.d_sub[c];
 }
 
 real Field::taw_root_mm(int cell) const {
     const std::size_t c = static_cast<std::size_t>(cell);
-    return soil_of(c).taw_mm_per_m() * s_.zr[c];
+    return taw_per_m_of(c) * s_.zr[c];
 }
 
 WaterLedger Field::ledger(int cell) const {
@@ -741,7 +743,7 @@ void Field::restore(const FieldCheckpoint& cp) {
     if (cp.nx != nx_ || cp.ny != ny_ || cp.state.d_root.size() != s_.d_root.size() ||
         cp.state.crop.size() != s_.crop.size() || cp.state.no3_1.size() != s_.no3_1.size() ||
         cp.state.res_c[0].size() != s_.res_c[0].size() || cp.state.path_p.size() != s_.path_p.size() ||
-        cp.state.res_crop.size() != s_.res_crop.size())
+        cp.state.res_crop.size() != s_.res_crop.size() || cp.state.hum_c.size() != s_.hum_c.size())
         throw std::invalid_argument("Field::restore: checkpoint does not fit this grid");
     s_ = cp.state;
 }
@@ -781,6 +783,9 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
         h = fold_vec(h, s_.path_s);
         h = fold_vec(h, s_.path_loss0);
         h = fold_vec(h, s_.res_crop);
+    }
+    if (cfg_.soc_enabled) {
+        for (const auto* v : {&s_.hum_c, &s_.hum_c0, &s_.soc_dfc, &s_.l_c_hdec, &s_.l_c_amend}) h = fold_vec(h, *v);
     }
     return h;
 }

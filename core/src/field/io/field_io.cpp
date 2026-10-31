@@ -172,6 +172,21 @@ SoilDesc parse_soil_json(const json& j, const std::string& origin) {
     } else {
         r.skip("management");
     }
+    if (r.has("organic_matter")) {
+        ObjectReader w(block_of(r, "organic_matter", origin), "organic_matter", origin);
+        SoilOrganicDesc& o = s.organic;
+        s.has_organic = true;
+        o.layer_depth_m = w.number("layer_depth_m", true, 0.0);
+        o.bulk_density_t_m3 = w.number("bulk_density_t_m3", true, 0.0);
+        o.humus_cn = w.number("humus_cn", true, 0.0);
+        o.rate_per_day_20c = w.number("rate_per_day_20c", true, 0.0);
+        o.humification = w.number("humification", true, 0.0);
+        o.awc_per_soc_pct = w.number("awc_per_soc_pct", true, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("organic_matter");
+    }
     r.finish();
     const std::string e = soil_validation_error(s);
     if (!e.empty()) throw std::runtime_error(origin + ": " + e);

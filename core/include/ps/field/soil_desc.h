@@ -38,6 +38,10 @@ struct SoilDesc {
     bool has_management = false;
     SoilManagementDesc management;
 
+    // Optional organic-matter block (F1d part 5); required when the field runs with soc_enabled.
+    bool has_organic = false;
+    SoilOrganicDesc organic;
+
     // Derived (not in the file).
     real taw_mm_per_m() const { return 1000.0 * (theta_fc - theta_wp); }
     // Total evaporable water, FAO-56 eq 73.

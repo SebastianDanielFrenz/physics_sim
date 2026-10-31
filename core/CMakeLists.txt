@@ -176,6 +176,7 @@ add_library(ps_field STATIC
   src/field/management.cpp
   src/field/weeds.cpp
   src/field/pathogens.cpp
+  src/field/soc.cpp
 )
 
 target_include_directories(ps_field PUBLIC

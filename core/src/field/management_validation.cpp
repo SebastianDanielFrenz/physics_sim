@@ -40,6 +40,19 @@ int weed_kind_from_name(const std::string& name) {
     return -1;
 }
 
+std::string soil_organic_validation_error(const std::string& name, const SoilOrganicDesc& o) {
+    Check c{"soil " + name + ": organic_matter: ", {}};
+    c.pos("layer_depth_m", o.layer_depth_m);
+    c.pos("bulk_density_t_m3", o.bulk_density_t_m3);
+    c.fail_if(!(fin(o.bulk_density_t_m3) && o.bulk_density_t_m3 < 3.0), "bulk_density_t_m3 must be below 3");
+    c.pos("humus_cn", o.humus_cn);
+    c.pos("rate_per_day_20c", o.rate_per_day_20c);
+    c.fail_if(!(fin(o.rate_per_day_20c) && o.rate_per_day_20c < 0.1), "rate_per_day_20c must be below 0.1");
+    c.frac("humification", o.humification);
+    c.fail_if(!(fin(o.awc_per_soc_pct) && o.awc_per_soc_pct >= 0.0 && o.awc_per_soc_pct < 0.1), "awc_per_soc_pct must be in [0, 0.1)");
+    return c.err;
+}
+
 std::string soil_management_validation_error(const std::string& name, const SoilManagementDesc& m) {
     Check c{"soil " + name + ": management.", {}};
     c.pos("layer_a_m", m.layer_a_m);

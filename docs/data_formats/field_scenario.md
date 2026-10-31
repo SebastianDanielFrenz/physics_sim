@@ -65,3 +65,10 @@ Optional `"pathogens": true` (needs `"management": true`; every crop needs `fami
 `path_p_<family>`, `path_s_<family>` (field means of the inoculum and the suppression, families in sorted order) and
 `path_loss_untreated`, `fungicide_protection`, `rotation_factor`. Pathogen state is hashed and checkpointed only when enabled (a
 scenario without the key is bit-identical to before).
+
+## Soil organic carbon (F1d part 5)
+
+Optional `"soc": true` (needs `"management": true`; every soil needs its `organic_matter` block, soil.md). The CSV gains `soc_pct`,
+`hum_c_kg_ha`, `soc_dfc` (field means of the humus carbon content, the humus carbon and the change of `theta_fc`). SOC state is hashed and
+checkpointed only when enabled (a scenario without the key is bit-identical to before).
+

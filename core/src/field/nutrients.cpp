@@ -183,7 +183,14 @@ void Field::step_nutrients(std::size_t c, const DailyWeather& w, const DayFlows&
 
     // --- mineralisation, deposition, nitrification, denitrification -------------------------------------
     {
-        const real m_slow = s.org_slow[c] * (1.0 - ps::math::exp(-sn.min_rate_per_day_20c * ft * fm * f_av));
+        const real k_slow = cfg_.soc_enabled ? so.organic.rate_per_day_20c : sn.min_rate_per_day_20c;
+        const real f_slow = 1.0 - ps::math::exp(-k_slow * ft * fm * f_av);
+        const real m_slow = s.org_slow[c] * f_slow;
+        if (cfg_.soc_enabled) {   // the carbon of the humus follows its nitrogen: the same fraction goes
+            const real dcs = s.hum_c[c] * f_slow;
+            s.hum_c[c] -= dcs;
+            s.l_c_hdec[c] += dcs;
+        }
         const real m_fresh = s.org_fresh[c] * (1.0 - ps::math::exp(-sn.fresh_rate_per_day_20c * ft * fm));
         s.org_slow[c] -= m_slow;
         s.org_fresh[c] -= m_fresh;
@@ -249,8 +256,9 @@ void Field::step_nutrients(std::size_t c, const DailyWeather& w, const DayFlows&
 
     // --- nitrate transport: a mixing cell per layer with the water the balance moved ----------------------------------
     {
-        const real v1 = so.theta_fc * s.zr[c] * 1000.0;
-        const real v2 = so.theta_fc * (so.depth_m - s.zr[c]) * 1000.0;
+        const real fc = fc_of(c);
+        const real v1 = fc * s.zr[c] * 1000.0;
+        const real v2 = fc * (so.depth_m - s.zr[c]) * 1000.0;
         if (fl.dp > 0.0 && v1 > 0.0) {
             const real mv = s.no3_1[c] * (1.0 - ps::math::exp(-fl.dp / v1));
             s.no3_1[c] -= mv;
@@ -343,6 +351,11 @@ void Field::apply_deposit(std::size_t c, const OperationEffect& e) {
     s_.no3_1[c] += m.no3_n_kg_t * amt;
     s_.org_slow[c] += organic * m.org_slow_fraction;
     s_.org_fresh[c] += organic * (1.0 - m.org_slow_fraction);
+    if (cfg_.soc_enabled) {   // organic material joins the humus with the carbon its slow nitrogen carries at the humus C:N
+        const real dc = organic * m.org_slow_fraction * soil_of(c).organic.humus_cn;
+        s_.hum_c[c] += dc;
+        s_.l_c_amend[c] += dc;
+    }
     s_.l_n_fmin[c] += ammoniacal + m.no3_n_kg_t * amt;
     s_.l_n_forg[c] += organic;
     if (surface > 0.0) {

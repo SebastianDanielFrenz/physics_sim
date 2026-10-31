@@ -55,6 +55,7 @@ std::string soil_validation_error(const SoilDesc& s) {
     c.fail_if(!fin(s.snow_melt_base_c), "snow_melt_base_c must be finite");
     if (c.err.empty() && s.has_nutrients) c.err = soil_nutrient_validation_error(s.name, s.nutrients);
     if (c.err.empty() && s.has_management) c.err = soil_management_validation_error(s.name, s.management);
+    if (c.err.empty() && s.has_organic) c.err = soil_organic_validation_error(s.name, s.organic);
     return c.err;
 }
 

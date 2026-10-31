@@ -116,6 +116,14 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
     } else {
         r.skip("pathogens");
     }
+    if (r.has("soc")) {
+        const json* b = r.child("soc");
+        if (!b->is_boolean()) r.fail("\"soc\" must be a boolean");
+        sc.field.soc_enabled = b->get<bool>();
+        if (sc.field.soc_enabled && !sc.field.management_enabled) r.fail("\"soc\" needs \"management\": true");
+    } else {
+        r.skip("soc");
+    }
     if (r.has("weeds")) {
         const json* a = r.child("weeds");
         if (!a->is_array()) r.fail("\"weeds\" must be an array of file names");
@@ -249,6 +257,7 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
         for (const std::string& fam : f.family_names()) *csv << ",path_p_" << fam << ",path_s_" << fam;
         *csv << ",path_loss_untreated,fungicide_protection,rotation_factor";
     }
+    if (csv && sc.field.soc_enabled) *csv << ",soc_pct,hum_c_kg_ha,soc_dfc";
     if (csv) *csv << "\n";
     for (std::int64_t d = 0; d < n_days; ++d) {
         const field::DailyWeather& w = src.record(d);
@@ -352,6 +361,16 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                 }
                 std::snprintf(b4, sizeof b4, ",%.5f,%.5f,%.5f", lo / n, fp / n, gf / n);
                 *csv << b4;
+            }
+            if (sc.field.soc_enabled) {   // field mean
+                double sp = 0, hc = 0, df = 0;
+                for (int c = 0; c < n; ++c) {
+                    const field::SocView sv = f.soc_view(c);
+                    sp += sv.soc_pct; hc += sv.hum_c_kg_ha; df += sv.dfc;
+                }
+                char b5[96];
+                std::snprintf(b5, sizeof b5, ",%.5f,%.1f,%.6f", sp / n, hc / n, df / n);
+                *csv << b5;
             }
             *csv << "\n";
         }

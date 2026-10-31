@@ -90,6 +90,10 @@ struct FieldConfig {
     // break years, raised by surface residue, lowering the growth of the crop of the family through stress_rotation.
     // Needs management_enabled (residue) and a pathogen block and family in every crop. false = bit-identical.
     bool pathogens_enabled = false;
+    // Soil organic carbon (F1d part 5): the slow organic N pool becomes humus with a carbon content that decays with the
+    // mineralisation, is built from decomposed residue (humification coefficient), and sets the plant-available water of
+    // the soil. Needs management_enabled and an organic_matter block in every soil. false = bit-identical.
+    bool soc_enabled = false;
 };
 
 struct StressFactors {
@@ -196,7 +200,20 @@ struct CarbonLedger {
     real c_weed_growth = 0.0;            // carbon fixed by weeds
     real c_removed = 0.0;                // straw pickup, weed carbon leaving with it
     real c_co2 = 0.0;                    // respired during decomposition
-    real c_humus = 0.0;                  // assimilated into microbial biomass and humus (kept)
+    real c_humus = 0.0;                  // assimilated into microbial biomass and humus (kept); with soc_enabled: humified into the humus pool
+    // soc_enabled only (zero otherwise):
+    real c_humus_decay = 0.0;            // humus carbon respired (the mineralisation of the humus)
+    real c_amendment = 0.0;              // carbon of applied organic material that joins the humus (its slow organic N x humus C:N)
+    real c_humus_initial = 0.0;          // humus carbon at construction
+};
+// Soil organic carbon of one cell (copy; soc_enabled only).
+struct SocView {
+    real hum_c_kg_ha = 0.0;              // humus carbon
+    real soc_pct = 0.0;                  // ... as % of the dry mass of the layer
+    real soc_pct_initial = 0.0;
+    real cn = 0.0;                       // C:N of the humus pool (hum_c / slow organic N)
+    real dfc = 0.0;                      // change of theta_fc (profile mean) caused by the change of SOC since construction, m3/m3
+    real taw_total_mm = 0.0;             // total available water of the profile now
 };
 
 // Cumulative water ledger of one cell since construction (mm).
@@ -244,6 +261,8 @@ struct FieldState {
     std::vector<real> path_p, path_s;                           // [cell * families]
     std::vector<real> path_loss0;                               // untreated loss fraction of the growing crop, fixed at emergence
     std::vector<std::uint8_t> res_crop;                         // crop id whose residue lies on the surface (0 = none)
+    // soil organic carbon (empty unless FieldConfig::soc_enabled)
+    std::vector<real> hum_c, hum_c0, soc_dfc, l_c_hdec, l_c_amend;
 };
 
 struct FieldCheckpoint {
@@ -335,6 +354,10 @@ public:
     // Test/scenario hook: sets the inoculum and suppression of a family in a cell (both in [0, 1)).
     void set_pathogen(int cell, const std::string& family, real inoculum, real suppression);
 
+    // Soil organic carbon (std::logic_error without soc_enabled).
+    bool soc_enabled() const { return cfg_.soc_enabled; }
+    SocView soc_view(int cell) const;
+
     // --- persistence ---
     FieldCheckpoint checkpoint() const;
     // Throws std::invalid_argument when the checkpoint does not fit this grid.
@@ -379,6 +402,15 @@ private:
     void step_pathogens(std::size_t c, const DayFlows& fl);
     void pathogen_emergence(std::size_t c);              // fixes the untreated loss of the crop that emerged today
     real fungicide_protection(std::size_t c) const;      // of the growing crop, 0..1
+    // Soil organic carbon (soc.cpp)
+    void init_soc();
+    void step_soc(std::size_t c);                        // moves the water capacity with the humus carbon, conserving the stored water
+    // Soil water constants of a cell: the soil file's value plus the change the humus carbon has made (0 without soc_enabled).
+    real dfc_of(std::size_t c) const { return s_.soc_dfc.empty() ? 0.0 : s_.soc_dfc[c]; }
+    real fc_of(std::size_t c) const { return soil_of(c).theta_fc + dfc_of(c); }
+    real taw_per_m_of(std::size_t c) const { return soil_of(c).taw_mm_per_m() + 1000.0 * dfc_of(c); }
+    real tew_of(std::size_t c) const { return soil_of(c).tew_mm() + 1000.0 * dfc_of(c) * soil_of(c).evaporation_depth_m; }
+    real total_taw_of(std::size_t c) const { return taw_per_m_of(c) * soil_of(c).depth_m; }
     void weed_to_residue(std::size_t c, std::size_t gi, real fraction);
     void release_residue_pk(std::size_t c, int pool, real fraction);
     real workability(std::size_t c) const;

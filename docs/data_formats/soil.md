@@ -89,3 +89,26 @@ need from the mineral pool (immobilisation) or release it. Residue cover multipl
 Soil evaporation (F1c, all fields): when the weather record provides `e_wet_mm`, the Priestley-Taylor energy limit of a wet
 surface (alpha 1.26, Rn floored at 0), the dual-coefficient evaporation of a cell is capped by `kr x few x e_wet_mm`. Records
 made by hand (tests) leave `e_wet_mm` negative and are not capped.
+
+## Optional `organic_matter` block (F1d part 5)
+
+Needed when the field runs with `soc_enabled` (scenario key `"soc": true`; needs management). The slow organic N pool of the nutrient
+block is the humus; its carbon is that pool times `humus_cn`. Every number carries a source tag.
+
+| key | unit | meaning |
+|---|---|---|
+| `layer_depth_m` | m | the layer the carbon content refers to (plough layer, at most `depth_m`) |
+| `bulk_density_t_m3` | t/m3 | dry bulk density of that layer (SOC % = 100 x carbon / (bulk density x layer depth)) |
+| `humus_cn` | - | C:N of the humus pool |
+| `rate_per_day_20c` | 1/day | first-order decay of the whole humus pool at 20 degC, optimum moisture and pH; replaces the nutrient block's `min_rate_per_day_20c` for the slow pool, for carbon and nitrogen alike |
+| `humification` | - | share of the decomposed residue carbon that enters the humus (ICBM h); must not exceed `res_assim_eff`, and `humification / humus_cn` must not exceed `res_assim_eff / res_cn_bio` |
+| `awc_per_soc_pct` | m3/m3 per % | change of `theta_fc` per 1 % SOC (Minasny and McBratney 2018: 1.16 mm per 100 mm) |
+
+Processes (core/src/field/soc.cpp and the soc branches of nutrients.cpp, management.cpp): humus decays with the mineralisation factors
+(temperature, moisture, pH), the N it releases goes to ammonium and the carbon to CO2, so the C:N of the pool stays; decomposed residue
+carbon dC adds `humification x dC` to the humus and respires the rest of what the microbes assimilated; organic material applied to the field
+adds the carbon of its slow organic N at `humus_cn`. The plant-available water follows the carbon: `theta_fc` of the soil file is the value
+at the initial carbon content, the profile mean of the change is `awc_per_soc_pct x (SOC % - initial SOC %) x layer_depth_m / depth_m`,
+the depletions move with the capacity (stored water unchanged), a full profile that loses capacity drains the difference. Carbon ledger:
+`CarbonLedger::c_humus_decay`, `c_amendment`, `c_humus_initial`; `c_balance_residual` then checks the humus as a stock.
+

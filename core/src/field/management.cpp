@@ -149,8 +149,7 @@ void Field::init_management() {
 // small state queries
 // ---------------------------------------------------------------------------
 real Field::rel_wet(std::size_t c) const {
-    const SoilDesc& so = soil_of(c);
-    const real taw1 = so.taw_mm_per_m() * s_.zr[c];
+    const real taw1 = taw_per_m_of(c) * s_.zr[c];
     return taw1 > 0.0 ? clamp01(1.0 - s_.d_root[c] / taw1) : 1.0;
 }
 
@@ -420,11 +419,11 @@ void Field::do_tillage(std::size_t c, const TillageEffect& t, real cov) {
         const real fresh = t.seedbed_fineness * wk + std::min(t.seedbed_fineness, m.seedbed_wet_floor) * (1.0 - wk);
         s.seedbed[c] += std::min(1.0, cov) * (fresh - s.seedbed[c]);
     }
-    const real taw1 = so.taw_mm_per_m() * s.zr[c];
+    const real taw1 = taw_per_m_of(c) * s.zr[c];
     const real pulse = std::min(m.tillage_dry_out_mm_per_m * t.depth_m * wk * std::min(1.0, cov), std::max(0.0, taw1 - s.d_root[c]));
     if (pulse > 0.0) {
         s.d_root[c] += pulse;
-        s.d_evap[c] = std::min(so.tew_mm(), s.d_evap[c] + pulse);
+        s.d_evap[c] = std::min(tew_of(c), s.d_evap[c] + pulse);
         s.cum_evap[c] += pulse;
     }
 }
@@ -528,7 +527,7 @@ void Field::manage_poststep(std::size_t c, const DailyWeather& w, const DayFlows
 
     // residue decomposition (temperature, moisture), immobilising or releasing mineral N
     const real ft = temp_factor(sn, s.soil_t[c]);
-    const real tew = so.tew_mm();
+    const real tew = tew_of(c);
     const real ws = tew > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew) : 1.0;
     const real fm_surf = m.res_moisture_floor + (1.0 - m.res_moisture_floor) * ws;
     const real fm_bur = m.res_moisture_floor + (1.0 - m.res_moisture_floor) * rel_wet(c);
@@ -562,9 +561,20 @@ void Field::manage_poststep(std::size_t c, const DailyWeather& w, const DayFlows
         }
         s.res_c[pi][c] -= dC;
         s.res_n[pi][c] -= dN;
-        s.l_c_co2[c] += dC * (1.0 - m.res_assim_eff);
-        s.soc[c] += dC * m.res_assim_eff;
-        s.org_fresh[c] += n_need;
+        if (cfg_.soc_enabled) {   // only the humification coefficient of the decomposed carbon reaches the humus; the rest of what was assimilated is respired as the biomass turns over
+            const SoilOrganicDesc& o = so.organic;
+            const real dh = o.humification * dC;
+            const real nh = dh / o.humus_cn;
+            s.l_c_co2[c] += dC - dh;
+            s.soc[c] += dh;
+            s.hum_c[c] += dh;
+            s.org_slow[c] += nh;
+            s.org_fresh[c] += n_need - nh;
+        } else {
+            s.l_c_co2[c] += dC * (1.0 - m.res_assim_eff);
+            s.soc[c] += dC * m.res_assim_eff;
+            s.org_fresh[c] += n_need;
+        }
         if (p < 2) release_residue_pk(c, p, dC / C);
         if (p == 0 && s.res_c[0][c] < 1.0e-12) s.res_chop[c] = 0.0;
     }
@@ -648,6 +658,11 @@ CarbonLedger Field::carbon_ledger(int cell) const {
     l.c_removed = s_.l_c_rem[c];
     l.c_co2 = s_.l_c_co2[c];
     l.c_humus = s_.soc[c];
+    if (cfg_.soc_enabled) {
+        l.c_humus_decay = s_.l_c_hdec[c];
+        l.c_amendment = s_.l_c_amend[c];
+        l.c_humus_initial = s_.hum_c0[c];
+    }
     return l;
 }
 
@@ -658,6 +673,8 @@ real Field::c_balance_residual(int cell) const {
     for (int p = 0; p < kResPools; ++p) stored += s_.res_c[static_cast<std::size_t>(p)][c];
     const std::size_t G = cfg_.weeds.size();
     for (std::size_t g = 0; g < G; ++g) stored += s_.w_bio[c * G + g] * 10.0 * cfg_.weeds[g].c_frac;
+    if (cfg_.soc_enabled)   // the humus pool is a stock: check its own state, not the cumulative gain
+        return l.c_from_crop + l.c_weed_growth + l.c_amendment - l.c_removed - l.c_co2 - l.c_humus_decay - (s_.hum_c[c] - l.c_humus_initial) - stored;
     return l.c_from_crop + l.c_weed_growth - l.c_removed - l.c_co2 - l.c_humus - stored;
 }
 

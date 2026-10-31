@@ -152,8 +152,7 @@ void Field::step_weeds(std::size_t c, const DailyWeather& wx) {
     const std::size_t G = cfg_.weeds.size();
     if (G == 0) return;
     const std::size_t M = static_cast<std::size_t>(moa_count_), H = cfg_.herbicides.size();
-    const SoilDesc& so = soil_of(c);
-    const real tew = so.tew_mm();
+    const real tew = tew_of(c);
     const real wsl = tew > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew) : 1.0;
     const real rel = rel_wet(c);
     real ccv = 0.0;

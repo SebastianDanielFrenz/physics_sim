@@ -133,6 +133,20 @@ struct SoilManagementDesc {
     real res_n_floor_kg_ha = 3.0;       // mineral N that immobilisation cannot take
 };
 
+// Soil: humus carbon (F1d part 5; physics_sim.soil/1, optional "organic_matter", needed with FieldConfig::soc_enabled).
+// The slow organic N pool of the nutrient model is the humus; its carbon is the pool times humus_cn. Humus decays with the
+// mineralisation factors of the nutrient model at rate_per_day_20c (carbon and nitrogen together: the C:N of the pool
+// does not drift), residue carbon enters it with the humification coefficient, and the plant-available water of the
+// soil follows its carbon content.
+struct SoilOrganicDesc {
+    real layer_depth_m = 0.30;          // the layer the organic carbon content is referred to (plough layer)
+    real bulk_density_t_m3 = 1.3;       // dry bulk density of that layer
+    real humus_cn = 10.0;               // C:N of the humus pool
+    real rate_per_day_20c = 0.0;        // first-order decay of humus at 20 degC, optimum moisture and pH
+    real humification = 0.125;          // share of the decomposed residue carbon that enters the humus pool
+    real awc_per_soc_pct = 0.0116;      // change of the volumetric water content at field capacity per 1 % (mass) organic carbon
+};
+
 // Crop: yield-to-residue split, roots, sowing and establishment (physics_sim.crop/1, optional "management").
 struct CropManagementDesc {
     real root_dm_fraction = 0.12;       // root dry matter as a share of aboveground dry matter at harvest
@@ -246,6 +260,7 @@ struct HerbicideDesc {
 
 // First problem with the descriptor ("soil <name>: management.<field> ..."), or empty.
 std::string soil_management_validation_error(const std::string& soil_name, const SoilManagementDesc& m);
+std::string soil_organic_validation_error(const std::string& soil_name, const SoilOrganicDesc& m);
 std::string crop_management_validation_error(const std::string& crop_name, const CropManagementDesc& m);
 std::string weed_group_validation_error(const WeedGroupDesc& w);
 std::string herbicide_validation_error(const HerbicideDesc& h);
