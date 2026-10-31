@@ -33,6 +33,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,9 @@ struct Cfg {
     bool tractor = false;
     bool coast_shell = false; // both vehicles lossless: no powertrain, no rolling resistance, no drag, a box ground
     bool drawbar_overlap = false; // the trailer's drawbar runs under the towing car, an extra axle stands right below it
+    std::optional<machine::TowBrakeDesc> tow_brake;
+    std::string scope_a, scope_b; // channel scopes
+    bool trailer_first = false;   // create the trailer before the towing vehicle
 };
 
 // An engine-less wheeled trailer, built in code on the car's own tyre and wheel data. A 1500 kg single axle or a
@@ -273,12 +277,14 @@ Rig build_rig(const Cfg& cfg, real x0 = 0.0) {
     b.pose.position = Vec3{x0 + r.socket_a.x - r.socket_b.x, 0.0, trailer.origin_height};
     r.b = r.world->create_body(b);
 
-    r.va = r.world->create_vehicle(towing, r.a);
-    r.vb = r.world->create_vehicle(trailer.desc, r.b);
+    trailer.desc.tow_brake = cfg.tow_brake;
+    if (cfg.trailer_first) r.vb = r.world->create_vehicle(trailer.desc, r.b, {}, cfg.scope_b);
+    r.va = r.world->create_vehicle(towing, r.a, {}, cfg.scope_a);
+    if (!cfg.trailer_first) r.vb = r.world->create_vehicle(trailer.desc, r.b, {}, cfg.scope_b);
     add_link(r);
 
-    for (const char* name : {"assist.auto_clutch", "assist.auto_blip", "assist.auto_shift"}) r.world->set_control(name, 0.0);
-    if (!cfg.tractor) r.world->set_control("clutch", 1.0);
+    for (const char* name : {"assist.auto_clutch", "assist.auto_blip", "assist.auto_shift"}) r.world->set_control(r.world->vehicle_channel(r.va, name), 0.0);
+    if (!cfg.tractor) r.world->set_control(r.world->vehicle_channel(r.va, "clutch"), 1.0);
     return r;
 }
 
@@ -294,6 +300,7 @@ Vec3 hitch_error2(const Rig& r) {
 Rig build_chain(const Cfg& cfg, real x0 = 0.0) {
     Rig r = build_rig(cfg, x0);
     TrailerGeometry second = make_trailer(car_desc(), cfg.trailer_mass, cfg.trailer_brakes);
+    second.desc.tow_brake = cfg.tow_brake;
     const real rear_x = -second.half_extents.x - 0.2;
     r.chain = true;
     r.socket_b_rear = Vec3{rear_x, 0.0, r.socket_b.z};
@@ -452,6 +459,19 @@ Metrics scenario_brake(const Cfg& c) {
     return run(r, 15.0, [](World& w, real) {
         w.set_control("brake", 0.8);
         w.set_control("v1.brake", 0.8);
+    }, [&r] { return r.world->get_motion(r.a).linear.length() < 0.5; });
+}
+
+// Only the towing vehicle's brake is pressed, and the steering wobbles a little: nothing is left symmetric for a heavy
+// trailer to balance on.
+Metrics scenario_brake_wobble(const Cfg& c, real brake = 1.0, real amplitude = 0.02, real period = 1.0) {
+    Rig r = build_rig(c, -700.0);
+    settle(r, 2.0);
+    launch(r, k100KmH);
+    run(r, 1.0, {});
+    return run(r, 25.0, [=](World& w, real t) {
+        w.set_control("brake", brake);
+        w.set_control("steer", amplitude * std::sin(2.0 * kPi * t / period));
     }, [&r] { return r.world->get_motion(r.a).linear.length() < 0.5; });
 }
 
@@ -1521,6 +1541,274 @@ TEST_CASE("Coupling: runtime attach, detach and destroy are worker-count indepen
         return out;
     };
     CHECK(hashes(1) == hashes(10));
+}
+
+namespace {
+
+machine::TowBrakeDesc channel_link() {
+    machine::TowBrakeDesc d;
+    d.kind = machine::TowBrakeKind::Channel;
+    return d;
+}
+
+machine::TowBrakeDesc overrun(real deadband_n = 300.0) {
+    machine::TowBrakeDesc d;
+    d.kind = machine::TowBrakeKind::Overrun;
+    d.deadband_n = deadband_n;
+    d.lag_s = 0.1;
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("Coupling: braking with a heavy trailer", "[.][diag][machine]") {
+    std::printf("towing brake, steer amplitude, period: art deg / peak kN / s  none, channel, overrun\n");
+    for (const real brake : {0.8, 1.0}) {
+        for (const real amplitude : {0.02, 0.05, 0.1}) {
+            for (const real period : {1.0, 2.0, 4.0}) {
+                Cfg c;
+                c.trailer_mass = 7500.0;
+                c.trailer_brakes = true;
+                c.hitch = load_class("ball");
+                const Metrics none = scenario_brake_wobble(c, brake, amplitude, period);
+                c.tow_brake = channel_link();
+                const Metrics linked = scenario_brake_wobble(c, brake, amplitude, period);
+                c.tow_brake = overrun();
+                const Metrics overran = scenario_brake_wobble(c, brake, amplitude, period);
+                std::printf("%.1f %.2f %.0f: %.1f %.0f %.1f,  %.1f %.0f %.1f,  %.1f %.0f %.1f\n", brake, amplitude, period, none.artic_max_deg, none.force_peak_n / 1e3, none.seconds,
+                            linked.artic_max_deg, linked.force_peak_n / 1e3, linked.seconds, overran.artic_max_deg, overran.force_peak_n / 1e3, overran.seconds);
+            }
+        }
+    }
+}
+
+TEST_CASE("Coupling: a trailer braked from the towing vehicle stays behind it", "[machine][vehicle]") {
+    Cfg c;
+    c.trailer_mass = 7500.0;
+    c.trailer_brakes = true;
+    c.hitch = load_class("ball");
+    const Metrics unbraked = scenario_brake_wobble(c);
+    c.tow_brake = channel_link();
+    const Metrics linked = scenario_brake_wobble(c);
+    c.tow_brake = overrun();
+    const Metrics overran = scenario_brake_wobble(c);
+    std::printf("brake + wobble, 7500 kg behind a car, art deg / force kN / s: none %.1f %.1f %.2f, channel %.1f %.1f %.2f, overrun %.1f %.1f %.2f\n",
+                unbraked.artic_max_deg, unbraked.force_peak_n / 1e3, unbraked.seconds, linked.artic_max_deg, linked.force_peak_n / 1e3, linked.seconds,
+                overran.artic_max_deg, overran.force_peak_n / 1e3, overran.seconds);
+    CHECK(unbraked.artic_max_deg > 45.0);
+    CHECK(linked.finite);
+    CHECK(linked.artic_max_deg < 3.0);
+    CHECK(linked.seconds < 0.7 * unbraked.seconds);
+    CHECK(overran.finite);
+    CHECK(overran.artic_max_deg < 10.0);
+    CHECK(overran.seconds < unbraked.seconds);
+}
+
+TEST_CASE("Coupling: a channel link follows the named channel through its lag", "[machine][vehicle]") {
+    Cfg c;
+    c.tractor = true;
+    c.trailer_mass = 7500.0;
+    c.trailer_brakes = true;
+    c.hitch = load_class("drawbar_pin");
+    c.tow_brake = channel_link();
+    // The trailer exists first and the tractor reads scoped channels: the name holds whatever the order was.
+    c.trailer_first = true;
+    c.scope_a = "tractor";
+    c.scope_b = "trailer";
+    Rig r = build_rig(c);
+    CHECK(r.world->vehicle_channel(r.va, "brake") == "tractor.brake");
+    CHECK(r.world->vehicle_channel(r.vb, "brake") == "trailer.brake");
+    settle(r, 0.25);
+    CHECK(r.world->coupling_state(r.coupling).tow_brake == 0.0);
+
+    r.world->set_control("tractor.brake", 0.5);
+    const real a = r.world->dt() / (c.tow_brake->lag_s + r.world->dt());
+    for (int i = 1; i <= 48; ++i) {
+        r.world->step();
+        CHECK(r.world->coupling_state(r.coupling).tow_brake == Catch::Approx(0.5 * (1.0 - std::pow(1.0 - a, i))).epsilon(1e-9));
+    }
+    // A bare or differently scoped brake does not reach it.
+    r.world->set_control("tractor.brake", 0.0);
+    r.world->set_control("brake", 1.0);
+    r.world->set_control("trailer.brake", 1.0);
+    for (int i = 0; i < 720; ++i) r.world->step();
+    CHECK(r.world->coupling_state(r.coupling).tow_brake < 1e-3);
+}
+
+TEST_CASE("Coupling: channel scopes are checked", "[machine][vehicle]") {
+    using Catch::Matchers::ContainsSubstring;
+    Cfg c;
+    c.scope_a = "same";
+    c.scope_b = "same";
+    CHECK_THROWS_WITH(build_rig(c), ContainsSubstring("same."));
+    c.scope_b = "a.b";
+    CHECK_THROWS_WITH(build_rig(c), ContainsSubstring("no dots"));
+    c.scope_a = "v1"; // the automatic name of the second vehicle
+    c.scope_b.clear();
+    CHECK_THROWS_WITH(build_rig(c), ContainsSubstring("v1."));
+    World world{WorldConfig{}};
+    CHECK_THROWS_AS(world.vehicle_channel(VehicleId{0, 1}, "brake"), std::invalid_argument);
+}
+
+TEST_CASE("Coupling: a chain brakes from the front", "[machine][vehicle]") {
+    Cfg c;
+    c.tractor = true;
+    c.trailer_mass = 7500.0;
+    c.trailer_brakes = true;
+    c.hitch = load_class("drawbar_pin");
+    c.tow_brake = channel_link();
+    Rig r = build_chain(c);
+    settle(r, 0.25);
+    r.world->set_control("brake", 1.0);
+    for (int i = 0; i < 240; ++i) r.world->step();
+    const real first = r.world->coupling_state(r.coupling).tow_brake;
+    const real second = r.world->coupling_state(r.coupling2).tow_brake;
+    CHECK(first > 0.9);
+    CHECK(second > 0.5);
+    CHECK(second < first);
+
+    // The front link goes: the demand it passed down the chain goes with it, and the rear link lets its brakes off.
+    r.world->detach(r.coupling);
+    r.world->set_control("brake", 0.0);
+    for (int i = 0; i < 720; ++i) r.world->step();
+    CHECK(r.world->coupling_state(r.coupling2).tow_brake < 1e-3);
+}
+
+TEST_CASE("Coupling: an overrun brake's hitch force is state", "[machine][vehicle]") {
+    // Equal poses and velocities at the hash, a different tick before it: the trailer pulled the hitch taut, which an
+    // overrun brake ignores, so only the remembered force differs. It decides the next tick's demand. A channel link
+    // does not read it, and those two runs have to agree: the check that the restored state is all of the state.
+    const auto hash_after = [](const machine::TowBrakeDesc& link, real pull) {
+        Cfg c;
+        c.trailer_brakes = true;
+        c.tow_brake = link;
+        Rig r = build_rig(c);
+        Pose pose_a = r.world->get_pose(r.a), pose_b = r.world->get_pose(r.b);
+        pose_a.position.z += 50.0;
+        pose_b.position.z += 50.0;
+        r.world->backend().set_pose(r.a, pose_a);
+        r.world->backend().set_pose(r.b, pose_b);
+        launch(r, 0.0);
+        r.world->backend().set_motion(r.b, Motion{Vec3{-pull, 0.0, 0.0}, Vec3::zero()});
+        r.world->step();
+        REQUIRE(r.world->coupling_state(r.coupling).tow_brake == 0.0);
+        r.world->backend().set_pose(r.a, pose_a);
+        r.world->backend().set_pose(r.b, pose_b);
+        r.world->backend().set_motion(r.a, Motion{});
+        r.world->backend().set_motion(r.b, Motion{});
+        return r.world->state_hash();
+    };
+    CHECK(hash_after(overrun(), 1.0) != hash_after(overrun(), 0.0));
+    CHECK(hash_after(channel_link(), 1.0) == hash_after(channel_link(), 0.0));
+}
+
+TEST_CASE("Coupling: an overrun brake acts on hitch compression and lets go in reverse", "[machine][vehicle]") {
+    Cfg c;
+    c.trailer_brakes = true;
+    c.tow_brake = overrun();
+    Rig r = build_rig(c, -700.0);
+    settle(r, 1.0);
+    launch(r, 15.0);
+    for (int i = 0; i < 240; ++i) r.world->step();
+    CHECK(r.world->coupling_state(r.coupling).tow_brake == 0.0); // rolling, the hitch in tension
+    real peak = 0.0;
+    r.world->set_control("brake", 0.8);
+    for (int i = 0; i < 240; ++i) {
+        r.world->step();
+        peak = std::max(peak, r.world->coupling_state(r.coupling).tow_brake);
+    }
+    CHECK(peak > 0.3);
+
+    // Pushed backwards on a small deadband: with the reverse release it lets go, without it the trailer brakes.
+    const auto reversing = [](real release) {
+        Cfg c2;
+        c2.trailer_brakes = true;
+        c2.tow_brake = overrun(40.0);
+        c2.tow_brake->reverse_release_speed_m_s = release;
+        Rig r2 = build_rig(c2, -700.0);
+        settle(r2, 1.0);
+        launch(r2, -2.0);
+        r2.elements.push_back(std::make_unique<SpeedHold>(Frame(r2.a), -2.0, 6000.0, 6000.0));
+        r2.world->add_force_element(r2.elements.back().get());
+        real most = 0.0;
+        for (int i = 0; i < 240; ++i) {
+            r2.world->step();
+            most = std::max(most, r2.world->coupling_state(r2.coupling).tow_brake);
+        }
+        return most;
+    };
+    CHECK(reversing(0.5) < 1e-3); // what settling left, decaying
+    CHECK(reversing(100.0) > 0.0);
+}
+
+TEST_CASE("Coupling: a tow brake's lag is state", "[machine][vehicle]") {
+    // In the air with the wheels still, the brake moves nothing: the two runs differ in the lag's state alone. A line of
+    // its own, so the towing vehicle's brakes stay out of it.
+    const auto hash_after = [](real line) {
+        Cfg c;
+        c.trailer_brakes = true;
+        c.tow_brake = channel_link();
+        c.tow_brake->channel = "line";
+        Rig r = build_rig(c);
+        for (const BodyId body : {r.a, r.b}) {
+            Pose pose = r.world->get_pose(body);
+            pose.position.z += 50.0;
+            r.world->backend().set_pose(body, pose);
+        }
+        launch(r, 0.0);
+        r.world->set_control("line", 0.5);
+        for (int i = 0; i < 4; ++i) r.world->step();
+        r.world->set_control("line", line);
+        r.world->step();
+        return r.world->state_hash();
+    };
+    CHECK(hash_after(0.5) == hash_after(0.5));
+    CHECK(hash_after(0.5) != hash_after(1.0));
+}
+
+TEST_CASE("Coupling: the brake lets go with the hitch", "[machine][vehicle]") {
+    // A tandem: it stands on its own once it is loose, where a single axle would drop its nose on the road.
+    Cfg c;
+    c.trailer_mass = 7500.0;
+    c.trailer_brakes = true;
+    c.tow_brake = channel_link();
+    Rig r = build_rig(c, -700.0);
+    settle(r, 0.5);
+    launch(r, 15.0);
+    r.world->set_control("brake", 1.0);
+    for (int i = 0; i < 120; ++i) r.world->step();
+    REQUIRE(r.world->coupling_state(r.coupling).tow_brake > 0.5);
+    r.world->detach(r.coupling);
+    r.world->set_control("brake", 0.0);
+    r.world->step();
+    const real before = r.world->get_motion(r.b).linear.length();
+    for (int i = 0; i < 120; ++i) r.world->step();
+    // Rolling free: half a second of it, nothing like a braked trailer's 3 m/s or more.
+    CHECK(before - r.world->get_motion(r.b).linear.length() < 0.25);
+}
+
+TEST_CASE("Coupling: a tow brake is worker-count independent", "[machine][vehicle]") {
+    const auto hashes = [](int workers, const machine::TowBrakeDesc& link) {
+        Cfg c;
+        c.trailer_mass = 7500.0;
+        c.trailer_brakes = true;
+        c.hitch = load_class("ball");
+        c.tow_brake = link;
+        c.workers = workers;
+        Rig r = build_rig(c, -700.0);
+        settle(r, 0.5);
+        launch(r, 15.0);
+        std::vector<std::uint64_t> out;
+        for (int i = 0; i < 240; ++i) {
+            r.world->set_control("brake", i < 60 ? 0.0 : 0.6);
+            r.world->set_control("steer", 0.03 * std::sin(2.0 * kPi * static_cast<real>(i) / 120.0));
+            r.world->step();
+            out.push_back(r.world->state_hash());
+        }
+        return out;
+    };
+    CHECK(hashes(1, channel_link()) == hashes(10, channel_link()));
+    CHECK(hashes(1, overrun()) == hashes(10, overrun()));
 }
 
 TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {

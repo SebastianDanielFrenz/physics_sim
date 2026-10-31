@@ -476,9 +476,8 @@ void World::step() {
 
     // Assists I7c: control-channel writes the vehicles queued during their step (a drive-mode change writes its TC /
     // launch-control default into the channel itself). Applied HERE - sequentially, on the sim thread, after every job
-    // has finished - in vehicle id order, straight into the flat channel array (no allocation). When two vehicles name
-    // the same (global) channel the later vehicle overwrites the earlier one. A set_control made before the next
-    // step() therefore wins over the physics' write from the next tick on.
+    // has finished - in vehicle id order, straight into the flat channel array (no allocation). A set_control made
+    // before the next step() therefore wins over the physics' write from the next tick on.
     for (std::size_t vi = 0; vi < vehicle_system_->count(); ++vi) {
         if (!vehicle_system_->contains(VehicleId{static_cast<id_index_t>(vi), 1})) continue;
         for (const vehicle::PendingChannelWrite& w : vehicle_system_->at(VehicleId{static_cast<id_index_t>(vi), 1}).pending_channel_writes()) {
@@ -719,7 +718,12 @@ machine::AttachCheck World::check_attach(const machine::CouplingDesc& desc) cons
 
 HitchId World::attach(const machine::CouplingDesc& desc) {
     if (in_step_) throw std::logic_error("attach: only between steps");
-    return vehicle_system_->attach(desc, *backend_, config_.substep_rate_hz);
+    const HitchId id = vehicle_system_->attach(desc, *backend_, config_.substep_rate_hz);
+    const std::optional<machine::TowBrakeDesc>& link = vehicle_system_->at(desc.towed).tow_brake();
+    if (link && link->kind == machine::TowBrakeKind::Channel) {
+        vehicle_system_->set_tow_brake_channel(id, ensure_control_channel_index(vehicle_channel(desc.towing, link->channel)));
+    }
+    return id;
 }
 
 void World::detach(HitchId id) {
@@ -740,23 +744,37 @@ const machine::CouplingState& World::coupling_state(HitchId id) const {
     return vehicle_system_->coupling_state(id);
 }
 
+std::string World::vehicle_channel(VehicleId id, std::string_view name) const {
+    if (id.index >= vehicle_channel_prefix_.size()) throw std::invalid_argument("vehicle_channel: unknown vehicle");
+    std::string full = vehicle_channel_prefix_[id.index];
+    full += name;
+    return full;
+}
+
 VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
-                                 const std::vector<std::pair<std::string, real>>& test_only_extra_channels) {
+                                 const std::vector<std::pair<std::string, real>>& test_only_extra_channels,
+                                 std::string_view channel_scope) {
     aero::validate(desc.aero);
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): resolve this vehicle's four
     // control channels to indices ONCE, here (setup time, off the tick
-    // path - never called from inside a job). Vehicle index 0 (the next
-    // instance's index, since vehicles are never destroyed - same
-    // invariant wheel_telemetry_channels_ below relies on) is the
-    // designated input vehicle and reads bare global names ("steer", ...);
-    // every other vehicle reads its own "v<i>." prefixed names. The
-    // string API (World::set_control/get_control) is unaffected - a
-    // caller may still set "v1.steer" etc. at any time, before or after
-    // this vehicle is created (ensure_control_channel_index handles both
-    // orders).
+    // path - never called from inside a job). A scoped vehicle reads
+    // "<scope>.<name>". Otherwise vehicle index 0 (the next instance's index:
+    // a destroyed vehicle keeps its slot, the invariant
+    // wheel_telemetry_channels_ below relies on too) is the designated input
+    // vehicle and reads bare names ("steer", ...), and every other vehicle
+    // reads its own "v<i>." prefixed names. A caller may set a channel at any
+    // time, before or after this vehicle is created
+    // (ensure_control_channel_index handles both orders).
     constexpr id_index_t kDesignatedInputVehicle = 0;
     const id_index_t vehicle_index = static_cast<id_index_t>(vehicle_system_->count());
-    const std::string channel_prefix = vehicle_index == kDesignatedInputVehicle ? std::string() : ("v" + std::to_string(vehicle_index) + ".");
+    if (channel_scope.find('.') != std::string_view::npos) throw std::invalid_argument("create_vehicle: a channel scope has no dots");
+    const std::string channel_prefix = !channel_scope.empty() ? std::string(channel_scope) + "."
+                                       : vehicle_index == kDesignatedInputVehicle ? std::string()
+                                                                                   : ("v" + std::to_string(vehicle_index) + ".");
+    if (std::find(vehicle_channel_prefix_.begin(), vehicle_channel_prefix_.end(), channel_prefix) != vehicle_channel_prefix_.end()) {
+        throw std::invalid_argument("create_vehicle: another vehicle already reads the channels '" + channel_prefix + "*'");
+    }
+    vehicle_channel_prefix_.push_back(channel_prefix);
     vehicle::ControlChannelIndices channel_indices;
     channel_indices.steer = ensure_control_channel_index(channel_prefix + "steer");
     channel_indices.throttle = ensure_control_channel_index(channel_prefix + "throttle");

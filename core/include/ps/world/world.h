@@ -182,14 +182,13 @@ public:
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
     // reach vehicle code without any Godot (or other front-end) type
-    // crossing into the core. PLAN.md P4 I0 (PHYS-033 section 8, Q4): a
-    // global name (e.g. "steer") addresses the designated input vehicle
-    // (vehicle index 0); a "v<i>." prefix (e.g. "v1.steer") addresses
-    // vehicle i. This API is unchanged for existing callers (ps_run
-    // scenarios' control_events, the Godot adapter) - only the internal
-    // storage is index-based now (see ensure_control_channel_index below),
-    // so per-vehicle resolution at create_vehicle need not hash a string
-    // every tick.
+    // crossing into the core. Each vehicle has its own namespace: create_vehicle's
+    // channel_scope names it ("trailer_1.brake"), and without a scope vehicle index
+    // 0 reads the bare names ("steer") and vehicle i "v<i>." ones (PLAN.md P4 I0).
+    // vehicle_channel gives the full name, so a caller with several vehicles need
+    // not know the order they were created in. Storage is index-based (see
+    // ensure_control_channel_index below): resolved once at create_vehicle, no
+    // string hashing in the tick.
     void set_control(const std::string& channel, real value) {
         control_channel_values_[ensure_control_channel_index(channel)] = value;
     }
@@ -308,8 +307,13 @@ public:
     // end. Plain {string, real} pairs, not drivetrain::ChannelDecl
     // (internal, core/src/drivetrain/powertrain.h - not in any public
     // header). Always empty for every production caller.
+    // `channel_scope`: this vehicle's channels are "<scope>.<name>"; a stable name for a vehicle whose creation order
+    // is not. No dots, and two vehicles cannot share one (std::invalid_argument).
     VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
-                              const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
+                              const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {},
+                              std::string_view channel_scope = {});
+    // The full name of this vehicle's channel `name`.
+    [[nodiscard]] std::string vehicle_channel(VehicleId id, std::string_view name) const;
     // A hitch between two vehicles (ps/machine/coupling.h). attach, detach and destroy_vehicle run on the sim thread
     // between steps and rebuild the islands there: the coupled vehicles then step together in one job. From inside a
     // step they throw std::logic_error. attach measures the sockets as they are and ramps them together over the
@@ -523,6 +527,7 @@ private:
     real dt_;
     std::uint64_t tick_ = 0;
     bool in_step_ = false;
+    std::vector<std::string> vehicle_channel_prefix_; // one per vehicle, retired ones included
     real sim_time_ = 0.0;
     std::vector<aero::WakeSource> aero_wakes_;
     std::shared_ptr<environment::Environment> environment_; // weather plan W2; null == none installed

@@ -62,6 +62,7 @@ public:
     [[nodiscard]] machine::AttachCheck check_attach(const machine::CouplingDesc& desc, const IRigidBackend& backend) const;
     HitchId attach(const machine::CouplingDesc& desc, IRigidBackend& backend, real substep_rate_hz); // std::invalid_argument
     void detach(HitchId id, IRigidBackend& backend);
+    void set_tow_brake_channel(HitchId id, std::size_t channel_index) { couplings_[id.index].brake_channel = channel_index; }
     [[nodiscard]] bool contains(HitchId id) const { return id.index < couplings_.size() && couplings_[id.index].alive && couplings_[id.index].generation == id.generation; }
     [[nodiscard]] bool chassis_is_coupled(BodyId chassis) const;
     void set_coupling_passes(int passes) { coupling_passes_ = passes; }
@@ -123,6 +124,8 @@ private:
         int latch_left = 0, latch_total = 0; // substeps
         Vec3 latch_error_local{}, latch_rate_local{};
         std::array<real, 3> latch_angle{}, latch_angle_rate{}; // locked axes
+        std::size_t brake_channel = 0; // a tow_brake channel link: resolved in the towing vehicle's scope
+        real brake_state = 0.0;
         // This substep's wrench so far: a later pass replaces it, it does not add to it.
         Vec3 force{}, torque_towing{}, torque_towed{};
         machine::SocketSolve last{};
@@ -136,6 +139,7 @@ private:
     void rebuild_islands();
     void apply_collision_pairs(IRigidBackend& backend);
     void kill_coupling(Coupling& c);
+    void update_tow_brakes(const Island& island, const IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt);
     [[nodiscard]] machine::LatchTarget latch_target(const Coupling& c, const VehicleTickWork& towing, real h) const;
     void step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                      real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air);
@@ -145,6 +149,7 @@ private:
     std::vector<Coupling> couplings_;  // slots: a dead one is reused with the next generation
     std::size_t alive_couplings_ = 0;
     std::vector<unsigned char> retired_; // one per instance
+    std::vector<real> tow_brake_demand_; // one per instance; each entry touched by its island's job only
     int coupling_passes_ = 2;
     std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
     std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only

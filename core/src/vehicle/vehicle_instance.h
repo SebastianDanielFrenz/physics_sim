@@ -33,9 +33,8 @@ struct PendingChannelWrite {
     real value = 0;
 };
 
-// PLAN.md P2/M1 step 3's named control channels, read by World and handed
-// down here (out/handover_p3.md decision 5: global, not per-vehicle, for
-// P3/M1's one-car scope).
+// PLAN.md P2/M1 step 3's named control channels, read by World in this
+// vehicle's channel scope and handed down here.
 struct ControlInputs {
     real steer = 0.0;     // -1..1
     real throttle = 0.0;  // 0..1
@@ -95,6 +94,8 @@ struct VehicleTickEnv {
     // World fills it per tick from the environment. Without it the wheel's
     // friction is exactly the class lambda_mu (bit-identical to before W6).
     const environment::ConditionGrip* grip = nullptr;
+    // What the hitch asks of this vehicle's brakes, 0..1; it adds to the brake channel as a second driver would.
+    real brake_link = 0.0;
 };
 
 // One tick's working state between tick_begin and tick_end, owned by the caller:
@@ -161,6 +162,8 @@ public:
     // Every chassis of this vehicle's island, its own included: its wheels and ground probes do not see them. Empty
     // for a vehicle in no coupling, whose queries stay the plain ones. Sim thread, between steps.
     void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
+
+    [[nodiscard]] const std::optional<machine::TowBrakeDesc>& tow_brake() const { return desc_.tow_brake; }
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.

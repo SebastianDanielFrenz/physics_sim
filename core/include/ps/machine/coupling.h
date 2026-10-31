@@ -48,6 +48,7 @@ struct CouplingState {
     real yaw_rad = 0.0, pitch_rad = 0.0, roll_rad = 0.0; // at the last substep; 0 for a class with every axis free
     real work_j = 0.0;      // cumulative work the coupling did on the relative motion (negative = removed energy)
     real latch_progress = 1.0; // 0 at attach, 1 once the rows hold the sockets themselves
+    real tow_brake = 0.0;      // the towed vehicle's brake demand through this hitch, 0..1
 };
 
 } // namespace ps::machine

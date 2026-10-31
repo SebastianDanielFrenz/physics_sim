@@ -247,6 +247,7 @@ void VehicleInstance::tick_begin(VehicleTickWork& tw, IRigidBackend& backend, co
     controls.throttle = channel_values[control_indices_.throttle];
     controls.brake = channel_values[control_indices_.brake];
     controls.handbrake = channel_values[control_indices_.handbrake];
+    if (env.brake_link > real(0)) controls.brake = std::max(controls.brake, env.brake_link);
 
     // PHYS-033 P4 I3 plan section 7.1: the shaft-network powertrain's own
     // channels, read once per tick (their per-substep CONSUMPTION is gated

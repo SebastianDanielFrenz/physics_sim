@@ -50,6 +50,7 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
     aero_wakes_.resize(instances_.size());
     tick_work_.resize(instances_.size());
     retired_.resize(instances_.size(), 0);
+    tow_brake_demand_.resize(instances_.size(), 0.0);
     const auto vehicle_index = static_cast<std::int32_t>(instances_.size() - 1);
     if (vehicle_for_body_index_.size() <= chassis.index) vehicle_for_body_index_.resize(chassis.index + 1, -1);
     vehicle_for_body_index_[chassis.index] = vehicle_index;
@@ -157,6 +158,7 @@ HitchId System::attach(const machine::CouplingDesc& desc, IRigidBackend& backend
 
 void System::kill_coupling(Coupling& c) {
     c.alive = false;
+    tow_brake_demand_[c.towed] = 0.0;
     ++c.generation;
     --alive_couplings_;
 }
@@ -254,6 +256,29 @@ machine::LatchTarget System::latch_target(const Coupling& c, const VehicleTickWo
     return t;
 }
 
+void System::update_tow_brakes(const Island& island, const IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt) {
+    // In coupling order: in a chain whose rear link comes first the demand reaches it a tick later, the same every run.
+    for (const std::size_t ci : island.couplings) {
+        Coupling& c = couplings_[ci];
+        const std::optional<machine::TowBrakeDesc>& link = instances_[c.towed]->tow_brake();
+        if (!link) continue;
+        real demand = 0.0;
+        if (link->kind == machine::TowBrakeKind::Channel) {
+            demand = link->gain * std::max(channel_values[c.brake_channel], tow_brake_demand_[c.towing]);
+        } else {
+            const BodyId chassis = instances_[c.towed]->chassis();
+            const Vec3 forward = backend.get_pose(chassis).orientation.rotate(Vec3::unit_x());
+            if (dot(backend.get_motion(chassis).linear, forward) >= -link->reverse_release_speed_m_s) {
+                const real push = dot(c.state.mean_force_on_towing_world, forward);
+                demand = (push - link->deadband_n) / (link->full_force_n - link->deadband_n);
+            }
+        }
+        c.brake_state += (std::clamp(demand, real(0.0), real(1.0)) - c.brake_state) * tick_dt / (link->lag_s + tick_dt);
+        c.state.tow_brake = c.brake_state;
+        tow_brake_demand_[c.towed] = c.brake_state;
+    }
+}
+
 void System::solve_coupling(Coupling& c, real h) {
     VehicleTickWork& wa = tick_work_[c.towing];
     VehicleTickWork& wb = tick_work_[c.towed];
@@ -281,8 +306,10 @@ void System::solve_coupling(Coupling& c, real h) {
 
 void System::step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                          real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air) {
+    update_tow_brakes(island, backend, channel_values, tick_dt);
     for (const std::size_t i : island.vehicles) {
         VehicleTickEnv e = env;
+        e.brake_link = tow_brake_demand_[i];
         if (i < air.size() && air[i].valid) {
             const environment::VehicleAir& a = air[i];
             e.ambient = AmbientSample{a.pressure_pa, a.temperature_k, a.vapour_pressure_pa};
@@ -396,8 +423,8 @@ std::uint64_t System::fold_state_hash(std::uint64_t seed) const {
     for (std::size_t i = 0; i < instances_.size(); ++i) {
         if (retired_[i] == 0) h = instances_[i]->fold_state_hash(h);
     }
-    // Only a live coupling folds in: a World without one hashes exactly as before. The latch is the only state the
-    // solve carries over a substep.
+    // Only a live coupling folds in: a World without one hashes exactly as before. The solve itself carries nothing
+    // over a tick but the latch; a tow brake carries its lag, and an overrun brake reads last tick's hitch force.
     for (std::size_t i = 0; i < couplings_.size(); ++i) {
         const Coupling& c = couplings_[i];
         if (!c.alive) continue;
@@ -410,6 +437,9 @@ std::uint64_t System::fold_state_hash(std::uint64_t seed) const {
         h = fold(h, c.latch_rate_local);
         h = fold(h, c.latch_angle);
         h = fold(h, c.latch_angle_rate);
+        const std::optional<machine::TowBrakeDesc>& link = instances_[c.towed]->tow_brake();
+        if (link) h = fold(h, c.brake_state);
+        if (link && link->kind == machine::TowBrakeKind::Overrun) h = fold(h, c.state.mean_force_on_towing_world);
     }
     return h;
 }
