@@ -426,6 +426,14 @@ public:
     // opt-in). The body's mass is dry + this; it trails the true contents by less than update_threshold_kg.
     [[nodiscard]] real chassis_contents_mass(VehicleId id) const;
     [[nodiscard]] real chassis_dry_mass(VehicleId id) const;
+    // Payload mass (the game's load: grain in a tank or a trailer bed, the content of a sprayer tank): a mass the chassis body
+    // carries on top of its dry mass and the fuel / N2O contents. Needs the vehicle's contents_mass block enabled (else
+    // std::logic_error: a vehicle that did not opt in stays as it was); kg must be finite and >= 0 (else std::invalid_argument).
+    // Call between steps. The body's mass follows at the next tick boundary like the fuel contents do, inside the block's
+    // update_threshold_kg; the inertia is rescaled with it and the centre of mass does not move (the load is spread like the
+    // body, not a point mass at the bed). vehicle_payload_mass is the last value set (0 without the block).
+    void set_vehicle_payload_mass(VehicleId id, real kg);
+    [[nodiscard]] real vehicle_payload_mass(VehicleId id) const;
     // Engine thermal plan T1 (vault PHYS-063): a vehicle with a cooling_system keeps lumped coolant/oil temperatures.
     // engine_thermal_state returns the live values in deg C (sim thread only; throws for a vehicle without thermal),
     // set_engine_thermal_state queues a new state for the next tick boundary (wax/play follow the coolant, fan off;
@@ -550,6 +558,7 @@ private:
         BodyId chassis{};
         real dry_kg = 0.0;
         real applied_kg = 0.0; // contents currently in the body mass
+        real payload_kg = 0.0; // set_vehicle_payload_mass: the part of the contents the game puts on the body
         real threshold_kg = 0.1;
     };
     std::vector<ContentsMassState> contents_mass_;

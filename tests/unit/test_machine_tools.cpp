@@ -18,6 +18,7 @@
 //   a bow tie as a plain quad; an unweighted ledger depth           -> work_coverage
 //   the sweep forgetting the rotor; tool power never graded         -> the shop's figure
 //   sources needing no tag                                          -> machine parts
+//   combine_header.json's kind soil (G3 harvest chain, 2026-10-31)  -> applicator parts: the loader's rules
 //   an allocation in the substep; a result that depends on the
 //   worker                                                          -> work is the same on 1 and 10 workers
 //   an unconditional fold in vehicle::System's state hash           -> ps_determinism_tests' pinned scenario hashes
@@ -911,7 +912,7 @@ TEST_CASE("the switch is state for an applicator only", "[machine][vehicle][appl
 
 TEST_CASE("applicator parts: the loader's rules", "[machine][io][applicator]") {
     const io::MachineSockets sockets = {{"socket_work_L", Vec3{0, 3, 0}}, {"socket_work_R", Vec3{0, -3, 0}}};
-    for (const char* name : {"sprayer_boom", "spreader_broadcast", "slurry_splash"}) {
+    for (const char* name : {"sprayer_boom", "spreader_broadcast", "slurry_splash", "combine_header"}) {
         const machine::MachineDesc m = io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/" + name + ".json", sockets);
         REQUIRE(m.tools.size() == 1);
         CHECK(m.tools[0].kind == machine::ToolKind::Applicator);

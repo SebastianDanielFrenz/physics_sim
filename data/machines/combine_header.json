@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.machine/1",
+  "name": "combine_header",
+  "source": "The cutting header of a self-propelled combine harvester. It touches nothing: no draft, no soil force, no depth (kind applicator). It cuts while switched on over workable ground, moving forward; the width comes from the model's two work sockets, the mass from the vehicle. What the header takes (grain, straw) comes from the game's field model, the tank and the unloading belong to the game.",
+  "tools": [
+    {
+      "name": "header",
+      "kind": "applicator",
+      "operation": "combine",
+      "edge_left": "socket_work_L",
+      "edge_right": "socket_work_R",
+      "range": {
+        "source": "[AS] Usual combine working speeds 4-8 km/h in a cereal crop (manufacturer ranges, not read from a standard); above 8 km/h the header loses crop in front of the cutter bar and the feed becomes uneven, 0.07 per km/h to a floor of 0.5.",
+        "speed_min_km_h": 2.0,
+        "speed_max_km_h": 8.0,
+        "overspeed_quality_per_km_h": 0.07,
+        "quality_floor": 0.5
+      }
+    }
+  ]
+}
