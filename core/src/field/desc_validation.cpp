@@ -53,6 +53,7 @@ std::string soil_validation_error(const SoilDesc& s) {
     c.frac("ia_ratio", s.ia_ratio);
     c.nonneg("snow_melt_mm_per_k_day", s.snow_melt_mm_per_k_day);
     c.fail_if(!fin(s.snow_melt_base_c), "snow_melt_base_c must be finite");
+    if (c.err.empty() && s.has_nutrients) c.err = soil_nutrient_validation_error(s.name, s.nutrients);
     return c.err;
 }
 
@@ -119,6 +120,113 @@ std::string crop_validation_error(const CropDesc& d) {
     c.fail_if(!fin(d.frost_snow_floor_c), "frost_snow_floor_c must be finite");
     c.nonneg("harvest_window_days", d.harvest_window_days);
     c.frac("shed_rate_per_day", d.shed_rate_per_day);
+    if (c.err.empty() && d.has_nutrients) c.err = crop_nutrient_validation_error(d.name, d.nutrients);
+    return c.err;
+}
+
+std::string soil_nutrient_validation_error(const std::string& name, const SoilNutrientDesc& n) {
+    Check c{"soil " + name + ": nutrients.", {}};
+    c.nonneg("no3_init_kg_ha", n.no3_init_kg_ha);
+    c.nonneg("nh4_init_kg_ha", n.nh4_init_kg_ha);
+    c.nonneg("org_n_kg_ha", n.org_n_kg_ha);
+    c.nonneg("min_rate_per_day_20c", n.min_rate_per_day_20c);
+    c.fail_if(!(fin(n.min_q10) && n.min_q10 >= 1.0), "min_q10 must be >= 1");
+    c.frac("min_moisture_floor", n.min_moisture_floor);
+    c.nonneg("fresh_rate_per_day_20c", n.fresh_rate_per_day_20c);
+    c.nonneg("nitrif_rate_per_day_20c", n.nitrif_rate_per_day_20c);
+    c.nonneg("denit_rate_per_day_20c", n.denit_rate_per_day_20c);
+    c.fail_if(!(fin(n.denit_wetness) && n.denit_wetness >= 0.0 && n.denit_wetness < 1.0), "denit_wetness must be in [0, 1)");
+    c.fail_if(!(fin(n.soil_t_lag_days) && n.soil_t_lag_days >= 1.0), "soil_t_lag_days must be >= 1");
+    c.fail_if(!fin(n.soil_t_init_c), "soil_t_init_c must be finite");
+    c.pos("soil_t_ramp_c", n.soil_t_ramp_c);
+    c.nonneg("n_deposition_kg_ha_day", n.n_deposition_kg_ha_day);
+    c.fail_if(!(fin(n.nh3_temp_q10) && n.nh3_temp_q10 >= 1.0), "nh3_temp_q10 must be >= 1");
+    c.pos("soil_test_kg_per_mg100g", n.soil_test_kg_per_mg100g);
+    c.nonneg("p_test_init_mg100g", n.p_test_init_mg100g);
+    c.nonneg("p_reserve_kg_ha", n.p_reserve_kg_ha);
+    c.nonneg("p_eq_mg100g", n.p_eq_mg100g);
+    c.frac("p_release_per_day", n.p_release_per_day);
+    c.frac("p_fix_per_day", n.p_fix_per_day);
+    c.nonneg("p_rel_b", n.p_rel_b);
+    c.fail_if(n.p_rel_b > 0.0 && !(fin(n.p_target_mg100g) && n.p_target_mg100g > 0.0), "p_target_mg100g must be > 0 with p_rel_b > 0");
+    c.nonneg("k_test_init_mg100g", n.k_test_init_mg100g);
+    c.nonneg("k_reserve_kg_ha", n.k_reserve_kg_ha);
+    c.nonneg("k_eq_mg100g", n.k_eq_mg100g);
+    c.frac("k_release_per_day", n.k_release_per_day);
+    c.frac("k_fix_per_day", n.k_fix_per_day);
+    c.nonneg("k_rel_b", n.k_rel_b);
+    c.fail_if(n.k_rel_b > 0.0 && !(fin(n.k_target_mg100g) && n.k_target_mg100g > 0.0), "k_target_mg100g must be > 0 with k_rel_b > 0");
+    c.fail_if(!(fin(n.ph_init) && n.ph_init > 3.0 && n.ph_init < 9.0), "ph_init must be in (3, 9)");
+    c.pos("buffer_cao_kg_ha_per_ph", n.buffer_cao_kg_ha_per_ph);
+    c.nonneg("cao_loss_kg_ha_per_mm_drain", n.cao_loss_kg_ha_per_mm_drain);
+    c.nonneg("lime_react_per_day", n.lime_react_per_day);
+    c.frac("lime_surface_factor", n.lime_surface_factor);
+    c.fail_if(!(fin(n.ph_avail_floor) && fin(n.ph_avail_full) && n.ph_avail_floor < n.ph_avail_full),
+              "ph_avail_floor must be below ph_avail_full");
+    c.frac("avail_floor_factor", n.avail_floor_factor);
+    return c.err;
+}
+
+std::string crop_nutrient_validation_error(const std::string& name, const CropNutrientDesc& n) {
+    Check c{"crop " + name + ": nutrients.", {}};
+    c.pos("nc_a", n.nc_a);
+    c.nonneg("nc_b", n.nc_b);
+    c.pos("nc_w_min_t_ha", n.nc_w_min_t_ha);
+    c.pos("nc_const_pct", n.nc_const_pct);
+    c.nonneg("n_min_conc_pct", n.n_min_conc_pct);
+    c.fail_if(fin(n.nc_const_pct) && !(n.n_min_conc_pct < n.nc_const_pct), "n_min_conc_pct must be below nc_const_pct");
+    c.nonneg("n_stress_start_t_ha", n.n_stress_start_t_ha);
+    c.nonneg("n_uptake_max_kg_ha_day", n.n_uptake_max_kg_ha_day);
+    c.frac("n_uptake_frac_per_day", n.n_uptake_frac_per_day);
+    c.nonneg("n_residual_kg_ha", n.n_residual_kg_ha);
+    c.nonneg("n_root_fraction", n.n_root_fraction);
+    c.frac("n_grain_share", n.n_grain_share);
+    c.frac("n_fixation_fraction", n.n_fixation_fraction);
+    c.nonneg("p2o5_conc_pct_dm", n.p2o5_conc_pct_dm);
+    c.frac("p2o5_grain_share", n.p2o5_grain_share);
+    c.nonneg("k2o_conc_pct_dm", n.k2o_conc_pct_dm);
+    c.frac("k2o_grain_share", n.k2o_grain_share);
+    c.fail_if(!(fin(n.ph_opt_low) && fin(n.ph_opt_high) && fin(n.ph_floor) && n.ph_floor < n.ph_opt_low && n.ph_opt_low <= n.ph_opt_high),
+              "pH response needs ph_floor < ph_opt_low <= ph_opt_high");
+    c.frac("ph_floor_factor", n.ph_floor_factor);
+    c.nonneg("lodging_nmin_start_kg_ha", n.lodging_nmin_start_kg_ha);
+    c.fail_if(!(fin(n.lodging_nmin_full_kg_ha) && n.lodging_nmin_full_kg_ha > n.lodging_nmin_start_kg_ha),
+              "lodging_nmin_full_kg_ha must exceed lodging_nmin_start_kg_ha");
+    c.frac("lodging_max_loss", n.lodging_max_loss);
+    c.fail_if(!(fin(n.lodging_bbch_from) && fin(n.lodging_bbch_to) && n.lodging_bbch_from <= n.lodging_bbch_to),
+              "lodging_bbch_from must not exceed lodging_bbch_to");
+    return c.err;
+}
+
+std::string material_validation_error(const MaterialDesc& m) {
+    Check c{"material " + m.name + ": ", {}};
+    c.fail_if(m.name.empty(), "name must not be empty");
+    c.fail_if(!(fin(m.dm_frac) && m.dm_frac > 0.0 && m.dm_frac <= 1.0), "dm_frac must be in (0, 1]");
+    c.pos("density_kg_m3", m.density_kg_m3);
+    c.nonneg("n_total_kg_t", m.n_total_kg_t);
+    c.nonneg("nh4_n_kg_t", m.nh4_n_kg_t);
+    c.nonneg("urea_n_kg_t", m.urea_n_kg_t);
+    c.nonneg("no3_n_kg_t", m.no3_n_kg_t);
+    c.fail_if(fin(m.n_total_kg_t) && fin(m.nh4_n_kg_t) && fin(m.urea_n_kg_t) && fin(m.no3_n_kg_t) &&
+                  m.nh4_n_kg_t + m.urea_n_kg_t + m.no3_n_kg_t > m.n_total_kg_t * (1.0 + 1.0e-9),
+              "the mineral N forms exceed the total N");
+    c.nonneg("p2o5_kg_t", m.p2o5_kg_t);
+    c.nonneg("k2o_kg_t", m.k2o_kg_t);
+    c.fail_if(!fin(m.cao_kg_t), "cao_kg_t must be finite");
+    c.nonneg("k_vol_per_day", m.k_vol_per_day);
+    c.nonneg("k_inf_per_day", m.k_inf_per_day);
+    c.nonneg("k_inf_per_mm_rain", m.k_inf_per_mm_rain);
+    c.fail_if(m.nh4_n_kg_t + m.urea_n_kg_t > 0.0 && !(m.k_inf_per_day > 0.0), "k_inf_per_day must be > 0 for a material with ammoniacal N");
+    c.frac("org_slow_fraction", m.org_slow_fraction);
+    return c.err;
+}
+
+std::string method_validation_error(const MethodDesc& m) {
+    Check c{"method " + m.name + ": ", {}};
+    c.fail_if(m.name.empty(), "name must not be empty");
+    c.frac("soil_placed_fraction", m.soil_placed_fraction);
+    c.nonneg("k_vol_factor", m.k_vol_factor);
+    c.fail_if(!fin(m.incorporation_delay_h), "incorporation_delay_h must be finite");
     return c.err;
 }
 

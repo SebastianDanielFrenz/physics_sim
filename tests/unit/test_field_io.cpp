@@ -8,6 +8,10 @@
 //  - I-b: has_tag() accepting any non-empty string: I2 failed;
 //  - I-d: the scenario's doy range check removed: I6 failed;
 //  - I-e: operations applied on the wrong day of year (doy + 1): I7 failed.
+// F1b (2026-10-31), then reverted:
+//  - I-f: the "mineral N forms exceed the total" check of the material loader removed: I9 failed;
+//  - I-g: the duplicate method name check removed: I9 failed;
+//  - I-h: the pH response order check (ph_floor < ph_opt_low <= ph_opt_high) removed: I10 failed.
 #include "field_test_support.h"
 
 #include "ps/field/field_scenario.h"
@@ -260,4 +264,95 @@ TEST_CASE("I7 headless scenario run: harvests, CSV and determinism", "[field][io
     CHECK(lines == 3u * 365u + 1u);
     CHECK_THAT(text, ContainsSubstring("day,year,doy,tmin_c,tmax_c,rain_mm"));
     CHECK_THAT(text, ContainsSubstring(",ks_sto\n"));
+}
+
+// ---- nutrients, materials, methods (F1b) ----------------------------------------------------------
+
+namespace {
+json shipped_material(const char* name) { return read_json(test_field::data_dir() / "field_materials" / name); }
+} // namespace
+
+TEST_CASE("I8 the shipped materials and methods load; the nutrient blocks of soil and crop are read", "[field][io][nutrients]") {
+    for (const char* f : {"can_27.json", "dap_18_46.json", "mop_60.json", "uan_28.json", "cattle_slurry_75.json", "pig_slurry_5.json",
+                          "cattle_solid_manure.json", "digestate_liquid_75.json", "lime_carbonate_90.json", "quicklime_90.json"}) {
+        INFO(f);
+        const MaterialDesc m = ps::io::load_material_json(test_field::data_dir() / "field_materials" / f);
+        CHECK_FALSE(m.name.empty());
+        CHECK(m.n_total_kg_t >= m.nh4_n_kg_t + m.urea_n_kg_t + m.no3_n_kg_t - 1e-12);
+    }
+    const auto methods = ps::io::load_methods_json(test_field::data_dir() / "field_materials/methods.json");
+    CHECK(methods.size() >= 6);
+    CHECK(test_field::loess().has_nutrients);
+    CHECK(test_field::sandy().has_nutrients);
+    CHECK(test_field::wheat().has_nutrients);
+    CHECK_THAT(test_field::loess().nutrients.buffer_cao_kg_ha_per_ph, WithinAbs(4600.0, 1e-9));
+    CHECK_THAT(test_field::wheat().nutrients.nc_a, WithinAbs(5.35, 1e-9));
+    CHECK_THAT(test_field::wheat().nutrients.nc_b, WithinAbs(0.442, 1e-9));
+}
+
+TEST_CASE("I9 material and method loader rejections", "[field][io][nutrients]") {
+    auto reject_m = [](auto mutate, const char* text) {
+        json j = shipped_material("cattle_slurry_75.json");
+        mutate(j);
+        INFO("expecting: " << text);
+        CHECK_THROWS_WITH(ps::io::parse_material_json(j, "inline"), ContainsSubstring(text));
+    };
+    reject_m([](json& j) { j["format"] = "physics_sim.field_material/2"; }, "format");
+    reject_m([](json& j) { j["composition"]["source"].erase("n_total_kg_t"); }, "source tag");
+    reject_m([](json& j) { j["composition"]["source"]["n_total_kg_t"] = "guess"; }, "source tag");
+    reject_m([](json& j) { j["composition"]["foo"] = 1; j["composition"]["source"]["foo"] = "[AS] x"; }, "unknown key");
+    reject_m([](json& j) { j["bogus"] = 1; }, "unknown key");
+    reject_m([](json& j) { j["composition"]["nh4_n_kg_t"] = 9.0; }, "exceed the total");          // mineral forms exceed the total
+    reject_m([](json& j) { j["composition"]["dm_frac"] = 1.5; }, "dm_frac");
+    reject_m([](json& j) { j["composition"]["p2o5_kg_t"] = -1.0; }, "p2o5_kg_t");
+    reject_m([](json& j) { j["ammonia"]["k_vol_per_day"] = -1.0; }, "k_vol_per_day");
+    reject_m([](json& j) { j["composition"].erase("k2o_kg_t"); }, "missing required field");
+    auto reject_x = [](auto mutate, const char* text) {
+        json j = read_json(test_field::data_dir() / "field_materials/methods.json");
+        mutate(j);
+        INFO("expecting: " << text);
+        CHECK_THROWS_WITH(ps::io::parse_methods_json(j, "inline"), ContainsSubstring(text));
+    };
+    reject_x([](json& j) { j["format"] = "physics_sim.field_methods/2"; }, "format");
+    reject_x([](json& j) { j["methods"][1]["source"].erase("k_vol_factor"); }, "source tag");
+    reject_x([](json& j) { j["methods"][1]["k_vol_factor"] = -0.5; }, "k_vol_factor");
+    reject_x([](json& j) { j["methods"][1]["soil_placed_fraction"] = 1.5; }, "soil_placed_fraction");
+    reject_x([](json& j) { j["methods"][1]["extra"] = 1; j["methods"][1]["source"]["extra"] = "[AS] x"; }, "unknown key");
+    reject_x([](json& j) { j["methods"][1]["name"] = j["methods"][0]["name"]; }, "duplicate");
+}
+
+TEST_CASE("I10 nutrient blocks of soil and crop: tags, ranges, unknown keys", "[field][io][nutrients]") {
+    auto reject_s = [](auto mutate, const char* text) {
+        json j = shipped_soil();
+        mutate(j);
+        INFO("expecting: " << text);
+        CHECK_THROWS_WITH(ps::io::parse_soil_json(j, "inline"), ContainsSubstring(text));
+    };
+    reject_s([](json& j) { j["nutrients"]["source"].erase("min_q10"); }, "source tag");
+    reject_s([](json& j) { j["nutrients"]["source"]["org_n_kg_ha"] = "no tag here"; }, "source tag");
+    reject_s([](json& j) { j["nutrients"]["foo"] = 1; j["nutrients"]["source"]["foo"] = "[AS] x"; }, "unknown key");
+    reject_s([](json& j) { j["nutrients"]["buffer_cao_kg_ha_per_ph"] = 0.0; }, "buffer_cao_kg_ha_per_ph");
+    reject_s([](json& j) { j["nutrients"]["ph_init"] = 9.0; }, "ph_init");
+    reject_s([](json& j) { j["nutrients"]["p_reserve_kg_ha"] = -1.0; }, "p_reserve_kg_ha");
+    reject_s([](json& j) { j["nutrients"]["min_moisture_floor"] = 2.0; }, "min_moisture_floor");
+    auto reject_c = [](auto mutate, const char* text) {
+        json j = shipped_crop();
+        mutate(j);
+        INFO("expecting: " << text);
+        CHECK_THROWS_WITH(ps::io::parse_crop_json(j, "inline"), ContainsSubstring(text));
+    };
+    reject_c([](json& j) { j["nutrients"]["source"].erase("nc_a"); }, "source tag");
+    reject_c([](json& j) { j["nutrients"]["bogus"] = 1; j["nutrients"]["source"]["bogus"] = "[AS] x"; }, "unknown key");
+    reject_c([](json& j) { j["nutrients"]["nc_b"] = -0.1; }, "nc_b");
+    reject_c([](json& j) { j["nutrients"]["n_grain_share"] = 1.4; }, "n_grain_share");
+    reject_c([](json& j) { j["nutrients"]["ph_opt_low"] = 8.5; }, "pH response");
+    reject_c([](json& j) { j["nutrients"]["lodging_nmin_full_kg_ha"] = 10.0; }, "lodging");
+    reject_c([](json& j) { j["nutrients"]["lodging_max_loss"] = 1.5; }, "lodging_max_loss");
+    // a soil or crop without the block is legal (F1a data): has_nutrients stays false
+    json plain = shipped_soil();
+    plain.erase("nutrients");
+    CHECK_FALSE(ps::io::parse_soil_json(plain, "inline").has_nutrients);
+    json plain_c = shipped_crop();
+    plain_c.erase("nutrients");
+    CHECK_FALSE(ps::io::parse_crop_json(plain_c, "inline").has_nutrients);
 }

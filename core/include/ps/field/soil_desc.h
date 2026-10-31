@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "ps/field/nutrient_desc.h"
 #include "ps/types.h"
 
 #include <string>
@@ -27,6 +28,10 @@ struct SoilDesc {
     // Snow store: degree-day melt.
     real snow_melt_mm_per_k_day = 0.0;
     real snow_melt_base_c = 0.0;
+
+    // Optional nutrient block (F1b); required when the field runs with nutrients.
+    bool has_nutrients = false;
+    SoilNutrientDesc nutrients;
 
     // Derived (not in the file).
     real taw_mm_per_m() const { return 1000.0 * (theta_fc - theta_wp); }

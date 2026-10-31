@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "ps/field/nutrient_desc.h"
 #include "ps/types.h"
 
 #include <string>
@@ -90,6 +91,10 @@ struct CropDesc {
     // After maturity: grain stays on the plant for a while, then sheds.
     real harvest_window_days = 0.0;      // days after maturity before shedding starts
     real shed_rate_per_day = 0.0;        // fraction of the remaining grain lost per day afterwards
+
+    // Optional nutrient block (F1b); required when the field runs with nutrients.
+    bool has_nutrients = false;
+    CropNutrientDesc nutrients;
 
     int stage_count() const { return static_cast<int>(stages.size()); }
     // Canopy cover at emergence for a given density scale.

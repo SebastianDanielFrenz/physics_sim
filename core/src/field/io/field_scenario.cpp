@@ -92,13 +92,33 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
     } else {
         r.skip("test_irrigate_to_capacity");
     }
+    if (r.has("nutrients")) {
+        const json* b = r.child("nutrients");
+        if (!b->is_boolean()) r.fail("\"nutrients\" must be a boolean");
+        sc.field.nutrients_enabled = b->get<bool>();
+    } else {
+        r.skip("nutrients");
+    }
+    if (r.has("materials")) {
+        const json* mats = r.child("materials");
+        if (!mats->is_array()) r.fail("\"materials\" must be an array of file names");
+        for (const json& e : *mats) {
+            if (!e.is_string()) r.fail("\"materials\" entries must be strings");
+            sc.field.materials.push_back(load_material_json(dir / e.get<std::string>()));
+        }
+    } else {
+        r.skip("materials");
+    }
+    if (r.has("methods")) sc.field.methods = load_methods_json(dir / r.string("methods", true, ""));
+    else r.skip("methods");
     if (const json* ops = r.child("operations")) {
         if (!ops->is_array()) r.fail("\"operations\" must be an array");
         for (const json& e : *ops) {
             ObjectReader o(e, "operations[]", origin);
             FieldOperationRule rule;
             rule.op = o.string("op", true, "");
-            if (rule.op != "sow" && rule.op != "harvest") o.fail("\"op\" must be \"sow\" or \"harvest\"");
+            if (rule.op != "sow" && rule.op != "harvest" && rule.op != "apply")
+                o.fail("\"op\" must be \"sow\", \"harvest\" or \"apply\"");
             rule.doy = o.integer("doy", true, 1);
             if (rule.doy < 1 || rule.doy > 366) o.fail("\"doy\" must be in [1, 366]");
             rule.first_year = o.integer("first_year", false, 0);
@@ -106,6 +126,31 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
             rule.every_years = o.integer("every_years", false, 1);
             if (rule.every_years < 1) o.fail("\"every_years\" must be >= 1");
             rule.density_scale = o.number("density_scale", false, 1.0);
+            rule.straw_removed = o.number("straw_removed", false, 1.0);
+            if (!(rule.straw_removed >= 0.0 && rule.straw_removed <= 1.0)) o.fail("\"straw_removed\" must be in [0, 1]");
+            if (rule.op == "apply") {
+                if (!sc.field.nutrients_enabled) o.fail("\"apply\" needs \"nutrients\": true");
+                const std::string mat = o.string("material", true, "");
+                const std::string met = o.string("method", true, "");
+                for (std::size_t i = 0; i < sc.field.materials.size(); ++i)
+                    if (sc.field.materials[i].name == mat) rule.effect.deposit.material = static_cast<int>(i) + 1;
+                for (std::size_t i = 0; i < sc.field.methods.size(); ++i)
+                    if (sc.field.methods[i].name == met) rule.effect.deposit.method = static_cast<int>(i) + 1;
+                if (rule.effect.deposit.material == 0) o.fail("\"material\" names no material of the scenario: " + mat);
+                if (rule.effect.deposit.method == 0) o.fail("\"method\" names no method of the scenario: " + met);
+                const field::MaterialDesc& md = sc.field.materials[static_cast<std::size_t>(rule.effect.deposit.material - 1)];
+                const int n_rates = (o.has("rate_t_ha") ? 1 : 0) + (o.has("rate_m3_ha") ? 1 : 0) + (o.has("rate_n_kg_ha") ? 1 : 0);
+                if (n_rates != 1) o.fail("exactly one of \"rate_t_ha\", \"rate_m3_ha\", \"rate_n_kg_ha\" is required");
+                if (o.has("rate_t_ha")) rule.effect.deposit.rate_t_ha = o.number("rate_t_ha", true, 0.0);
+                if (o.has("rate_m3_ha")) rule.effect.deposit.rate_t_ha = o.number("rate_m3_ha", true, 0.0) * md.density_kg_m3 * 1.0e-3;
+                if (o.has("rate_n_kg_ha")) {
+                    if (!(md.n_total_kg_t > 0.0)) o.fail("\"rate_n_kg_ha\" needs a material with nitrogen");
+                    rule.effect.deposit.rate_t_ha = o.number("rate_n_kg_ha", true, 0.0) / md.n_total_kg_t;
+                }
+                if (!(rule.effect.deposit.rate_t_ha >= 0.0)) o.fail("the rate must be >= 0");
+                if (o.has("incorporation_delay_h")) rule.effect.deposit.incorporation_delay_h = o.number("incorporation_delay_h", true, 0.0);
+                rule.effect.coverage = o.number("coverage", false, 1.0);
+            }
             const std::string crop = o.string("crop", rule.op == "sow", "");
             if (rule.op == "sow") {
                 for (std::size_t i = 0; i < sc.field.crops.size(); ++i)
@@ -128,7 +173,8 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
     const std::int64_t n_days = static_cast<std::int64_t>(sc.years) * src.days_per_year();
     if (csv)
         *csv << "day,year,doy,tmin_c,tmax_c,rain_mm,snow_mm,rs_mj,et0_mm,rh_mean,wind2_m_s,swe_mm,depletion_root_mm,taw_root_mm,zr_m,"
-                "crop,stage,bbch,gdd_sow,cc,biomass_t_ha,grain_t_ha,tr_mm,evap_mm,runoff_mm,drain_mm,ks_sto\n";
+                "crop,stage,bbch,gdd_sow,cc,biomass_t_ha,grain_t_ha,tr_mm,evap_mm,runoff_mm,drain_mm,ks_sto";
+    if (csv) *csv << (sc.field.nutrients_enabled ? ",nmin_kg_ha,nh4_kg_ha,tan_surface_kg_ha,ph,p_test,k_test,f_n,f_pk,n_crop_kg_ha,n_leached_cum,nh3_cum,n_mineralised_cum,n_denitrified_cum\n" : "\n");
     for (std::int64_t d = 0; d < n_days; ++d) {
         const field::DailyWeather& w = src.record(d);
         const int year = static_cast<int>(d / src.days_per_year());
@@ -138,8 +184,10 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                 continue;
             if (rule.op == "sow") {
                 f.sow_all(rule.crop_id, rule.density_scale);
+            } else if (rule.op == "apply") {
+                f.apply_all(rule.effect);
             } else {
-                const field::HarvestResult h = f.harvest_all();
+                const field::HarvestResult h = f.harvest_all(rule.straw_removed);
                 if (h.crop_id != 0) sum.harvests.push_back({d, year, w.doy, h});
             }
         }
@@ -160,12 +208,37 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                           static_cast<long long>(d), year, w.doy, w.tmin_c, w.tmax_c, w.rain_mm, w.snow_mm, w.rs_mj_m2,
                           w.et0_mm, w.rh_mean, w.wind2_m_s, swe / n, depl / n, taw / n, zr / n, v0.crop_id, v0.stage, bbch / n, gdd / n, cc / n,
                           bio / n, grain / n, tr / n, ev / n, ro / n, dr / n, ks / n);
-            *csv << buf;
+            std::string row(buf);
+            if (sc.field.nutrients_enabled) row.pop_back();
+            *csv << row;
+            if (sc.field.nutrients_enabled) {
+                double nmin = 0, nh4 = 0, tan = 0, ph = 0, pt = 0, kt = 0, fn = 0, fpk = 0, nc = 0, le = 0, vo = 0, mi = 0, de = 0;
+                for (int c = 0; c < n; ++c) {
+                    const field::NutrientView nv = f.nutrient_view(c);
+                    const field::NutrientLedger nl = f.nutrient_ledger(c);
+                    nmin += nv.nmin; nh4 += nv.nh4; tan += nv.tan_surface; ph += nv.ph; pt += nv.p_test_mg100g;
+                    kt += nv.k_test_mg100g; fn += nv.f_n; fpk += nv.f_pk; nc += nv.n_crop; le += nl.n_leached; vo += nl.n_volatilised;
+                    mi += nl.n_mineralised; de += nl.n_denitrified;
+                }
+                char b2[320];
+                std::snprintf(b2, sizeof b2, ",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f\n", nmin / n, nh4 / n,
+                              tan / n, ph / n, pt / n, kt / n, fn / n, fpk / n, nc / n, le / n, vo / n, mi / n, de / n);
+                *csv << b2;
+            }
         }
     }
     for (int c = 0; c < f.cell_count(); ++c) {
         const double res = f.water_balance_residual_mm(c);
         sum.max_balance_residual_mm = std::max(sum.max_balance_residual_mm, res < 0 ? -res : res);
+    }
+    if (sc.field.nutrients_enabled) {
+        for (int c = 0; c < f.cell_count(); ++c) {
+            const auto absmax = [](double a, double b) { return std::max(a, b < 0 ? -b : b); };
+            sum.max_n_residual = absmax(sum.max_n_residual, f.n_balance_residual(c));
+            sum.max_p_residual = absmax(sum.max_p_residual, f.p_balance_residual(c));
+            sum.max_k_residual = absmax(sum.max_k_residual, f.k_balance_residual(c));
+            sum.max_cao_residual = absmax(sum.max_cao_residual, f.cao_balance_residual(c));
+        }
     }
     sum.total_precip_mm = f.ledger(0).precipitation;
     sum.state_hash = f.fold_hash(1469598103934665603ull);

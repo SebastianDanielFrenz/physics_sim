@@ -36,6 +36,9 @@ int main(int argc, char** argv) {
                         h.result.bbch);
         std::printf("water balance residual (worst cell): %.3e mm; precipitation %.1f mm; state_hash=0x%016llx\n",
                     sum.max_balance_residual_mm, sum.total_precip_mm, static_cast<unsigned long long>(sum.state_hash));
+        if (sc.field.nutrients_enabled)
+            std::printf("nutrient balance residual (worst cell): N %.3e, P2O5 %.3e, K2O %.3e, CaO %.3e kg/ha\n", sum.max_n_residual,
+                        sum.max_p_residual, sum.max_k_residual, sum.max_cao_residual);
         std::printf("wrote %s\n", out.string().c_str());
         return 0;
     } catch (const std::exception& e) {

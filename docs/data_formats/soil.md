@@ -42,3 +42,26 @@ as a string; a parameter without a source tag; theta_fc <= theta_wp;
 `fallow_root_depth_m` >= `depth_m`; `evaporation.depth_m` > `fallow_root_depth_m`;
 REW >= TEW; curve number outside (30, 100); a negative melt factor.
 `tests/unit/test_field_io.cpp` I2, I3, I5.
+
+## Optional `nutrients` block (F1b)
+
+Present on a soil -> `SoilDesc::has_nutrients`; a field with `nutrients_enabled` needs it on every soil (and the crops'
+block, [crop.md](crop.md)). Flat numeric keys plus one `source` object (every key tagged). Descriptor
+`ps::field::SoilNutrientDesc` (`ps/field/nutrient_desc.h`). Units: kg/ha for pools, mg/100 g for soil tests (VDLUFA CAL),
+pH in CaCl2, kg CaO/ha for the calcium-equivalent pool.
+
+| Keys | Meaning |
+|---|---|
+| `no3_init_kg_ha`, `nh4_init_kg_ha`, `org_n_kg_ha` | initial nitrate (split between the two water layers by root depth), ammonium and slow organic N |
+| `min_rate_per_day_20c`, `fresh_rate_per_day_20c`, `min_q10`, `min_moisture_floor` | first-order mineralisation of the slow / fresh pool at 20 degC and field capacity; Q10 shared by all biological rates; moisture factor linear from the floor at a dry root zone to 1 at field capacity |
+| `nitrif_rate_per_day_20c`, `denit_rate_per_day_20c`, `denit_wetness` | NH4 to NO3; root-layer nitrate loss above the relative wetness |
+| `soil_t_lag_days`, `soil_t_init_c`, `soil_t_ramp_c` | soil temperature = air temperature low-passed; rates ramp from 0 at 0 degC to full at `soil_t_ramp_c` |
+| `n_deposition_kg_ha_day` | atmospheric N, booked as ammonium |
+| `nh3_temp_q10` | surface volatilisation factor per 10 K around 15 degC |
+| `soil_test_kg_per_mg100g` | kg nutrient/ha of the plough layer per mg/100 g |
+| `p_*`, `k_*`: `test_init_mg100g`, `reserve_kg_ha`, `eq_mg100g`, `release_per_day`, `fix_per_day`, `rel_b`, `target_mg100g` | plough-layer pools: available (from the test value) and slow reserve exchanging towards the equilibrium test value; Mitscherlich relative yield 1 - exp(-b test) normalised at `target` |
+| `ph_init`, `buffer_cao_kg_ha_per_ph`, `cao_loss_kg_ha_per_mm_drain`, `lime_react_per_day`, `lime_surface_factor` | pH = ph_init + CaO pool / buffer, clamped 3..8; unavoidable CaO loss per mm drained; reaction rate of lime pending in the plough layer, and the relative rate of lime left on the surface |
+| `ph_avail_full`, `ph_avail_floor`, `avail_floor_factor` | mineralisation and P/K availability factor over pH |
+
+Rejections (`desc_validation.cpp`): a missing or untagged key, an unknown key, a P/K release or fixation rate outside [0, 1] per day, negative pools or rates, ph_init outside (3, 9), Q10 below 1, a
+non-positive buffer. `tests/unit/test_field_io.cpp` I10.

@@ -122,6 +122,20 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         const std::string e = crop_validation_error(cr);
         if (!e.empty()) throw std::invalid_argument("Field: " + e);
     }
+    if (cfg_.nutrients_enabled) {
+        for (const SoilDesc& so : cfg_.soils)
+            if (!so.has_nutrients) throw std::invalid_argument("Field: soil " + so.name + " has no nutrient block");
+        for (const CropDesc& cr : cfg_.crops)
+            if (!cr.has_nutrients) throw std::invalid_argument("Field: crop " + cr.name + " has no nutrient block");
+        for (const MaterialDesc& m : cfg_.materials) {
+            const std::string e = material_validation_error(m);
+            if (!e.empty()) throw std::invalid_argument("Field: " + e);
+        }
+        for (const MethodDesc& m : cfg_.methods) {
+            const std::string e = method_validation_error(m);
+            if (!e.empty()) throw std::invalid_argument("Field: " + e);
+        }
+    }
     const std::size_t n = static_cast<std::size_t>(nx_) * static_cast<std::size_t>(ny_);
     if (!cfg_.cell_soil.empty() && cfg_.cell_soil.size() != n)
         throw std::invalid_argument("Field: cell_soil must be empty or have nx * ny entries");
@@ -154,6 +168,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         s_.d_evap[c] = f * so.tew_mm();
         s_.initial_storage[c] = storage_mm(static_cast<int>(c));
     }
+    if (cfg_.nutrients_enabled) init_nutrients();
 }
 
 int Field::cell_at_world(real x, real y) const {
@@ -176,11 +191,21 @@ void Field::set_root_depth(std::size_t c, real z_new) {
             const real moved = s_.d_sub[c] * ((z_new - z_old) / below);
             s_.d_root[c] += moved;
             s_.d_sub[c] -= moved;
+            if (cfg_.nutrients_enabled) {   // the nitrate of the strip the roots take over moves with it
+                const real mn = s_.no3_2[c] * ((z_new - z_old) / below);
+                s_.no3_1[c] += mn;
+                s_.no3_2[c] -= mn;
+            }
         }
     } else if (z_new < z_old) {
         const real moved = s_.d_root[c] * ((z_old - z_new) / z_old);
         s_.d_root[c] -= moved;
         s_.d_sub[c] += moved;
+        if (cfg_.nutrients_enabled) {
+            const real mn = s_.no3_1[c] * ((z_old - z_new) / z_old);
+            s_.no3_1[c] -= mn;
+            s_.no3_2[c] += mn;
+        }
     }
     s_.zr[c] = z_new;
 }
@@ -358,11 +383,20 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     s.last_ks_exp[c] = ks_exp;
 
     // --- biomass, harvest index, ripeness ------------------------------------------------
+    const real bio_before = s.biomass[c];
+    real nf_n = 1.0, nf_pk = 1.0, nf_ph = 1.0;
+    if (cfg_.nutrients_enabled) {
+        nutrient_growth_factors(c, st, emerged, nf_n, nf_pk, nf_ph);
+        s.f_n[c] = nf_n;
+        s.f_pk[c] = nf_pk;
+        s.f_ph[c] = nf_ph;
+    }
     if (emerged) {
         if (st < cr->stage_maturity) {
             if (et0 > 1.0e-9 && cc > 0.0) {
                 const real ft = cr->biomass_gdd_full > 0.0 ? clamp01(gdd / cr->biomass_gdd_full) : 1.0;
-                const real f_stress = std::min(std::min(s.stress_n[c], s.stress_pk[c]), std::min(s.stress_ph[c], s.stress_weed[c])) *
+                const real f_stress = std::min(std::min(s.stress_n[c] * nf_n, s.stress_pk[c] * nf_pk),
+                                               std::min(s.stress_ph[c] * nf_ph, s.stress_weed[c])) *
                                       s.stress_rotation[c];
                 s.biomass[c] += cr->wp_star_g_m2 * (tr / et0) * ft * f_stress;
             }
@@ -390,12 +424,24 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
                 const real f_pol = std::min(1.0, (1.0 + cr->excess_fruits_pct / 100.0) * (s.pol_sum[c] + (1.0 - s.pol_n[c])));
                 const real f_sto = s.sto_n[c] > 0.0 ? s.sto_sum[c] / s.sto_n[c] : 1.0;
                 const real hi = cr->hi0 * f_pol * f_sto * clamp01(s.hi_gdd[c] / cr->hi_build_gdd);
-                s.grain[c] = s.biomass[c] * hi;
+                s.grain[c] = s.biomass[c] * hi * (1.0 - (cfg_.nutrients_enabled ? s.lodge[c] : 0.0));
             }
         } else {
             s.days_ripe[c] += 1.0;
             if (s.days_ripe[c] > cr->harvest_window_days) s.grain[c] *= (1.0 - cr->shed_rate_per_day);
         }
+    }
+
+    if (cfg_.nutrients_enabled) {
+        DayFlows fl;
+        fl.taw1 = taw1;
+        fl.dp = dp;
+        fl.drain = drain;
+        fl.bio_before = bio_before;
+        fl.bbch = cr ? bbch_of(*cr, s.gdd_sow[c]) : 0.0;
+        fl.stage = st;
+        fl.emerged = emerged;
+        step_nutrients(c, w, fl);
     }
 }
 
@@ -432,6 +478,7 @@ void Field::sow(int cell, int crop_id, real density_scale) {
     if (!(density_scale > 0.0)) throw std::invalid_argument("Field::sow: density_scale must be > 0");
     const std::size_t c = static_cast<std::size_t>(cell);
     const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(crop_id - 1)];
+    if (cfg_.nutrients_enabled && s_.crop[c] != 0) drop_crop_nutrients(c);   // sown over: the old stand is ploughed in
     s_.crop[c] = static_cast<std::uint8_t>(crop_id);
     s_.stage[c] = 0;
     s_.gdd_sow[c] = 0.0;
@@ -456,7 +503,8 @@ void Field::sow_all(int crop_id, real density_scale) {
     for (int c = 0; c < cell_count(); ++c) sow(c, crop_id, density_scale);
 }
 
-HarvestResult Field::harvest(int cell) {
+HarvestResult Field::harvest(int cell, real straw_removed) {
+    if (!(straw_removed >= 0.0 && straw_removed <= 1.0)) throw std::invalid_argument("Field::harvest: straw_removed must be in [0, 1]");
     if (cell < 0 || cell >= cell_count()) throw std::out_of_range("Field::harvest: bad cell");
     const std::size_t c = static_cast<std::size_t>(cell);
     HarvestResult r;
@@ -466,6 +514,24 @@ HarvestResult Field::harvest(int cell) {
     r.grain_dm_t_ha = s_.grain[c] * 0.01;
     r.straw_dm_t_ha = std::max(0.0, s_.biomass[c] - s_.grain[c]) * 0.01;
     r.bbch = bbch_of(cr, s_.gdd_sow[c]);
+    if (cfg_.nutrients_enabled) {
+        const CropNutrientDesc& cn = cr.nutrients;
+        r.n_grain_kg_ha = cn.n_grain_share * s_.n_crop[c];
+        r.n_straw_kg_ha = s_.n_crop[c] - r.n_grain_kg_ha;
+        r.n_root_kg_ha = s_.n_root[c];
+        r.p2o5_grain_kg_ha = cn.p2o5_grain_share * s_.p_crop[c];
+        r.p2o5_straw_kg_ha = s_.p_crop[c] - r.p2o5_grain_kg_ha;
+        r.k2o_grain_kg_ha = cn.k2o_grain_share * s_.k_crop[c];
+        r.k2o_straw_kg_ha = s_.k_crop[c] - r.k2o_grain_kg_ha;
+        r.lodging_loss = s_.lodge[c];
+        s_.l_n_rem[c] += r.n_grain_kg_ha + straw_removed * r.n_straw_kg_ha;
+        s_.l_p_rem[c] += r.p2o5_grain_kg_ha + straw_removed * r.p2o5_straw_kg_ha;
+        s_.l_k_rem[c] += r.k2o_grain_kg_ha + straw_removed * r.k2o_straw_kg_ha;
+        s_.org_fresh[c] += (1.0 - straw_removed) * r.n_straw_kg_ha + s_.n_root[c];
+        s_.p_av[c] += (1.0 - straw_removed) * r.p2o5_straw_kg_ha;
+        s_.k_av[c] += (1.0 - straw_removed) * r.k2o_straw_kg_ha;
+        s_.n_crop[c] = s_.n_root[c] = s_.p_crop[c] = s_.k_crop[c] = s_.lodge[c] = 0.0;
+    }
     s_.crop[c] = 0;
     s_.stage[c] = 0;
     s_.gdd_sow[c] = s_.gdd_em[c] = s_.vern_days[c] = s_.cc[c] = s_.cc_peak[c] = s_.t_sen[c] = 0.0;
@@ -475,22 +541,30 @@ HarvestResult Field::harvest(int cell) {
     return r;
 }
 
-HarvestResult Field::harvest_all() {
+HarvestResult Field::harvest_all(real straw_removed) {
     HarvestResult m;
     int n = 0;
     for (int c = 0; c < cell_count(); ++c) {
-        const HarvestResult r = harvest(c);
+        const HarvestResult r = harvest(c, straw_removed);
         if (r.crop_id == 0) continue;
         m.crop_id = r.crop_id;
         m.grain_dm_t_ha += r.grain_dm_t_ha;
         m.straw_dm_t_ha += r.straw_dm_t_ha;
         m.bbch += r.bbch;
+        m.n_grain_kg_ha += r.n_grain_kg_ha;
+        m.n_straw_kg_ha += r.n_straw_kg_ha;
+        m.n_root_kg_ha += r.n_root_kg_ha;
+        m.p2o5_grain_kg_ha += r.p2o5_grain_kg_ha;
+        m.p2o5_straw_kg_ha += r.p2o5_straw_kg_ha;
+        m.k2o_grain_kg_ha += r.k2o_grain_kg_ha;
+        m.k2o_straw_kg_ha += r.k2o_straw_kg_ha;
+        m.lodging_loss += r.lodging_loss;
         ++n;
     }
     if (n > 0) {
-        m.grain_dm_t_ha /= n;
-        m.straw_dm_t_ha /= n;
-        m.bbch /= n;
+        for (real* x : {&m.grain_dm_t_ha, &m.straw_dm_t_ha, &m.bbch, &m.n_grain_kg_ha, &m.n_straw_kg_ha, &m.n_root_kg_ha,
+                        &m.p2o5_grain_kg_ha, &m.p2o5_straw_kg_ha, &m.k2o_grain_kg_ha, &m.k2o_straw_kg_ha, &m.lodging_loss})
+            *x /= n;
     }
     return m;
 }
@@ -585,7 +659,7 @@ FieldCheckpoint Field::checkpoint() const {
 
 void Field::restore(const FieldCheckpoint& cp) {
     if (cp.nx != nx_ || cp.ny != ny_ || cp.state.d_root.size() != s_.d_root.size() ||
-        cp.state.crop.size() != s_.crop.size())
+        cp.state.crop.size() != s_.crop.size() || cp.state.no3_1.size() != s_.no3_1.size())
         throw std::invalid_argument("Field::restore: checkpoint does not fit this grid");
     s_ = cp.state;
 }
@@ -600,6 +674,15 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
         h = fold_vec(h, *v);
     h = fold_vec(h, s_.crop);
     h = fold_vec(h, s_.stage);
+    if (cfg_.nutrients_enabled) {
+        for (const auto* v : {&s_.no3_1, &s_.no3_2, &s_.nh4, &s_.org_slow, &s_.org_fresh, &s_.tan_surf, &s_.kv_w, &s_.ki_w,
+                              &s_.kir_w, &s_.inc_h, &s_.soil_t, &s_.n_crop, &s_.n_root, &s_.p_crop, &s_.k_crop, &s_.p_av,
+                              &s_.p_res, &s_.k_av, &s_.k_res, &s_.alk, &s_.lime_surf, &s_.lime_inc, &s_.lodge, &s_.l_n_init,
+                              &s_.l_n_fmin, &s_.l_n_forg, &s_.l_n_dep, &s_.l_n_fix, &s_.l_n_rem, &s_.l_n_leach, &s_.l_n_nh3,
+                              &s_.l_n_den, &s_.l_n_min, &s_.l_p_init, &s_.l_p_app, &s_.l_p_rem, &s_.l_k_init, &s_.l_k_app,
+                              &s_.l_k_rem, &s_.l_ca_app, &s_.l_ca_loss})
+            h = fold_vec(h, *v);
+    }
     return h;
 }
 

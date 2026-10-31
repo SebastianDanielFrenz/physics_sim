@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.field_material/1",
+  "name": "quicklime_90",
+  "kind": "lime",
+  "composition": {
+    "dm_frac": 1.0,
+    "density_kg_m3": 1000.0,
+    "n_total_kg_t": 0.0,
+    "nh4_n_kg_t": 0.0,
+    "urea_n_kg_t": 0.0,
+    "no3_n_kg_t": 0.0,
+    "p2o5_kg_t": 0.0,
+    "k2o_kg_t": 0.0,
+    "cao_kg_t": 900.0,
+    "source": {
+      "dm_frac": "[AS]",
+      "density_kg_m3": "[AS]",
+      "n_total_kg_t": "[C] no N.",
+      "nh4_n_kg_t": "[C] no N.",
+      "urea_n_kg_t": "[C] no N.",
+      "no3_n_kg_t": "[C] no N.",
+      "p2o5_kg_t": "[C] none.",
+      "k2o_kg_t": "[C] none.",
+      "cao_kg_t": "[C] DLG-Merkblatt 456, Hinweise zur Kalkung (2022): quicklime (Branntkalk) 90 holds 900 kg CaO per t."
+    }
+  },
+  "ammonia": {
+    "k_vol_per_day": 0.0,
+    "k_inf_per_day": 0.0,
+    "k_inf_per_mm_rain": 0.0,
+    "org_slow_fraction": 0.0,
+    "source": {
+      "k_vol_per_day": "[C] no N.",
+      "k_inf_per_day": "[C] no N.",
+      "k_inf_per_mm_rain": "[C] no N.",
+      "org_slow_fraction": "[C] no N."
+    }
+  },
+  "source": "Quicklime, 90 % CaO."
+}

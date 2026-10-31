@@ -56,3 +56,23 @@ source tag; `vernalisation_until` naming no stage, or given without a
 of order; CCx outside (0, 1]; a seedling canopy above CCx/2; stress limits out
 of order; a frost kill full temperature above the onset; a root `gdd_full` before
 emergence; a shed rate outside [0, 1]. `tests/unit/test_field_io.cpp` I2, I4.
+
+## Optional `nutrients` block (F1b)
+
+Flat numeric keys plus a tagged `source` object; descriptor `ps::field::CropNutrientDesc`. Concentrations in % of the
+aboveground dry matter, masses kg/ha.
+
+| Keys | Meaning |
+|---|---|
+| `nc_a`, `nc_b`, `nc_w_min_t_ha`, `nc_const_pct` | critical N curve Nc = a W^-b % (W aboveground dry matter t/ha), constant below `nc_w_min_t_ha` (Justes et al. 1994) |
+| `n_min_conc_pct`, `n_stress_start_t_ha` | N factor = clamp((N% - min)/(Nc - min)), applied once W exceeds the start and before the senescence stage |
+| `n_uptake_max_kg_ha_day`, `n_uptake_frac_per_day`, `n_residual_kg_ha` | uptake limited by the demand to Nc, a daily maximum, a share of the available mineral N and a residue the roots cannot take |
+| `n_root_fraction`, `n_grain_share`, `n_fixation_fraction` | root N per aboveground N; grain share of aboveground N at harvest; share of the demand taken from the air |
+| `p2o5_conc_pct_dm`, `p2o5_grain_share`, `k2o_conc_pct_dm`, `k2o_grain_share` | P and K uptake along the biomass and their grain shares |
+| `ph_opt_low`, `ph_opt_high`, `ph_floor`, `ph_floor_factor` | yield factor over pH: 1 inside the optimum, linear to `ph_floor_factor` at `ph_floor` |
+| `lodging_nmin_start_kg_ha`, `lodging_nmin_full_kg_ha`, `lodging_max_loss`, `lodging_bbch_from`, `lodging_bbch_to` | grain loss fraction = max over the BBCH window of max_loss x clamp((Nmin - start)/(full - start)); applied to the grain as (1 - loss) |
+
+The stress hook is filled when nutrients are enabled: `stress_n` = N factor, `stress_pk` = min of the P and K soil-test
+factors (with the pH availability), `stress_ph` = pH response; daily biomass x min(n, pk, ph, weed) x rotation.
+Rejections: untagged or unknown key, shares outside [0, 1], `ph_floor < ph_opt_low <= ph_opt_high` violated,
+`lodging_nmin_full` <= start. `tests/unit/test_field_io.cpp` I10.

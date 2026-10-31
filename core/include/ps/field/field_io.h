@@ -10,12 +10,14 @@
 #pragma once
 
 #include "ps/field/crop_desc.h"
+#include "ps/field/nutrient_desc.h"
 #include "ps/field/soil_desc.h"
 
 #include <nlohmann/json_fwd.hpp>
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace ps::io {
 
@@ -25,5 +27,11 @@ field::SoilDesc load_soil_json(const std::filesystem::path& path);
 field::SoilDesc parse_soil_json(const nlohmann::json& root, const std::string& origin);
 field::CropDesc load_crop_json(const std::filesystem::path& path);
 field::CropDesc parse_crop_json(const nlohmann::json& root, const std::string& origin);
+// physics_sim.field_material/1 (docs/data_formats/field_material.md): one fertiliser, manure or liming material.
+field::MaterialDesc load_material_json(const std::filesystem::path& path);
+field::MaterialDesc parse_material_json(const nlohmann::json& root, const std::string& origin);
+// physics_sim.field_methods/1: the application methods (one file, a list).
+std::vector<field::MethodDesc> load_methods_json(const std::filesystem::path& path);
+std::vector<field::MethodDesc> parse_methods_json(const nlohmann::json& root, const std::string& origin);
 
 } // namespace ps::io

@@ -171,6 +171,7 @@ add_library(ps_field STATIC
   src/field/weather_record.cpp
   src/field/desc_validation.cpp
   src/field/field.cpp
+  src/field/nutrients.cpp
 )
 
 target_include_directories(ps_field PUBLIC

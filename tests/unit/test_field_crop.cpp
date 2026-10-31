@@ -20,12 +20,13 @@
 //  - C-l: WP* doubled [C4, C11].
 // F1b: the harvest-index drought response is the AquaCrop form (reference manual 3.12.5, 3.12.6), not a fitted
 // constant; C10 is therefore an outside check with a stated deviation (worst 0.155, mean implied Ky 0.68 against 1.0).
-// Recorded sabotages of the F1b harvest index and phenology (core/src/field/field.cpp, run, reverted):
-//  - C-m: pollination share F_j computed uniformly instead of from the flowering distribution [C4b];
-//  - C-n: Ks_sto^(1/10) replaced by Ks_sto in the stomatal factor [C4b, C10];
-//  - C-o: heat threshold read as the lower limit of a 6 K width (F1a form) [C4];
-//  - C-p: vernalisation slowing applied before emergence again [C2, C12b mean offset];
-//  - C-q: excess of fruits dropped (factor 1) [C4, C4b].
+// Recorded sabotages of the F1b harvest index and phenology (core/src/field/field.cpp, run on the whole suite, reverted;
+// the failing cases are the ones that failed, measured 2026-10-31):
+//  - C-m: the pollination share F_j taken uniformly over the flowering period instead of from the flowering distribution [C4b];
+//  - C-n: Ks_sto^(1/10) replaced by Ks_sto in the stomatal factor [C4b];
+//  - C-o: the heat threshold read as the lower limit of the 5 K width (the F1a form) [C4];
+//  - C-p: vernalisation slowing applied before emergence again [C2, C12b];
+//  - C-q: the excess of fruits dropped (factor 1) [C4, C4b].
 #include "field_test_support.h"
 
 #include <catch2/catch_test_macros.hpp>

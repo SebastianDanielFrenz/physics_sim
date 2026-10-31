@@ -9,6 +9,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace ps::io {
 
@@ -20,6 +21,8 @@ namespace {
 
 constexpr const char* kSoilFormat = "physics_sim.soil/1";
 constexpr const char* kCropFormat = "physics_sim.crop/1";
+constexpr const char* kMaterialFormat = "physics_sim.field_material/1";
+constexpr const char* kMethodsFormat = "physics_sim.field_methods/1";
 
 bool has_tag(const json& v) {
     if (!v.is_string()) return false;
@@ -101,6 +104,53 @@ SoilDesc parse_soil_json(const json& j, const std::string& origin) {
         s.snow_melt_base_c = w.number("melt_base_c", true, 0.0);
         w.skip("source");
         w.finish();
+    }
+    if (r.has("nutrients")) {
+        ObjectReader w(block_of(r, "nutrients", origin), "nutrients", origin);
+        SoilNutrientDesc& n = s.nutrients;
+        s.has_nutrients = true;
+        n.no3_init_kg_ha = w.number("no3_init_kg_ha", true, 0.0);
+        n.nh4_init_kg_ha = w.number("nh4_init_kg_ha", true, 0.0);
+        n.org_n_kg_ha = w.number("org_n_kg_ha", true, 0.0);
+        n.min_rate_per_day_20c = w.number("min_rate_per_day_20c", true, 0.0);
+        n.min_q10 = w.number("min_q10", true, 0.0);
+        n.min_moisture_floor = w.number("min_moisture_floor", true, 0.0);
+        n.fresh_rate_per_day_20c = w.number("fresh_rate_per_day_20c", true, 0.0);
+        n.nitrif_rate_per_day_20c = w.number("nitrif_rate_per_day_20c", true, 0.0);
+        n.denit_rate_per_day_20c = w.number("denit_rate_per_day_20c", true, 0.0);
+        n.denit_wetness = w.number("denit_wetness", true, 0.0);
+        n.soil_t_lag_days = w.number("soil_t_lag_days", true, 0.0);
+        n.soil_t_init_c = w.number("soil_t_init_c", true, 0.0);
+        n.soil_t_ramp_c = w.number("soil_t_ramp_c", true, 0.0);
+        n.n_deposition_kg_ha_day = w.number("n_deposition_kg_ha_day", true, 0.0);
+        n.nh3_temp_q10 = w.number("nh3_temp_q10", true, 0.0);
+        n.soil_test_kg_per_mg100g = w.number("soil_test_kg_per_mg100g", true, 0.0);
+        n.p_test_init_mg100g = w.number("p_test_init_mg100g", true, 0.0);
+        n.p_reserve_kg_ha = w.number("p_reserve_kg_ha", true, 0.0);
+        n.p_eq_mg100g = w.number("p_eq_mg100g", true, 0.0);
+        n.p_release_per_day = w.number("p_release_per_day", true, 0.0);
+        n.p_fix_per_day = w.number("p_fix_per_day", true, 0.0);
+        n.p_rel_b = w.number("p_rel_b", true, 0.0);
+        n.p_target_mg100g = w.number("p_target_mg100g", true, 0.0);
+        n.k_test_init_mg100g = w.number("k_test_init_mg100g", true, 0.0);
+        n.k_reserve_kg_ha = w.number("k_reserve_kg_ha", true, 0.0);
+        n.k_eq_mg100g = w.number("k_eq_mg100g", true, 0.0);
+        n.k_release_per_day = w.number("k_release_per_day", true, 0.0);
+        n.k_fix_per_day = w.number("k_fix_per_day", true, 0.0);
+        n.k_rel_b = w.number("k_rel_b", true, 0.0);
+        n.k_target_mg100g = w.number("k_target_mg100g", true, 0.0);
+        n.ph_init = w.number("ph_init", true, 0.0);
+        n.buffer_cao_kg_ha_per_ph = w.number("buffer_cao_kg_ha_per_ph", true, 0.0);
+        n.cao_loss_kg_ha_per_mm_drain = w.number("cao_loss_kg_ha_per_mm_drain", true, 0.0);
+        n.lime_react_per_day = w.number("lime_react_per_day", true, 0.0);
+        n.lime_surface_factor = w.number("lime_surface_factor", true, 0.0);
+        n.ph_avail_full = w.number("ph_avail_full", true, 0.0);
+        n.ph_avail_floor = w.number("ph_avail_floor", true, 0.0);
+        n.avail_floor_factor = w.number("avail_floor_factor", true, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("nutrients");
     }
     r.finish();
     const std::string e = soil_validation_error(s);
@@ -243,6 +293,40 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         w.skip("source");
         w.finish();
     }
+    if (r.has("nutrients")) {
+        ObjectReader w(block_of(r, "nutrients", origin), "nutrients", origin);
+        CropNutrientDesc& n = d.nutrients;
+        d.has_nutrients = true;
+        n.nc_a = w.number("nc_a", true, 0.0);
+        n.nc_b = w.number("nc_b", true, 0.0);
+        n.nc_w_min_t_ha = w.number("nc_w_min_t_ha", true, 0.0);
+        n.nc_const_pct = w.number("nc_const_pct", true, 0.0);
+        n.n_min_conc_pct = w.number("n_min_conc_pct", true, 0.0);
+        n.n_stress_start_t_ha = w.number("n_stress_start_t_ha", true, 0.0);
+        n.n_uptake_max_kg_ha_day = w.number("n_uptake_max_kg_ha_day", true, 0.0);
+        n.n_uptake_frac_per_day = w.number("n_uptake_frac_per_day", true, 0.0);
+        n.n_residual_kg_ha = w.number("n_residual_kg_ha", true, 0.0);
+        n.n_root_fraction = w.number("n_root_fraction", true, 0.0);
+        n.n_grain_share = w.number("n_grain_share", true, 0.0);
+        n.n_fixation_fraction = w.number("n_fixation_fraction", true, 0.0);
+        n.p2o5_conc_pct_dm = w.number("p2o5_conc_pct_dm", true, 0.0);
+        n.p2o5_grain_share = w.number("p2o5_grain_share", true, 0.0);
+        n.k2o_conc_pct_dm = w.number("k2o_conc_pct_dm", true, 0.0);
+        n.k2o_grain_share = w.number("k2o_grain_share", true, 0.0);
+        n.ph_opt_low = w.number("ph_opt_low", true, 0.0);
+        n.ph_opt_high = w.number("ph_opt_high", true, 0.0);
+        n.ph_floor = w.number("ph_floor", true, 0.0);
+        n.ph_floor_factor = w.number("ph_floor_factor", true, 0.0);
+        n.lodging_nmin_start_kg_ha = w.number("lodging_nmin_start_kg_ha", true, 0.0);
+        n.lodging_nmin_full_kg_ha = w.number("lodging_nmin_full_kg_ha", true, 0.0);
+        n.lodging_max_loss = w.number("lodging_max_loss", true, 0.0);
+        n.lodging_bbch_from = w.number("lodging_bbch_from", true, 0.0);
+        n.lodging_bbch_to = w.number("lodging_bbch_to", true, 0.0);
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("nutrients");
+    }
     r.finish();
     const std::string e = crop_validation_error(d);
     if (!e.empty()) throw std::runtime_error(origin + ": " + e);
@@ -251,6 +335,82 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
 
 CropDesc load_crop_json(const std::filesystem::path& path) {
     return parse_crop_json(load_json_with_extends(path), path.string());
+}
+
+MaterialDesc parse_material_json(const json& j, const std::string& origin) {
+    ObjectReader r(j, "", origin);
+    check_format(r, kMaterialFormat);
+    r.skip("extends");
+    r.skip("source");
+    MaterialDesc m;
+    m.name = r.string("name", true, "");
+    m.kind = r.string("kind", true, "");
+    {
+        ObjectReader w(block_of(r, "composition", origin), "composition", origin);
+        m.dm_frac = w.number("dm_frac", true, 0.0);
+        m.density_kg_m3 = w.number("density_kg_m3", true, 0.0);
+        m.n_total_kg_t = w.number("n_total_kg_t", true, 0.0);
+        m.nh4_n_kg_t = w.number("nh4_n_kg_t", true, 0.0);
+        m.urea_n_kg_t = w.number("urea_n_kg_t", true, 0.0);
+        m.no3_n_kg_t = w.number("no3_n_kg_t", true, 0.0);
+        m.p2o5_kg_t = w.number("p2o5_kg_t", true, 0.0);
+        m.k2o_kg_t = w.number("k2o_kg_t", true, 0.0);
+        m.cao_kg_t = w.number("cao_kg_t", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
+        ObjectReader w(block_of(r, "ammonia", origin), "ammonia", origin);
+        m.k_vol_per_day = w.number("k_vol_per_day", true, 0.0);
+        m.k_inf_per_day = w.number("k_inf_per_day", true, 0.0);
+        m.k_inf_per_mm_rain = w.number("k_inf_per_mm_rain", true, 0.0);
+        m.org_slow_fraction = w.number("org_slow_fraction", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    r.finish();
+    const std::string e = material_validation_error(m);
+    if (!e.empty()) throw std::runtime_error(origin + ": " + e);
+    return m;
+}
+
+MaterialDesc load_material_json(const std::filesystem::path& path) {
+    return parse_material_json(load_json_with_extends(path), path.string());
+}
+
+std::vector<MethodDesc> parse_methods_json(const json& j, const std::string& origin) {
+    ObjectReader r(j, "", origin);
+    check_format(r, kMethodsFormat);
+    r.skip("extends");
+    r.skip("source");
+    const json* arr = r.child("methods");
+    if (!arr || !arr->is_array() || arr->empty()) r.fail("\"methods\" must be a non-empty array");
+    std::vector<MethodDesc> out;
+    for (const json& e : *arr) {
+        require_tags(e, "methods[]", origin);
+        ObjectReader w(e, "methods[]", origin);
+        MethodDesc m;
+        m.name = w.string("name", true, "");
+        m.soil_placed_fraction = w.number("soil_placed_fraction", true, 0.0);
+        m.k_vol_factor = w.number("k_vol_factor", true, 0.0);
+        m.incorporation_delay_h = w.number("incorporation_delay_h", true, 0.0);
+        const json* inc = w.child("incorporated");
+        if (!inc || !inc->is_boolean()) w.fail("\"incorporated\" must be a boolean");
+        m.incorporated = inc->get<bool>();
+        w.skip("source");
+        w.finish();
+        const std::string err = method_validation_error(m);
+        if (!err.empty()) throw std::runtime_error(origin + ": " + err);
+        for (const MethodDesc& o : out)
+            if (o.name == m.name) throw std::runtime_error(origin + ": duplicate method " + m.name);
+        out.push_back(m);
+    }
+    r.finish();
+    return out;
+}
+
+std::vector<MethodDesc> load_methods_json(const std::filesystem::path& path) {
+    return parse_methods_json(load_json_with_extends(path), path.string());
 }
 
 } // namespace ps::io

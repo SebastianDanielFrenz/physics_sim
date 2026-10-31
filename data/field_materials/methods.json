@@ -1,0 +1,84 @@
+{
+  "format": "physics_sim.field_methods/1",
+  "methods": [
+    {
+      "name": "broadcast",
+      "soil_placed_fraction": 0.0,
+      "k_vol_factor": 1.0,
+      "incorporation_delay_h": -1.0,
+      "incorporated": false,
+      "source": {
+        "soil_placed_fraction": "[C] UBA Texte 39/2013, Tab. 6.3: broadcast is the reference technique.",
+        "k_vol_factor": "[C] the reference technique.",
+        "incorporation_delay_h": "[C] never incorporated (negative = never).",
+        "incorporated": "[C] lime stays on the surface."
+      }
+    },
+    {
+      "name": "trailing_hose",
+      "soil_placed_fraction": 0.0,
+      "k_vol_factor": 0.82,
+      "incorporation_delay_h": -1.0,
+      "incorporated": false,
+      "source": {
+        "soil_placed_fraction": "[C] UBA Texte 39/2013, Tab. 6.3: nothing is placed in the soil.",
+        "k_vol_factor": "[D] UBA Texte 39/2013, Tab. 6.3: cattle slurry on arable land, trailing hose 10 % below broadcast; EF 0.45 = f x 2.3 / (f x 2.3 + 2.3) gives f = 0.82.",
+        "incorporation_delay_h": "[C] none.",
+        "incorporated": "[C] surface."
+      }
+    },
+    {
+      "name": "trailing_shoe",
+      "soil_placed_fraction": 0.0,
+      "k_vol_factor": 0.54,
+      "incorporation_delay_h": -1.0,
+      "incorporated": false,
+      "source": {
+        "soil_placed_fraction": "[C] none.",
+        "k_vol_factor": "[D] UBA Texte 39/2013, Tab. 6.3 Tab. 6.5: trailing shoe on arable land about 30 % below broadcast (table partly garbled); EF 0.35 gives f = 0.54.",
+        "incorporation_delay_h": "[C] none.",
+        "incorporated": "[C] surface."
+      }
+    },
+    {
+      "name": "injected_open",
+      "soil_placed_fraction": 0.6,
+      "k_vol_factor": 1.0,
+      "incorporation_delay_h": -1.0,
+      "incorporated": false,
+      "source": {
+        "soil_placed_fraction": "[D] UBA Texte 39/2013, Tab. 6.3: open slot 60 % reduction.",
+        "k_vol_factor": "[C] the rest stays on the surface as broadcast.",
+        "incorporation_delay_h": "[C] none.",
+        "incorporated": "[C] surface."
+      }
+    },
+    {
+      "name": "injected_closed",
+      "soil_placed_fraction": 0.85,
+      "k_vol_factor": 1.0,
+      "incorporation_delay_h": -1.0,
+      "incorporated": true,
+      "source": {
+        "soil_placed_fraction": "[D] UBA Texte 39/2013, Tab. 6.3 Tab. 6.5: closed slot (Guellegrubber) more than 80 %, up to 90 %; 85 %.",
+        "k_vol_factor": "[C] the rest stays on the surface as broadcast.",
+        "incorporation_delay_h": "[C] none.",
+        "incorporated": "[AS] placed in the plough layer."
+      }
+    },
+    {
+      "name": "incorporated",
+      "soil_placed_fraction": 0.0,
+      "k_vol_factor": 1.0,
+      "incorporation_delay_h": 1.0,
+      "incorporated": true,
+      "source": {
+        "soil_placed_fraction": "[C] broadcast, then worked in.",
+        "k_vol_factor": "[C] as broadcast until the tillage pass.",
+        "incorporation_delay_h": "[D] UBA Texte 39/2013, Tab. 6.3 Tab. 6.5: direct incorporation within 1 h removes up to 90 %.",
+        "incorporated": "[C] worked into the plough layer."
+      }
+    }
+  ],
+  "source": "Application methods of the field model (F1b). The reductions against the broadcast emission factor are the UBA Texte 39/2013 figures; the incorporation delay can be given per operation."
+}

@@ -35,6 +35,54 @@ inline const field::CropDesc& wheat() {
     return c;
 }
 
+// --- nutrients (F1b) -------------------------------------------------------------------------------
+// The shipped palette, in this order: Deposit::material = index + 1.
+inline const std::vector<std::string>& material_names() {
+    static const std::vector<std::string> n = {"can_27",          "dap_18_46",           "mop_60",         "uan_28",
+                                               "cattle_slurry_75", "pig_slurry_5",        "cattle_solid_manure",
+                                               "digestate_liquid_75", "lime_carbonate_90", "quicklime_90"};
+    return n;
+}
+inline const std::vector<field::MaterialDesc>& materials() {
+    static const std::vector<field::MaterialDesc> m = [] {
+        std::vector<field::MaterialDesc> v;
+        for (const std::string& n : material_names()) v.push_back(ps::io::load_material_json(data_dir() / "field_materials" / (n + ".json")));
+        return v;
+    }();
+    return m;
+}
+inline const std::vector<field::MethodDesc>& methods() {
+    static const std::vector<field::MethodDesc> m = ps::io::load_methods_json(data_dir() / "field_materials/methods.json");
+    return m;
+}
+inline int mat_id(const std::string& name) {
+    const std::vector<std::string>& n = material_names();
+    for (std::size_t i = 0; i < n.size(); ++i)
+        if (n[i] == name) return static_cast<int>(i) + 1;
+    return 0;
+}
+inline int method_id(const std::string& name) {
+    const std::vector<field::MethodDesc>& m = methods();
+    for (std::size_t i = 0; i < m.size(); ++i)
+        if (m[i].name == name) return static_cast<int>(i) + 1;
+    return 0;
+}
+inline field::Deposit deposit(const std::string& material, const std::string& method, double rate_t_ha, double delay_h = -2.0) {
+    field::Deposit d;
+    d.material = mat_id(material);
+    d.method = method_id(method);
+    d.rate_t_ha = rate_t_ha;
+    d.incorporation_delay_h = delay_h;
+    return d;
+}
+// Applies `kg_n` of nitrogen as material `name`.
+inline field::OperationEffect n_dose(const std::string& name, const std::string& method, double kg_n, double coverage = 1.0) {
+    field::OperationEffect e;
+    e.coverage = coverage;
+    e.deposit = deposit(name, method, kg_n / materials()[static_cast<std::size_t>(mat_id(name) - 1)].n_total_kg_t);
+    return e;
+}
+
 inline field::FieldConfig one_cell_config(const field::SoilDesc& soil, const field::CropDesc& crop, int nx = 1, int ny = 1,
                                           double depletion = 0.0) {
     field::FieldConfig cfg;
@@ -43,6 +91,14 @@ inline field::FieldConfig one_cell_config(const field::SoilDesc& soil, const fie
     cfg.soils.push_back(soil);
     cfg.crops.push_back(crop);
     cfg.initial_depletion_fraction = depletion;
+    return cfg;
+}
+
+inline field::FieldConfig nutrient_config(const field::SoilDesc& soil, const field::CropDesc& crop, int nx = 1, int ny = 1) {
+    field::FieldConfig cfg = one_cell_config(soil, crop, nx, ny, 0.2);
+    cfg.nutrients_enabled = true;
+    cfg.materials = materials();
+    cfg.methods = methods();
     return cfg;
 }
 
@@ -129,6 +185,81 @@ inline SeasonResult run_season(const field::SoilDesc& soil, const field::CropDes
     const field::HarvestResult h = f.harvest(0);
     r.grain_dm_t_ha = h.grain_dm_t_ha;
     return r;
+}
+
+
+// A yearly fertiliser plan on the winter-wheat calendar of run_season: lime (doy 250), DAP + MOP (262), drilling
+// (288), cattle slurry (62) and CAN splits (n_doy) from year 1 on, harvest (212) from year 1 on.
+struct Plan {
+    double n_kg = 0.0;
+    std::vector<double> n_split{0.3, 0.4, 0.3};
+    std::vector<int> n_doy{60, 95, 130};
+    double p2o5_kg = 0.0, k2o_kg = 0.0;
+    int lime_every = 0;
+    double lime_t = 0.0;
+    double straw_removed = 1.0;
+    double slurry_m3 = 0.0;
+    int no_harvest_year = -1;   // that year's crop stays on the field until the next drilling
+};
+
+struct YearResult {
+    int year = 0;
+    double grain_fresh_t_ha = 0.0;   // 86 % dry matter
+    double n_removed = 0.0, p_removed = 0.0, k_removed = 0.0;   // grain + the removed share of the straw, kg/ha
+    double n_grain = 0.0, p_grain = 0.0, k_grain = 0.0;
+    double lodging = 0.0;
+};
+
+inline void apply_plan_day(field::Field& f, const field::DailyWeather& w, const Plan& p, std::vector<YearResult>* out) {
+    const int year = static_cast<int>(w.day / 365);
+    if (w.doy == 250 && p.lime_every > 0 && year % p.lime_every == 0 && p.lime_t > 0.0)
+        f.apply_all({1.0, deposit("lime_carbonate_90", "incorporated", p.lime_t)});
+    if (w.doy == 262) {
+        if (p.p2o5_kg > 0.0) f.apply_all({1.0, deposit("dap_18_46", "broadcast", p.p2o5_kg / 460.0)});
+        if (p.k2o_kg > 0.0) f.apply_all({1.0, deposit("mop_60", "broadcast", p.k2o_kg / 600.0)});
+    }
+    if (w.doy == 288) f.sow_all(1);
+    if (year >= 1) {
+        if (w.doy == 62 && p.slurry_m3 > 0.0)
+            f.apply_all({1.0, deposit("cattle_slurry_75", "trailing_hose", p.slurry_m3 * 1.03)});
+        for (std::size_t i = 0; i < p.n_doy.size(); ++i)
+            if (w.doy == p.n_doy[i] && p.n_kg > 0.0) f.apply_all(n_dose("can_27", "broadcast", p.n_kg * p.n_split[i]));
+        if (w.doy == 212 && year != p.no_harvest_year) {
+            const field::HarvestResult h = f.harvest_all(p.straw_removed);
+            if (out && h.crop_id != 0) {
+                YearResult r;
+                r.year = year;
+                r.grain_fresh_t_ha = h.grain_dm_t_ha / 0.86;
+                r.n_grain = h.n_grain_kg_ha;
+                r.p_grain = h.p2o5_grain_kg_ha;
+                r.k_grain = h.k2o_grain_kg_ha;
+                r.n_removed = h.n_grain_kg_ha + p.straw_removed * h.n_straw_kg_ha;
+                r.p_removed = h.p2o5_grain_kg_ha + p.straw_removed * h.p2o5_straw_kg_ha;
+                r.k_removed = h.k2o_grain_kg_ha + p.straw_removed * h.k2o_straw_kg_ha;
+                r.lodging = h.lodging_loss;
+                out->push_back(r);
+            }
+        }
+    }
+}
+
+// Runs `years` game years of the 30-year farm record (seed 21) from a fresh field; returns the harvests.
+inline std::vector<YearResult> run_plan(field::Field& f, const Plan& p, int years) {
+    field::DailyWeatherSource& src = weather30();
+    std::vector<YearResult> out;
+    for (std::int64_t d = f.last_day() + 1; d < static_cast<std::int64_t>(years) * 365; ++d) {
+        const field::DailyWeather& w = src.record(d);
+        apply_plan_day(f, w, p, &out);
+        f.step_day(w);
+    }
+    return out;
+}
+
+inline double mean_of_range(const std::vector<YearResult>& v, std::size_t from, std::size_t to, double YearResult::*m) {
+    double s = 0.0;
+    std::size_t n = 0;
+    for (std::size_t i = from; i < to && i < v.size(); ++i, ++n) s += v[i].*m;
+    return n ? s / static_cast<double>(n) : 0.0;
 }
 
 } // namespace ps::test_field

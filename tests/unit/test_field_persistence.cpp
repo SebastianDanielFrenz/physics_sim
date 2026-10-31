@@ -11,6 +11,12 @@
 //         dependence): P3 failed (the threaded runs differ from the
 //         sequential one; with one thread it cannot);
 //  - P-d: a heap allocation (new[] / delete[]) inside step_cell: P4 failed.
+// F1b (2026-10-31), made in core/src/field/nutrients.cpp / field.cpp, then reverted:
+//  - P-e: a heap vector built inside step_nutrients (size depending on the cell, so it cannot be elided): P9 failed
+//         (P4 does not see it: it runs with nutrients off; a first attempt with new char[8] / delete[] was optimised away
+//         by the compiler and failed nothing);
+//  - P-f: step_nutrients reading its right neighbour's nitrate (a cross-cell dependence): P8 failed;
+//  - P-g: restore() keeping the slow organic N vector of the current state: P7 failed.
 
 #include "field_test_support.h"
 
@@ -260,4 +266,182 @@ TEST_CASE("P5 the grid is aligned to the world axes", "[field][persistence]") {
     // soils follow the cell, not the order of stepping
     CHECK(f.view(0).soil == 0);
     CHECK(f.view(1).soil == 1);
+}
+
+// ---- with nutrients (F1b) -----------------------------------------------------------------------
+
+namespace {
+
+FieldConfig mixed_nutrient(int nx = 3, int ny = 2) {
+    FieldConfig cfg = test_field::nutrient_config(test_field::loess(), test_field::wheat(), nx, ny);
+    cfg.soils = {test_field::loess(), test_field::sandy()};
+    cfg.cell_soil.clear();
+    for (int i = 0; i < nx * ny; ++i) cfg.cell_soil.push_back(static_cast<std::uint16_t>(i % 2));
+    cfg.initial_depletion_fraction = 0.3;
+    return cfg;
+}
+
+// Sow/harvest as above plus applications on fixed days: slurry (surface ammonia clock), mineral N, lime, a half-field pass.
+struct NEffects {   // built once (name lookups allocate strings); the daily path only copies PODs
+    OperationEffect slurry = {1.0, test_field::deposit("cattle_slurry_75", "broadcast", 20.0)};
+    OperationEffect can = test_field::n_dose("can_27", "broadcast", 60.0, 1.0);
+    OperationEffect uan = test_field::n_dose("uan_28", "broadcast", 40.0, 0.5);
+    OperationEffect lime = {1.0, test_field::deposit("quicklime_90", "broadcast", 1.0)};
+};
+const NEffects& n_effects() {
+    static const NEffects e;
+    return e;
+}
+
+void apply_ops_n(Field& f, const DailyWeather& w) {
+    const NEffects& e = n_effects();
+    if (w.doy == 288) f.sow_all(1);
+    if (w.doy == 212 && w.day > 365) f.harvest_all(0.5);
+    if (w.doy == 60) f.apply_all(e.slurry);
+    if (w.doy == 90) f.apply_all(e.can);
+    if (w.doy == 120) f.apply_all(e.uan);
+    if (w.doy == 300 && w.day > 365) f.apply_all(e.lime);
+}
+
+void play_n(Field& f, DailyWeatherSource& src, std::int64_t last) {
+    for (std::int64_t d = f.last_day() + 1; d <= last; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops_n(f, w);
+        f.step_day(w);
+    }
+}
+
+bool same_nutrients(const Field& a, const Field& b) {
+    if (a.fold_hash(1469598103934665603ull) != b.fold_hash(1469598103934665603ull)) return false;
+    for (int c = 0; c < a.cell_count(); ++c) {
+        const NutrientView x = a.nutrient_view(c), y = b.nutrient_view(c);
+        const NutrientLedger lx = a.nutrient_ledger(c), ly = b.nutrient_ledger(c);
+        if (x.nmin != y.nmin || x.nh4 != y.nh4 || x.tan_surface != y.tan_surface || x.lime_surface != y.lime_surface ||
+            x.ph != y.ph || x.p_test_mg100g != y.p_test_mg100g || x.k_test_mg100g != y.k_test_mg100g || x.n_crop != y.n_crop ||
+            lx.n_leached != ly.n_leached || lx.n_volatilised != ly.n_volatilised || lx.n_denitrified != ly.n_denitrified ||
+            lx.n_mineralised != ly.n_mineralised || lx.cao_lost != ly.cao_lost || lx.n_removed != ly.n_removed)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+TEST_CASE("P6 with nutrients: jumps equal day-by-day stepping, applications included", "[field][persistence][nutrients]") {
+    const std::int64_t last = 900;
+    DailyWeatherSource src_a(test_field::farm_climate(), 7);
+    Field a(mixed_nutrient());
+    play_n(a, src_a, last);
+
+    DailyWeatherSource src_b(test_field::farm_climate(), 7);
+    (void)src_b.record(last);
+    Field b(mixed_nutrient());
+    while (b.last_day() < last) {
+        std::int64_t next = b.last_day() + 1;
+        while (next < last) {
+            const int doy = src_b.record(next).doy;
+            if (doy == 288 || doy == 212 || doy == 60 || doy == 90 || doy == 120 || doy == 300) break;
+            ++next;
+        }
+        b.advance_to(next - 1, src_b);
+        const DailyWeather& w = src_b.record(next);
+        apply_ops_n(b, w);
+        b.step_day(w);
+    }
+    CHECK(same_nutrients(a, b));
+    CHECK(a.nutrient_ledger(0).n_volatilised > 1.0);   // the surface-ammonia clock really ran
+    CHECK(a.nutrient_ledger(0).n_fert_mineral > 50.0);
+}
+
+TEST_CASE("P7 with nutrients: checkpoint restore is bit exact", "[field][persistence][nutrients]") {
+    DailyWeatherSource src(test_field::farm_climate(), 5);
+    Field f(mixed_nutrient());
+    play_n(f, src, 420);                                // inside a spring with a fresh slurry deposit and a standing crop
+    const FieldCheckpoint cp = f.checkpoint();
+    const std::uint64_t h_cp = f.fold_hash(1469598103934665603ull);
+    play_n(f, src, 1000);
+    const std::uint64_t h_end = f.fold_hash(1469598103934665603ull);
+    CHECK(h_end != h_cp);
+
+    f.restore(cp);
+    CHECK(f.fold_hash(1469598103934665603ull) == h_cp);
+    play_n(f, src, 1000);
+    CHECK(f.fold_hash(1469598103934665603ull) == h_end);
+
+    Field g(mixed_nutrient());
+    g.restore(cp);
+    play_n(g, src, 1000);
+    CHECK(same_nutrients(f, g));
+
+    // a checkpoint from a field without nutrients does not fit a field with them
+    Field plain(mixed_config());
+    CHECK_THROWS_AS(plain.restore(cp), std::invalid_argument);
+    CHECK_THROWS_AS(f.restore(plain.checkpoint()), std::invalid_argument);
+}
+
+TEST_CASE("P8 with nutrients: threads give the same state as one", "[field][persistence][nutrients]") {
+    DailyWeatherSource src(test_field::farm_climate(), 5);
+    src.prefetch(0, 600);
+    const FieldConfig cfg = mixed_nutrient(8, 8);
+    Field seq(cfg);
+    for (std::int64_t d = 0; d <= 600; ++d) {
+        apply_ops_n(seq, src.record(d));
+        seq.step_day(src.record(d));
+    }
+    const std::uint64_t want = seq.fold_hash(1469598103934665603ull);
+    for (int threads : {1, 2, 3, 10}) {
+        Field f(cfg);
+        const int n = f.cell_count();
+        std::barrier start(threads + 1), done(threads + 1);
+        const DailyWeather* today = nullptr;
+        bool stop = false;
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t) {
+            const int begin = n * t / threads, end = n * (t + 1) / threads;
+            pool.emplace_back([&, begin, end] {
+                for (;;) {
+                    start.arrive_and_wait();
+                    if (stop) return;
+                    f.step_cells(begin, end, *today);
+                    done.arrive_and_wait();
+                }
+            });
+        }
+        for (std::int64_t d = 0; d <= 600; ++d) {
+            const DailyWeather& w = src.record(d);
+            apply_ops_n(f, w);
+            today = &w;
+            start.arrive_and_wait();
+            done.arrive_and_wait();
+            f.finish_day(d);
+        }
+        stop = true;
+        start.arrive_and_wait();
+        for (std::thread& th : pool) th.join();
+        INFO(threads << " threads");
+        CHECK(f.fold_hash(1469598103934665603ull) == want);
+        CHECK(same_nutrients(f, seq));
+    }
+}
+
+TEST_CASE("P9 with nutrients: the daily step and the applications allocate nothing once warm", "[field][persistence][nutrients]") {
+    DailyWeatherSource src(test_field::farm_climate(), 3);
+    src.prefetch(0, 900);
+    Field f(mixed_nutrient(8, 8));
+    play_n(f, src, 5);
+    g_allocations.store(0);
+    g_count_allocations.store(true);
+    for (std::int64_t d = 6; d <= 900; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops_n(f, w);
+        f.step_day(w);
+    }
+    double acc = 0.0;
+    for (int c = 0; c < f.cell_count(); ++c) {
+        const NutrientView v = f.nutrient_view(c);
+        acc += v.nmin + v.ph + f.n_balance_residual(c) + f.nutrient_ledger(c).n_leached;
+    }
+    g_count_allocations.store(false);
+    CHECK(g_allocations.load() == 0);
+    CHECK(std::isfinite(acc));
 }

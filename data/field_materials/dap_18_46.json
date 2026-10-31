@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.field_material/1",
+  "name": "dap_18_46",
+  "kind": "mineral",
+  "composition": {
+    "dm_frac": 1.0,
+    "density_kg_m3": 1000.0,
+    "n_total_kg_t": 180.0,
+    "nh4_n_kg_t": 180.0,
+    "urea_n_kg_t": 0.0,
+    "no3_n_kg_t": 0.0,
+    "p2o5_kg_t": 460.0,
+    "k2o_kg_t": 0.0,
+    "cao_kg_t": -340.0,
+    "source": {
+      "dm_frac": "[AS]",
+      "density_kg_m3": "[AS]",
+      "n_total_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: DAP 18+46, 18 kg N per 100 kg.",
+      "nh4_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: all ammonium N.",
+      "urea_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "no3_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "p2o5_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: 46 kg P2O5 per 100 kg.",
+      "k2o_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "cao_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3: DAP 18-46-0 acidifies by 34 kg CaO per 100 kg."
+    }
+  },
+  "ammonia": {
+    "k_vol_per_day": 0.317,
+    "k_inf_per_day": 4.283,
+    "k_inf_per_mm_rain": 0.3,
+    "org_slow_fraction": 0.0,
+    "source": {
+      "k_vol_per_day": "[D] EMEP/EEA Guidebook 2023, 3.D Table 3-2 / A1.1 (g NH3 per kg N applied, soil pH <= 7): DAP/MAP 84 g NH3 per kg N = 6.9 % of the N; share 0.069 at a total rate of 4.6 per day.",
+      "k_inf_per_day": "[D] see k_vol_per_day.",
+      "k_inf_per_mm_rain": "[AS] extra infiltration rate per mm of rain that day (the Guidebook only says that rain has a significant effect on the fertiliser emission factor).",
+      "org_slow_fraction": "[C] no organic N."
+    }
+  },
+  "source": "Diammonium phosphate 18-46-0."
+}

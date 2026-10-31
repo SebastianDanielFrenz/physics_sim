@@ -3,7 +3,7 @@
 // grid, a number of years and a list of test-only sow/harvest rules. Used by
 // ps_field_run and by the validation tests. Paths are relative to the scenario file.
 //
-// Operations apply BETWEEN days: before the step of the day whose real day of
+// Operations (PLAN 4.6: every operation is one OperationEffect record) apply BETWEEN days: before the step of the day whose real day of
 // year equals the rule's `doy` (and whose game year index is first_year +
 // k * every_years). They are plain operations on the field; the field never
 // harvests or kills a crop by itself.
@@ -24,9 +24,11 @@
 namespace ps::io {
 
 struct FieldOperationRule {
-    std::string op;              // "sow" or "harvest"
+    std::string op;              // "sow", "harvest" or "apply"
     int crop_id = 0;             // sow only (1-based palette index)
     ps::real density_scale = 1.0;
+    ps::real straw_removed = 1.0;    // harvest only
+    field::OperationEffect effect;   // apply only (the deposit, resolved against the scenario's palettes)
     int doy = 1;                 // real day of year
     int first_year = 0;
     int last_year = 1 << 30;
@@ -53,6 +55,8 @@ struct HarvestEvent {
 struct FieldRunSummary {
     std::vector<HarvestEvent> harvests;
     ps::real max_balance_residual_mm = 0.0;  // worst cell
+    // Nutrient ledgers, worst cell (kg/ha; zero without nutrients)
+    ps::real max_n_residual = 0.0, max_p_residual = 0.0, max_k_residual = 0.0, max_cao_residual = 0.0;
     ps::real total_precip_mm = 0.0;          // cell 0 ledger
     std::uint64_t state_hash = 0;
 };
