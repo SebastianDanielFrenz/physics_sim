@@ -1,0 +1,604 @@
+// tests/unit/test_machine_tools.cpp — ps::machine work tools: the draft law and parts
+// on their own, then a tractor working soil with a mounted cultivator, plough and rotary
+// harrow, and the swept work a farm reads.
+
+#include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/limit_findings.h"
+#include "ps/io/machine_io.h"
+#include "ps/jobs/debug_alloc.h"
+#include "ps/machine/coupling.h"
+#include "ps/machine/tool.h"
+#include "ps/machine/work.h"
+#include "machine_test_rig.h"
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <random>
+#include <string>
+#include <vector>
+
+using namespace ps;
+using Catch::Approx;
+using ps_test::build_mount;
+using ps_test::field_soil;
+using ps_test::MountCfg;
+using ps_test::MountRig;
+using ps_test::UniformSoil;
+
+namespace {
+
+constexpr real kTwoPi = 6.283185307179586;
+
+const io::MachineSockets kSockets = {{"socket_work_L", Vec3{-1.55, 1.5, -0.6}}, {"socket_work_R", Vec3{-1.55, -1.5, -0.6}}};
+
+machine::ToolDesc part_tool(const std::string& name) {
+    return io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/" + name + ".json", kSockets).tools[0];
+}
+
+std::string scratch_file(const std::string& name, const std::string& text) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps_machine_tools_test";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / name;
+    std::ofstream(path) << text;
+    return path.string();
+}
+
+struct Steady {
+    real speed = 0.0, draft = 0.0, depth = 0.0, hitch_x = 0.0, hitch_z = 0.0, engine_kw = 0.0, rpm = 0.0, thrust = 0.0, kappa = 0.0, quality = 0.0;
+};
+
+// Means over the last `window` seconds of a run.
+Steady working_run(MountRig& r, real seconds, real window) {
+    Steady s;
+    const int ticks = static_cast<int>(seconds * 240.0);
+    const int from = ticks - static_cast<int>(window * 240.0);
+    real energy0 = 0.0;
+    for (int i = 0; i < ticks; ++i) {
+        if (i == from) energy0 = r.world->powertrain_energy(r.tractor).engine_out;
+        r.world->step();
+        if (i < from) continue;
+        const machine::ToolState& t = r.world->tool_state(r.implement, 0);
+        const machine::CouplingState& c = r.world->coupling_state(r.hitch);
+        s.speed += r.world->get_motion(r.tractor_body).linear.x;
+        s.draft += t.draft_n;
+        s.depth += t.depth_m;
+        s.quality += t.quality;
+        s.hitch_x += c.mean_force_on_towing_world.x;
+        s.hitch_z += c.mean_force_on_towing_world.z;
+        s.rpm += r.world->powertrain_state(r.tractor).engine_rpm;
+        for (std::size_t w = 0; w < 4; ++w) s.thrust += r.world->wheel_telemetry(r.tractor, w).fx;
+        s.kappa += 0.5 * (std::abs(r.world->wheel_telemetry(r.tractor, 2).slip_ratio) + std::abs(r.world->wheel_telemetry(r.tractor, 3).slip_ratio));
+    }
+    const real n = ticks - from;
+    s.speed /= n;
+    s.draft /= n;
+    s.depth /= n;
+    s.quality /= n;
+    s.hitch_x /= n;
+    s.hitch_z /= n;
+    s.rpm /= n;
+    s.thrust /= n;
+    s.kappa /= n;
+    s.engine_kw = (r.world->powertrain_energy(r.tractor).engine_out - energy0) / (n / 240.0) * 1e-3;
+    return s;
+}
+
+// Lever for a lower link angle, on tractor.json's stops.
+real lever_for(real angle_rad) { return (angle_rad + 20.0 * kTwoPi / 360.0) / (45.0 * kTwoPi / 360.0); }
+
+constexpr real kWorkingAngle = -0.15;
+
+MountCfg on_dirt() {
+    MountCfg cfg;
+    cfg.ground = "dirt";
+    return cfg;
+}
+
+// The lift holding the tool at a depth. The lever must hold it: let right down the edge goes under the links'
+// instant centre and the soil's push jacks up the tractor's rear, as in float.
+MountRig worked_rig(const MountCfg& cfg, int gear, real awd = 0.0, real link_angle = kWorkingAngle, const machine::SoilSample& soil = field_soil()) {
+    MountRig r = build_mount(cfg);
+    r.world->set_soil_source(std::make_shared<UniformSoil>(soil));
+    r.run(0.6);
+    r.set("lift", lever_for(link_angle));
+    r.set("gear_request", gear);
+    r.set("awd", awd);
+    r.set("throttle", 1.0);
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("draft: the D497 form against the hand calculation", "[machine]") {
+    const machine::ToolDesc cultivator = part_tool("cultivator_3m");
+    const machine::ToolDesc disc = part_tool("disc_harrow_3m");
+    const machine::ToolDesc plough = part_tool("plough_2m");
+    const machine::SoilSample medium = field_soil(machine::SoilTexture::Medium);
+
+    SECTION("per tool per cm of depth: F (A + B S) tools depth") {
+        CHECK(machine::tool_draft_n(cultivator, medium, 8.0, 0.10) == Approx(0.85 * (46.0 + 2.8 * 8.0) * 15.0 * 10.0).epsilon(1e-12));
+    }
+    SECTION("per metre per cm") {
+        CHECK(machine::tool_draft_n(disc, medium, 8.0, 0.10) == Approx(0.88 * (309.0 + 16.0 * 8.0) * 3.0 * 10.0).epsilon(1e-12));
+    }
+    SECTION("the plough's speed-squared term") {
+        CHECK(machine::tool_draft_n(plough, medium, 7.0, 0.20) == Approx(0.70 * (652.0 + 5.1 * 49.0) * 3.0 * 20.0).epsilon(1e-12));
+    }
+    SECTION("texture: fine soil pulls more than coarse") {
+        const real fine = machine::tool_draft_n(cultivator, field_soil(machine::SoilTexture::Fine), 8.0, 0.10);
+        const real coarse = machine::tool_draft_n(cultivator, field_soil(machine::SoilTexture::Coarse), 8.0, 0.10);
+        CHECK(fine / coarse == Approx(1.0 / 0.65).epsilon(1e-12));
+    }
+    SECTION("tilled soil falls to the secondary line, half-way half-way") {
+        machine::SoilSample soil = medium;
+        const real primary = machine::tool_draft_n(cultivator, soil, 8.0, 0.10);
+        soil.tilled = 1.0;
+        const real secondary = machine::tool_draft_n(cultivator, soil, 8.0, 0.10);
+        soil.tilled = 0.5;
+        CHECK(machine::tool_draft_n(cultivator, soil, 8.0, 0.10) == Approx(0.5 * (primary + secondary)).epsilon(1e-12));
+        CHECK(secondary < 0.75 * primary);
+    }
+    SECTION("wet soil and compaction raise it") {
+        machine::SoilSample soil = medium;
+        const real base = machine::tool_draft_n(cultivator, soil, 8.0, 0.10);
+        soil.wetness = 1.3;
+        CHECK(machine::tool_draft_n(cultivator, soil, 8.0, 0.10) == Approx(1.4 * base).epsilon(1e-12));
+        soil.wetness = 0.5;
+        soil.compaction = 1.0;
+        CHECK(machine::tool_draft_n(cultivator, soil, 8.0, 0.10) == Approx(1.3 * base).epsilon(1e-12));
+    }
+    SECTION("past the tines' length draft stops growing") {
+        CHECK(machine::tool_draft_n(cultivator, medium, 8.0, 0.5) == machine::tool_draft_n(cultivator, medium, 8.0, cultivator.depth_max_m));
+    }
+}
+
+TEST_CASE("quality: slow costs nothing, fast costs quality down to the floor", "[machine]") {
+    const machine::ToolDesc t = part_tool("cultivator_3m");
+    CHECK(machine::tool_quality(t, 1.0) == 1.0);
+    CHECK(machine::tool_quality(t, t.speed_max_km_h) == 1.0);
+    CHECK(machine::tool_quality(t, t.speed_max_km_h + 2.0) == Approx(1.0 - 2.0 * t.overspeed_quality_per_km_h));
+    CHECK(machine::tool_quality(t, t.speed_max_km_h + 100.0) == t.quality_floor);
+}
+
+TEST_CASE("machine parts: extends, sockets, and what the loader refuses", "[machine][io]") {
+    const std::string base = std::string(PS_SOURCE_DIR) + "/data/machines/cultivator_3m.json";
+
+    SECTION("the width is the sockets' distance") {
+        const machine::MachineDesc m = io::load_machine_json(base, kSockets);
+        CHECK(m.tools[0].width_m == Approx(3.0));
+        CHECK(m.tools[0].operation == "cultivator");
+        CHECK(machine::tool_draft_width(m.tools[0]) == Approx(15.0));
+    }
+    SECTION("no such socket") {
+        CHECK_THROWS_WITH(io::load_machine_json(base, {}), Catch::Matchers::ContainsSubstring("no socket 'socket_work_L'"));
+    }
+    SECTION("extends overrides a field and keeps the rest") {
+        const std::string path = scratch_file("light.json", "{ \"extends\": \"" + std::filesystem::path(base).generic_string() + "\", \"name\": \"light_cultivator\" }");
+        CHECK(io::load_machine_json(path, kSockets).name == "light_cultivator");
+    }
+    SECTION("an unknown key") {
+        const std::string path = scratch_file("typo.json", "{ \"extends\": \"" + std::filesystem::path(base).generic_string() + "\", \"tooles\": [] }");
+        CHECK_THROWS_WITH(io::load_machine_json(path, kSockets), Catch::Matchers::ContainsSubstring("unknown field 'tooles'"));
+    }
+    SECTION("the wrong format") {
+        const std::string path = scratch_file("format.json", "{ \"format\": \"physics_sim.machine/2\", \"name\": \"x\", \"source\": \"x\", \"tools\": [] }");
+        CHECK_THROWS_WITH(io::load_machine_json(path, kSockets), Catch::Matchers::ContainsSubstring("physics_sim.machine/1"));
+    }
+    SECTION("a block without a source tag") {
+        std::ifstream in(base);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::size_t at = text.find("\"source\": \"[AS] D497");
+        REQUIRE(at != std::string::npos);
+        text.replace(at, 15, "\"source\": \"D497");
+        CHECK_THROWS_WITH(io::load_machine_json(scratch_file("tag.json", text), kSockets), Catch::Matchers::ContainsSubstring("must start with [C], [D], [M] or [AS]"));
+    }
+    SECTION("a vehicle file's machine block needs its sockets") {
+        const std::string path = scratch_file("v.json", std::string(R"({ "format": "physics_sim.vehicle/2", "name": "x", "source": "x", "wheels": [], "machine": { "ref": ")") +
+                                                            std::filesystem::path(base).generic_string() + R"(" } })");
+        CHECK_THROWS_WITH(io::load_vehicle_json(path), Catch::Matchers::ContainsSubstring("'sockets' must give the model's sockets"));
+    }
+}
+
+TEST_CASE("the shop's figure: a sweep over the tool's speeds, soils and efficiencies", "[machine]") {
+    const machine::ToolPowerSpec spec = io::load_tool_power_json(std::string(PS_SOURCE_DIR) + "/data/machines/power_estimate.json");
+    const machine::ToolDesc cultivator = part_tool("cultivator_3m");
+    const machine::ToolPowerSweep sweep = machine::tool_power_sweep(cultivator, spec);
+    REQUIRE(sweep.points.size() == 5 * spec.soils.size());
+
+    // The worst corner: fine soil at the top speed and the nominal depth, wetness 0.8 keeps the factor at 1.
+    const real draft = 1.0 * (46.0 + 2.8 * 12.0) * 15.0 * 10.0;
+    const real drawbar_kw = draft * (12.0 / 3.6) * 1e-3;
+    const real needed = drawbar_kw / 0.78 / 0.90 * 1.15;
+    CHECK(sweep.needed_kw == Approx(needed).epsilon(1e-9));
+    printf("cultivator 3 m: needs about %.1f kW (worst draft %.0f N, %.1f kW at the drawbar)\n", sweep.needed_kw, draft, drawbar_kw);
+
+    const machine::ToolDesc rotary = part_tool("rotary_harrow_3m");
+    const machine::ToolPowerSweep rotary_sweep = machine::tool_power_sweep(rotary, spec);
+    bool has_pto = false;
+    for (const machine::ToolPowerPoint& p : rotary_sweep.points) has_pto = has_pto || p.pto_kw > 0.0;
+    CHECK(has_pto);
+
+    SECTION("against a tractor, as findings") {
+        using drivetrain::LimitKind;
+        using drivetrain::LimitSeverity;
+        const auto kind_of = [](const std::vector<drivetrain::LimitFinding>& v, LimitKind k) { return std::find_if(v.begin(), v.end(), [k](const auto& f) { return f.kind == k; }); };
+        const auto fits = machine::check_tool_limits(cultivator, sweep, {.engine_kw = 1000.0, .pto_torque_nm = 0.0});
+        CHECK(kind_of(fits, LimitKind::ToolPower) == fits.end());
+        const auto small = machine::check_tool_limits(cultivator, sweep, {.engine_kw = sweep.needed_kw / 1.5, .pto_torque_nm = 0.0});
+        REQUIRE(kind_of(small, LimitKind::ToolPower) != small.end());
+        CHECK(kind_of(small, LimitKind::ToolPower)->severity == LimitSeverity::Exceeded);
+        CHECK(kind_of(small, LimitKind::ToolPower)->unit == drivetrain::LimitUnit::Kilowatt);
+        const auto weak_pto = machine::check_tool_limits(rotary, rotary_sweep, {.engine_kw = 1000.0, .pto_torque_nm = 50.0});
+        REQUIRE(kind_of(weak_pto, LimitKind::PtoShaftTorque) != weak_pto.end());
+        CHECK(std::string(to_string(LimitKind::ToolPower)) == "ToolPower");
+        CHECK(std::string(to_string(LimitKind::PtoShaftTorque)) == "PtoShaftTorque");
+        CHECK(std::string(to_string(LimitKind::LiftCapacity)) == "LiftCapacity");
+    }
+}
+
+TEST_CASE("a cultivator in soil: its draft is a real force at the hitch and the tractor pays for it", "[machine][vehicle]") {
+    MountRig r = worked_rig(on_dirt(), 6);
+    const Steady s = working_run(r, 9.0, 3.0);
+    const machine::ToolDesc& tool = r.world->tool_desc(r.implement, 0);
+    const real km_h = s.speed * 3.6;
+    const real law = machine::tool_draft_n(tool, field_soil(), km_h, s.depth);
+    const real drawbar_kw = s.draft * s.speed * 1e-3;
+    printf("3 m cultivator, medium soil, untilled: %.2f km/h at %.1f cm: draft %.0f N (law %.0f N), hitch %.0f N, thrust %.0f N, drawbar %.1f kW, engine %.1f kW at %.0f rpm, slip %.3f\n", km_h, s.depth * 100.0, s.draft, law,
+           -s.hitch_x, s.thrust, drawbar_kw, s.engine_kw, s.rpm, s.kappa);
+    CHECK(km_h > 6.0);
+    CHECK(s.depth > 0.05);
+    CHECK(s.draft == Approx(law).epsilon(0.02));
+    // Newton through the hitch rows: the tool's draft is what the tractor feels.
+    CHECK(-s.hitch_x == Approx(s.draft).epsilon(0.03));
+    // And the wheels pay it, on top of their own rolling resistance.
+    CHECK(s.thrust > s.draft);
+    CHECK(s.engine_kw > drawbar_kw);
+    CHECK(r.world->tool_state(r.implement, 0).working);
+    CHECK(r.world->tool_state(r.implement, 0).quality == 1.0);
+
+    // Without the soil the same tractor at the same governor setting takes no such power.
+    MountRig idle = worked_rig(on_dirt(), 6, 0.0, 0.3);
+    const Steady free = working_run(idle, 9.0, 3.0);
+    printf("lifted out: %.2f km/h, engine %.1f kW\n", free.speed * 3.6, free.engine_kw);
+    CHECK(free.engine_kw < s.engine_kw - 0.5 * drawbar_kw);
+    CHECK(idle.world->tool_state(idle.implement, 0).depth_m == 0.0);
+}
+
+constexpr real kPloughAngle = -0.13;
+
+TEST_CASE("an undersized tractor lugs, slips or stalls by itself", "[machine][vehicle]") {
+    const auto plough = [](real torque_scale, real mass, const char* ground) {
+        MountCfg cfg;
+        cfg.fixture = "mounted_plough";
+        cfg.tractor_mass = mass;
+        cfg.ground = ground;
+        cfg.edit_tractor = [torque_scale](vehicle::VehicleDesc& d) {
+            for (drivetrain::ComponentDesc& c : d.powertrain.components) {
+                if (auto* e = std::get_if<drivetrain::TorqueMapEngineDesc>(&c.params)) {
+                    for (real& y : e->wot_torque_nm_vs_rpm.y) y *= torque_scale;
+                }
+            }
+        };
+        return cfg;
+    };
+    const auto report = [](const char* name, const Steady& s, const MountRig& r) {
+        printf("%-30s %.2f km/h, %.1f cm, draft %.0f N, engine %.1f kW at %.0f rpm, slip %.3f, state %d\n", name, s.speed * 3.6, s.depth * 100.0, s.draft, s.engine_kw, s.rpm, s.kappa,
+               static_cast<int>(r.world->powertrain_state(r.tractor).engine_state));
+    };
+
+    // Good grip, so the engine is the only limit.
+    MountRig strong = worked_rig(plough(1.0, 6000.0, "asphalt"), 5, 0.0, kPloughAngle);
+    const Steady s = working_run(strong, 10.0, 3.0);
+    report("100 kW, 6 t, good grip", s, strong);
+    CHECK(s.depth > 0.2);
+    CHECK(s.rpm > 2000.0);
+    CHECK(s.speed * 3.6 > 5.0);
+    CHECK(s.kappa < 0.1);
+    CHECK(s.draft == Approx(machine::tool_draft_n(strong.world->tool_desc(strong.implement, 0), field_soil(), s.speed * 3.6, s.depth)).epsilon(0.02));
+
+    MountRig weak = worked_rig(plough(0.25, 6000.0, "asphalt"), 5, 0.0, kPloughAngle);
+    const Steady w = working_run(weak, 10.0, 3.0);
+    report("25 kW, 6 t, good grip", w, weak);
+    CHECK(w.rpm < 1600.0);
+    CHECK(w.speed < 0.6 * s.speed);
+    CHECK(w.engine_kw < 0.7 * s.engine_kw);
+    CHECK(weak.world->powertrain_state(weak.tractor).engine_state == drivetrain::EngineState::Running);
+
+    // Dirt, and little on the rear axle.
+    MountRig light = worked_rig(plough(1.0, 2500.0, "dirt"), 5, 0.0, kPloughAngle);
+    const Steady l = working_run(light, 10.0, 3.0);
+    report("100 kW, 2.5 t, dirt", l, light);
+    CHECK(l.kappa > 0.5);
+    CHECK(l.speed < 0.5 * s.speed);
+    CHECK(l.rpm > 2000.0); // the engine has plenty, the ground does not
+
+    // Without the auto-clutch to open under it, a small engine dies. Rolling first, then the plough goes in.
+    MountRig tiny = worked_rig(plough(0.12, 6000.0, "asphalt"), 5, 0.0, 0.3);
+    tiny.run(6.0);
+    CHECK(tiny.world->get_motion(tiny.tractor_body).linear.x > 1.0);
+    tiny.set("assist.auto_clutch", 0.0);
+    tiny.set("lift", lever_for(kPloughAngle));
+    tiny.run(6.0);
+    report("12 kW, no auto-clutch", working_run(tiny, 0.1, 0.1), tiny);
+    CHECK(tiny.world->powertrain_state(tiny.tractor).engine_state == drivetrain::EngineState::Stalled);
+}
+
+TEST_CASE("above its speed range a tool's work is worth less, below it only time is lost", "[machine][vehicle]") {
+    MountRig fast = worked_rig(on_dirt(), 9);
+    const Steady f = working_run(fast, 9.0, 2.0);
+    printf("fast: %.2f km/h, quality %.3f, draft %.0f N\n", f.speed * 3.6, f.quality, f.draft);
+    CHECK(f.speed * 3.6 > 12.0);
+    CHECK(f.quality < 1.0);
+
+    MountRig slow = worked_rig(on_dirt(), 3);
+    const Steady l = working_run(slow, 6.0, 2.0);
+    printf("slow: %.2f km/h, quality %.3f, draft %.0f N\n", l.speed * 3.6, l.quality, l.draft);
+    CHECK(l.speed * 3.6 < 5.0);
+    CHECK(l.quality == 1.0);
+    CHECK(slow.world->tool_state(slow.implement, 0).working);
+
+    std::vector<machine::WorkQuad> quads;
+    fast.world->drain_work(quads);
+    REQUIRE_FALSE(quads.empty());
+    CHECK(quads.back().quality < 1.0);
+}
+
+TEST_CASE("draft control holds the pull at its setting by raising the tool", "[machine][vehicle]") {
+    MountRig r = worked_rig(on_dirt(), 6);
+    r.run(4.0);
+    const real open = r.world->tool_state(r.implement, 0).draft_n;
+    const real setting = 0.7 * open;
+    r.set("lift_draft", setting);
+    r.set("lift_mode", 1.0);
+    r.run(8.0);
+    const machine::CouplingState& c = r.world->coupling_state(r.hitch);
+    printf("draft control: open %.0f N, set %.0f N, sensed %.0f N, tool %.0f N at %.1f cm\n", open, setting, c.linkage.sensed_draft_n, r.world->tool_state(r.implement, 0).draft_n, r.world->tool_state(r.implement, 0).depth_m * 100.0);
+    CHECK(c.linkage.mode == machine::LiftMode::Draft);
+    CHECK(c.linkage.sensed_draft_n == Approx(setting).epsilon(0.15));
+    CHECK(r.world->tool_state(r.implement, 0).draft_n < 0.9 * open);
+}
+
+TEST_CASE("work: a tool sweeps its width times the distance, tick by tick, in order", "[machine][vehicle]") {
+    MountRig r = worked_rig(on_dirt(), 5);
+    r.run(4.0);
+    std::vector<machine::WorkQuad> quads;
+    r.world->drain_work(quads);
+    quads.clear();
+    const machine::ToolDesc& tool = r.world->tool_desc(r.implement, 0);
+    const real area0 = r.world->tool_state(r.implement, 0).worked_area_m2;
+    const real x0 = r.world->get_pose(r.implement_body).position.x;
+    r.run(3.0);
+    r.world->drain_work(quads);
+    const real moved = r.world->get_pose(r.implement_body).position.x - x0;
+
+    REQUIRE(quads.size() == 3 * 240);
+    real area = 0.0;
+    for (std::size_t i = 0; i < quads.size(); ++i) {
+        area += machine::work_area(quads[i]);
+        if (i > 0) {
+            REQUIRE(quads[i].tick == quads[i - 1].tick + 1);
+            // Each strip starts where the last ended: nothing between the ticks is lost.
+            REQUIRE(quads[i].left_start.x == quads[i - 1].left_end.x);
+            REQUIRE(quads[i].right_start.y == quads[i - 1].right_end.y);
+        }
+    }
+    CHECK(area == Approx(tool.width_m * moved).epsilon(0.002));
+    CHECK(r.world->tool_state(r.implement, 0).worked_area_m2 - area0 == Approx(area).epsilon(1e-9));
+    CHECK(quads.front().vehicle == r.implement);
+    CHECK(quads.front().depth_m > 0.05);
+
+    SECTION("nothing is worked lifted out") {
+        r.set("lift", 0.9);
+        r.run(3.0);
+        quads.clear();
+        r.world->drain_work(quads);
+        CHECK(quads.size() < 3 * 240);
+        quads.clear();
+        r.run(1.0);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+        CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+    }
+    SECTION("a road: the tool scrapes on it, sweeps nothing and does not sink") {
+        machine::SoilSample road;
+        road.workable = false;
+        r.world->set_soil_source(std::make_shared<UniformSoil>(road));
+        r.run(2.0);
+        quads.clear();
+        r.world->drain_work(quads);
+        r.run(1.0);
+        quads.clear();
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+        CHECK(r.world->tool_state(r.implement, 0).depth_m < 0.02);
+        CHECK(r.world->tool_state(r.implement, 0).draft_n > 0.0);
+    }
+    SECTION("standing still sweeps nothing") {
+        r.set("throttle", 0.0);
+        r.set("brake", 1.0);
+        r.run(4.0);
+        quads.clear();
+        r.world->drain_work(quads);
+        CHECK(r.world->get_motion(r.tractor_body).linear.length() < 0.01);
+        quads.clear();
+        r.run(1.0);
+        r.world->drain_work(quads);
+        real still = 0.0;
+        for (const machine::WorkQuad& q : quads) still += machine::work_area(q);
+        printf("standing: %zu quads, %.6f m2\n", quads.size(), still);
+        CHECK(still < 1e-3);
+    }
+    SECTION("a full buffer drops the newest and counts them") {
+        r.run(4100.0 / 240.0);
+        CHECK(r.world->work_dropped() > 0);
+        quads.clear();
+        r.world->drain_work(quads);
+        CHECK(quads.size() == 4096);
+    }
+}
+
+TEST_CASE("work_coverage: a quad's area per cell, conserved however it lies", "[machine]") {
+    machine::WorkGrid grid;
+    grid.x0 = -10.0;
+    grid.y0 = -10.0;
+    grid.cell_m = 0.5;
+    grid.nx = 40;
+    grid.ny = 40;
+    const auto quad = [](real x0, real x1, real y_left, real y_right) {
+        machine::WorkQuad q;
+        q.left_start = {x0, y_left};
+        q.right_start = {x0, y_right};
+        q.right_end = {x1, y_right};
+        q.left_end = {x1, y_left};
+        return q;
+    };
+    const auto covered_m2 = [&grid](const std::vector<machine::CellCoverage>& v) {
+        real sum = 0.0;
+        for (const machine::CellCoverage& c : v) sum += c.coverage * grid.cell_m * grid.cell_m;
+        return sum;
+    };
+
+    SECTION("exactly one cell") {
+        std::vector<machine::CellCoverage> out;
+        machine::work_coverage(quad(0.0, 0.5, 0.5, 0.0), grid, out);
+        REQUIRE(out.size() == 1);
+        CHECK(out[0].cell == 20 + 40 * 20);
+        CHECK(out[0].coverage == Approx(1.0));
+    }
+    SECTION("a thin strip across two cells") {
+        std::vector<machine::CellCoverage> out;
+        machine::work_coverage(quad(0.25, 0.75, 0.3, 0.2), grid, out);
+        REQUIRE(out.size() == 2);
+        CHECK(out[0].cell < out[1].cell);
+        CHECK(out[0].coverage == Approx(0.25 * 0.1 / 0.25));
+        CHECK(out[1].coverage == Approx(0.25 * 0.1 / 0.25));
+    }
+    SECTION("what lies outside the grid is dropped, the area still knows it") {
+        const machine::WorkQuad q = quad(-11.0, -9.0, 0.5, 0.0);
+        std::vector<machine::CellCoverage> out;
+        machine::work_coverage(q, grid, out);
+        CHECK(covered_m2(out) == Approx(0.5).epsilon(1e-12));
+        CHECK(machine::work_area(q) == Approx(1.0).epsilon(1e-12));
+    }
+    SECTION("a pivoting edge crosses itself: both of its triangles count") {
+        machine::WorkQuad q;
+        q.left_start = {0.0, 1.0};
+        q.right_start = {0.0, -1.0};
+        q.right_end = {1.0, 1.0};
+        q.left_end = {1.0, -1.0};
+        std::vector<machine::CellCoverage> out;
+        machine::work_coverage(q, grid, out);
+        CHECK(machine::work_area(q) == Approx(1.0).epsilon(1e-12));
+        CHECK(covered_m2(out) == Approx(1.0).epsilon(1e-12));
+    }
+    SECTION("random quads: the cells add up to the quad") {
+        std::mt19937_64 rng(11);
+        std::uniform_real_distribution<real> u(-1.0, 1.0);
+        for (int i = 0; i < 2000; ++i) {
+            machine::WorkQuad q;
+            const real cx = 3.0 * u(rng), cy = 3.0 * u(rng), heading = 3.2 * u(rng), half = 0.2 + 1.5 * (u(rng) + 1.0);
+            const real step = 0.05 + 0.1 * (u(rng) + 1.0), turn = 0.3 * u(rng);
+            const auto edge = [](real x, real y, real a, real side) { return machine::WorkPoint{x - side * std::sin(a), y + side * std::cos(a)}; };
+            q.left_start = edge(cx, cy, heading, half);
+            q.right_start = edge(cx, cy, heading, -half);
+            const real ex = cx + step * std::cos(heading), ey = cy + step * std::sin(heading);
+            q.left_end = edge(ex, ey, heading + turn, half);
+            q.right_end = edge(ex, ey, heading + turn, -half);
+            std::vector<machine::CellCoverage> out;
+            machine::work_coverage(q, grid, out);
+            REQUIRE(covered_m2(out) == Approx(machine::work_area(q)).epsilon(1e-9));
+            for (std::size_t k = 1; k < out.size(); ++k) REQUIRE(out[k - 1].cell < out[k].cell);
+            for (const machine::CellCoverage& c : out) REQUIRE(c.coverage <= 1.0 + 1e-9);
+        }
+    }
+    SECTION("the ledger gathers a pass into one coverage per cell, weighted means, sorted") {
+        machine::WorkLedger ledger(grid);
+        VehicleId v{};
+        v.index = 3;
+        v.generation = 1;
+        // Four strips filling one cell, the last shallower and worse.
+        for (int i = 0; i < 4; ++i) {
+            machine::WorkQuad q = quad(0.125 * i, 0.125 * (i + 1), 0.5, 0.0);
+            q.vehicle = v;
+            q.tool = 1;
+            q.depth_m = i < 3 ? 0.1 : 0.06;
+            q.quality = i < 3 ? 1.0 : 0.6;
+            ledger.add(q);
+        }
+        CHECK_FALSE(ledger.empty());
+        const std::vector<machine::WorkCell> cells = ledger.take();
+        REQUIRE(cells.size() == 1);
+        CHECK(cells[0].coverage == Approx(1.0));
+        CHECK(cells[0].depth_m == Approx(0.09));
+        CHECK(cells[0].quality == Approx(0.9));
+        CHECK(cells[0].tool == 1);
+        CHECK(ledger.empty());
+    }
+}
+
+TEST_CASE("the rotary harrow: PTO power from the soil going through it", "[machine][vehicle]") {
+    MountRig r = worked_rig(on_dirt().rotary(), 5);
+    r.set("pto_speed", 1000.0);
+    r.set("pto", 1.0);
+    r.world->connect_pto(r.hitch);
+    const Steady s = working_run(r, 10.0, 3.0);
+    const machine::ToolState& t = r.world->tool_state(r.implement, 0);
+    const machine::ToolDesc& tool = r.world->tool_desc(r.implement, 0);
+    const drivetrain::PowertrainSnapshot& p = r.world->powertrain_state(r.tractor);
+    const real omega = p.pto_rpm * kTwoPi / 60.0;
+    const real rotor_kw = t.pto_torque_nm * omega * 1e-3;
+    const real expected_kw = machine::tool_pto_power_w(tool, s.speed, s.depth) * 1e-3;
+    printf("rotary 3 m: %.2f km/h at %.1f cm, shaft %.0f rpm, %.1f N*m, rotor %.1f kW (law %.1f kW), draft %.0f N, engine %.1f kW at %.0f rpm\n", s.speed * 3.6, s.depth * 100.0, p.pto_rpm, t.pto_torque_nm, rotor_kw, expected_kw, s.draft,
+           s.engine_kw, s.rpm);
+    CHECK(t.working);
+    CHECK(rotor_kw == Approx(expected_kw).epsilon(0.05));
+    CHECK(s.engine_kw > rotor_kw + s.draft * s.speed * 1e-3);
+
+    r.world->disconnect_pto(r.hitch);
+    r.run(1.0);
+    CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+}
+
+TEST_CASE("work is the same on 1 and 10 workers, and the tick allocates nothing", "[machine][vehicle]") {
+    const auto scenario = [](int workers, bool measure) {
+        MountCfg cfg = on_dirt().rotary();
+        cfg.workers = workers;
+        MountRig r = worked_rig(cfg, 5);
+        r.set("pto_speed", 1000.0);
+        r.set("pto", 1.0);
+        r.world->connect_pto(r.hitch);
+        r.run(2.0);
+        if (measure && jobs::debug_alloc::hook_available()) {
+            jobs::debug_alloc::reset();
+            jobs::debug_alloc::set_armed(true);
+        }
+        r.run(1.0);
+        if (measure && jobs::debug_alloc::hook_available()) {
+            jobs::debug_alloc::set_armed(false);
+            CHECK(jobs::debug_alloc::own_violation_count() == 0);
+        }
+        std::vector<machine::WorkQuad> quads;
+        r.world->drain_work(quads);
+        std::uint64_t h = r.world->state_hash();
+        for (const machine::WorkQuad& q : quads) {
+            for (const real v : {q.left_end.x, q.left_end.y, q.right_end.x, q.right_end.y, q.depth_m}) {
+                h ^= std::hash<real>{}(v);
+                h *= 1099511628211ULL;
+            }
+        }
+        return h;
+    };
+    const std::uint64_t one = scenario(1, false);
+    CHECK(one == scenario(10, false));
+    (void)scenario(4, true);
+}
