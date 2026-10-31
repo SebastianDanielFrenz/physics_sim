@@ -352,6 +352,8 @@ public:
     [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const;
     // A roller or gauge wheel's depth setting, metres.
     void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m);
+    // Switches an applicator tool (ToolKind::Applicator) on or off; between steps only, std::invalid_argument for a soil tool.
+    void set_tool_enabled(VehicleId id, std::size_t tool, bool on);
     // Appends the quads the tools swept since the last drain, in (tick, vehicle, tool) order. Between steps; machine::
     // WorkLedger turns them into cells. Each tool holds 4096 quads; a fuller buffer drops the newest and counts them.
     void drain_work(std::vector<machine::WorkQuad>& out);

@@ -72,7 +72,13 @@ struct ToolPtoDesc {
     real min_speed_fraction = 0.0; // below this share of nominal the tool does no work
 };
 
+// What a tool does with the ground. A Soil tool is pulled through it (draft, soil force, depth); an Applicator puts something
+// on it without touching it: a sprayer, a spreader, a slurry splash plate. It has no draft, no soil force, no depth and no
+// PTO, and works while it is switched on (World::set_tool_enabled), the ground under it is workable and it is moving forward.
+enum class ToolKind : unsigned char { Soil, Applicator };
+
 struct ToolDesc {
+    ToolKind kind = ToolKind::Soil;
     std::string name;
     std::string operation; // the farm's record for this work; ps_core only carries the name
     Vec3 edge_left_local{}, edge_right_local{}; // chassis-local, from the model's sockets
@@ -119,6 +125,7 @@ struct ToolState {
     real pto_speed_fraction = 0.0; // of nominal
     real pto_torque_nm = 0.0;      // at the tractor's shaft
     real gauge_depth_m = 0.0;
+    bool enabled = false;     // Applicator only: switched on (World::set_tool_enabled)
 };
 
 // --- What a machine needs of a tractor, for a shop's "needs about N kW". ---

@@ -32,6 +32,9 @@ public:
 
     [[nodiscard]] const ToolDesc& desc() const { return desc_; }
     [[nodiscard]] const ToolState& state() const { return state_; }
+    // Applicator only (a soil tool has no switch): the owner of the vehicle checks the kind first.
+    void set_enabled(bool on) { enabled_ = on; state_.enabled = on; }
+    [[nodiscard]] bool enabled() const { return enabled_; }
     void set_gauge_depth(real depth_m) { gauge_depth_ = depth_m; state_.gauge_depth_m = depth_m; }
     [[nodiscard]] real shaft_omega_nominal() const;
 
@@ -52,6 +55,7 @@ private:
     SoilSample soil_{};
     real ground_z_ = 0.0;
     real gauge_depth_ = 0.0;
+    bool enabled_ = false; // applicator only
 
     // Over the tick's substeps.
     int substeps_ = 0;

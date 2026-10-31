@@ -800,6 +800,11 @@ void World::set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) {
     vehicle_system_->set_tool_gauge_depth(id, tool, depth_m);
 }
 
+void World::set_tool_enabled(VehicleId id, std::size_t tool, bool on) {
+    if (in_step_) throw std::logic_error("set_tool_enabled: only between steps");
+    vehicle_system_->set_tool_enabled(id, tool, on);
+}
+
 void World::drain_work(std::vector<machine::WorkQuad>& out) {
     if (in_step_) throw std::logic_error("drain_work: only between steps");
     vehicle_system_->drain_work(out);

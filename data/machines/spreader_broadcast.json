@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.machine/1",
+  "name": "spreader_broadcast",
+  "source": "A centrifugal broadcast fertiliser spreader. It touches nothing: no draft, no soil force, no depth (kind applicator). It works while switched on over workable ground, moving forward; the width comes from the model's two work sockets, the mass from the vehicle. Rates and tank contents belong to the game.",
+  "tools": [
+    {
+      "name": "disc",
+      "kind": "applicator",
+      "operation": "spreader",
+      "edge_left": "socket_work_L",
+      "edge_right": "socket_work_R",
+      "range": {
+        "source": "[AS] Usual working speeds of a centrifugal spreader 8-15 km/h (manufacturer ranges, not read from a standard); the spread pattern degrades above 15 km/h, 0.08 per km/h to a floor of 0.5.",
+        "speed_min_km_h": 6.0,
+        "speed_max_km_h": 15.0,
+        "overspeed_quality_per_km_h": 0.08,
+        "quality_floor": 0.5
+      }
+    }
+  ]
+}

@@ -35,6 +35,16 @@ void validate_machine(const MachineDesc& m) {
         }
         if (t.operation.empty()) reject(m, t, "operation is required");
         check_positive(m, t, t.width_m, "the edge's width");
+        if (t.kind == ToolKind::Applicator) {
+            // An applicator touches nothing: speed and quality are all its range says.
+            if (t.depth_min_m != 0.0 || t.depth_nominal_m != 0.0 || t.depth_max_m != 0.0) reject(m, t, "an applicator has no depth");
+            if (t.pto.present) reject(m, t, "an applicator has no PTO");
+            check_positive(m, t, t.speed_min_km_h, "speed.min_km_h");
+            if (!(t.speed_max_km_h > t.speed_min_km_h)) reject(m, t, "speed must keep min < max");
+            check_not_negative(m, t, t.overspeed_quality_per_km_h, "quality.overspeed_loss_per_km_h");
+            if (!(t.quality_floor >= 0.0 && t.quality_floor <= 1.0)) reject(m, t, "quality.floor must lie in [0, 1]");
+            continue;
+        }
         check_positive(m, t, t.depth_min_m, "depth.min_m");
         if (!(t.depth_nominal_m >= t.depth_min_m) || !(t.depth_max_m >= t.depth_nominal_m)) reject(m, t, "depth must keep min <= nominal <= max");
         check_positive(m, t, t.speed_min_km_h, "speed.min_km_h");
@@ -77,6 +87,7 @@ real tool_draft_width(const ToolDesc& tool) {
 }
 
 real tool_draft_n(const ToolDesc& tool, const SoilSample& soil, real speed_km_h, real depth_m) {
+    if (tool.kind == ToolKind::Applicator) return 0.0;
     const ToolDraftDesc& d = tool.draft;
     const real tilled = std::clamp(soil.tilled, real(0.0), real(1.0));
     const real a = d.primary.a + (d.secondary.a - d.primary.a) * tilled;

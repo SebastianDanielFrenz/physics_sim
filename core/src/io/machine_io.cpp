@@ -121,7 +121,10 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     machine::ToolDesc t;
     t.name = text(j, "name", path + ": tool");
     const std::string ctx = path + ": tool '" + t.name + "'";
-    reject_unknown(j, {"name", "operation", "edge_left", "edge_right", "range", "draft", "soil", "pto"}, ctx);
+    reject_unknown(j, {"name", "kind", "operation", "edge_left", "edge_right", "range", "draft", "soil", "pto"}, ctx);
+    const std::string kind = j.contains("kind") ? text(j, "kind", ctx) : std::string("soil");
+    if (kind != "soil" && kind != "applicator") throw std::runtime_error(ctx + ": 'kind' must be \"soil\" or \"applicator\"");
+    t.kind = kind == "soil" ? machine::ToolKind::Soil : machine::ToolKind::Applicator;
     t.operation = text(j, "operation", ctx);
     t.edge_left_local = socket(sockets, text(j, "edge_left", ctx), ctx);
     t.edge_right_local = socket(sockets, text(j, "edge_right", ctx), ctx);
@@ -129,16 +132,27 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
 
     const json& range = object(j, "range", ctx);
     const std::string range_ctx = ctx + ": range";
-    reject_unknown(range, {"source", "depth_min_m", "depth_nominal_m", "depth_max_m", "speed_min_km_h", "speed_max_km_h", "overspeed_quality_per_km_h", "quality_floor"}, range_ctx);
+    const bool applicator = t.kind == machine::ToolKind::Applicator;
+    if (applicator) {
+        for (const char* key : {"draft", "soil", "pto"}) {
+            if (j.contains(key)) throw std::runtime_error(ctx + ": an applicator has no '" + key + "' block");
+        }
+        reject_unknown(range, {"source", "speed_min_km_h", "speed_max_km_h", "overspeed_quality_per_km_h", "quality_floor"}, range_ctx);
+    } else {
+        reject_unknown(range, {"source", "depth_min_m", "depth_nominal_m", "depth_max_m", "speed_min_km_h", "speed_max_km_h", "overspeed_quality_per_km_h", "quality_floor"}, range_ctx);
+    }
     t.range_source = tagged_source(range, range_ctx);
-    t.depth_min_m = number(range, "depth_min_m", range_ctx);
-    t.depth_nominal_m = number(range, "depth_nominal_m", range_ctx);
-    t.depth_max_m = number(range, "depth_max_m", range_ctx);
+    if (!applicator) {
+        t.depth_min_m = number(range, "depth_min_m", range_ctx);
+        t.depth_nominal_m = number(range, "depth_nominal_m", range_ctx);
+        t.depth_max_m = number(range, "depth_max_m", range_ctx);
+    }
     t.speed_min_km_h = number(range, "speed_min_km_h", range_ctx);
     t.speed_max_km_h = number(range, "speed_max_km_h", range_ctx);
     t.overspeed_quality_per_km_h = number(range, "overspeed_quality_per_km_h", range_ctx);
     t.quality_floor = number(range, "quality_floor", range_ctx);
 
+    if (applicator) return t;
     t.draft = read_draft(object(j, "draft", ctx), ctx + ": draft");
     t.soil = read_soil(object(j, "soil", ctx), ctx + ": soil");
     if (j.contains("pto")) t.pto = read_pto(object(j, "pto", ctx), ctx + ": pto");

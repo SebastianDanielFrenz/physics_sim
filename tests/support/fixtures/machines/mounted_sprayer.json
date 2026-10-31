@@ -1,0 +1,45 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "mounted_sprayer",
+  "source": "Test fixture: a mounted applicator on the cultivator fixture's hanging. Origin at the centre of mass, 1.2 m behind the lower pins; the boom's sockets 6 m apart, 0.6 m under the origin.",
+  "wheels": [],
+  "hitch_points": [
+    {
+      "name": "socket_3pt",
+      "class": "../../../../data/hitch_classes/three_point_locked.json",
+      "role": "towed",
+      "sockets": {
+        "socket_3pt_top": [
+          1.12,
+          0.0,
+          0.64
+        ],
+        "socket_3pt_L": [
+          1.2,
+          0.5,
+          0.0
+        ],
+        "socket_3pt_R": [
+          1.2,
+          -0.5,
+          0.0
+        ]
+      }
+    }
+  ],
+  "machine": {
+    "ref": "../../../../data/machines/sprayer_boom.json",
+    "sockets": {
+      "socket_work_L": [
+        -1.55,
+        3.0,
+        -0.6
+      ],
+      "socket_work_R": [
+        -1.55,
+        -3.0,
+        -0.6
+      ]
+    }
+  }
+}
