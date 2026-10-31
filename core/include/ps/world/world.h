@@ -90,6 +90,10 @@ struct WorldConfig {
     unsigned num_velocity_steps = 10;
     unsigned num_position_steps = 2;
     int collision_steps = 1;
+    // Sweeps over a chain's couplings per substep (Gauss-Seidel, one exact solve per coupling). A single coupling
+    // takes one whatever this says. Tractor plus two trailers: 2 and 8 agree to 3 decimals in mm, 1 leaves the first
+    // link's error at half its value because that link never sees the second one's force in the same substep.
+    int coupling_passes = 2;
     real penetration_slop = 0.02;
     real speculative_contact_distance = 0.02;
     real max_penetration_distance = 0.2;
@@ -310,7 +314,6 @@ public:
     // setup time. The two vehicles then step together in one job, substep by substep. Couplings are never destroyed.
     HitchId create_coupling(const machine::CouplingDesc& desc);
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
-    void set_coupling_options(int passes);
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the

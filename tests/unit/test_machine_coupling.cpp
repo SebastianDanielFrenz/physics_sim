@@ -67,7 +67,7 @@ struct Cfg {
     machine::HitchClassDesc hitch = free_hitch();
     real frequency_hz = 60.0; // over the class's own value
     real damping_ratio = 1.0;
-    int passes = 1;
+    int passes = 2;
     real tick_hz = 240.0, substep_hz = 960.0;
     int workers = 4;
     int collision_steps = 1;
@@ -173,6 +173,12 @@ struct Rig {
     Vec3 socket_a, socket_b;
     real mass_a = 0.0, mass_b = 0.0;
     std::vector<std::unique_ptr<IForceElement>> elements;
+    // A second trailer behind the first.
+    bool chain = false;
+    BodyId c;
+    VehicleId vc;
+    HitchId coupling2{};
+    Vec3 socket_b_rear, socket_c;
 };
 
 const vehicle::VehicleDesc& car_desc() {
@@ -197,7 +203,6 @@ void add_link(Rig& r) {
     d.hitch.frequency_hz = c.frequency_hz;
     d.hitch.damping_ratio = c.damping_ratio;
     r.coupling = r.world->create_coupling(d);
-    r.world->set_coupling_options(c.passes);
 }
 
 // Towing vehicle at (x0, 0) facing +x, trailer behind it with the two sockets level and coincident.
@@ -209,6 +214,7 @@ Rig build_rig(const Cfg& cfg, real x0 = 0.0) {
     wc.substep_rate_hz = cfg.substep_hz;
     wc.job_workers = cfg.workers;
     wc.collision_steps = cfg.collision_steps;
+    wc.coupling_passes = cfg.passes;
     r.world = std::make_unique<World>(wc);
 
     auto surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
@@ -278,6 +284,37 @@ Vec3 hitch_error(const Rig& r) {
     return r.world->get_pose(r.a).transform_point(r.socket_a) - r.world->get_pose(r.b).transform_point(r.socket_b);
 }
 
+Vec3 hitch_error2(const Rig& r) {
+    return r.world->get_pose(r.b).transform_point(r.socket_b_rear) - r.world->get_pose(r.c).transform_point(r.socket_c);
+}
+
+// build_rig plus a second trailer of the same mass, hung 2 m behind the first one's centre of mass.
+Rig build_chain(const Cfg& cfg, real x0 = 0.0) {
+    Rig r = build_rig(cfg, x0);
+    TrailerGeometry second = make_trailer(car_desc(), cfg.trailer_mass, cfg.trailer_brakes);
+    const real rear_x = -second.half_extents.x - 0.2;
+    r.chain = true;
+    r.socket_b_rear = Vec3{rear_x, 0.0, r.socket_b.z};
+    r.socket_c = Vec3{second.socket.x, 0.0, r.socket_b.z};
+    BodyDesc c;
+    c.shape = BoxShape{second.half_extents};
+    c.mass = cfg.trailer_mass;
+    c.friction = 0.5;
+    c.pose.position = r.world->get_pose(r.b).position + r.socket_b_rear - r.socket_c;
+    r.c = r.world->create_body(c);
+    r.vc = r.world->create_vehicle(second.desc, r.c);
+    machine::CouplingDesc d;
+    d.towing = r.vb;
+    d.towed = r.vc;
+    d.socket_towing_local = r.socket_b_rear;
+    d.socket_towed_local = r.socket_c;
+    d.hitch = cfg.hitch;
+    d.hitch.frequency_hz = cfg.frequency_hz;
+    d.hitch.damping_ratio = cfg.damping_ratio;
+    r.coupling2 = r.world->create_coupling(d);
+    return r;
+}
+
 real articulation_deg(const Rig& r) {
     const Vec3 fa = r.world->get_pose(r.a).transform_direction(Vec3::unit_x());
     const Vec3 fb = r.world->get_pose(r.b).transform_direction(Vec3::unit_x());
@@ -286,6 +323,7 @@ real articulation_deg(const Rig& r) {
 
 struct Metrics {
     real err_max_mm = 0.0, err_mean_mm = 0.0, err_final_mm = 0.0;
+    real err2_max_mm = 0.0;  // the second link of a chain
     real ring_err_mm = 0.0;  // period-2 amplitude of the hitch error, 1/4 |e[k] - 2 e[k-1] + e[k-2]|
     real ring_accel = 0.0;   // the same on the trailer's tick-to-tick acceleration, m/s^2
     real dv_a = 0.0, dv_b = 0.0; // worst shadow_dv_error
@@ -315,6 +353,7 @@ public:
             return;
         }
         m_.err_max_mm = std::max(m_.err_max_mm, err * 1e3);
+        if (r_.chain) m_.err2_max_mm = std::max(m_.err2_max_mm, hitch_error2(r_).length() * 1e3);
         sum_ += err * 1e3;
         ++m_.n;
         m_.err_mean_mm = sum_ / static_cast<real>(m_.n);
@@ -391,6 +430,10 @@ void launch(Rig& r, real speed) {
     o.clutch_locked = false;
     r.world->reset_vehicle(r.va, o);
     r.world->reset_vehicle(r.vb, o);
+    if (r.chain) {
+        r.world->backend().set_motion(r.c, Motion{forward * speed, Vec3::zero()});
+        r.world->reset_vehicle(r.vc, o);
+    }
 }
 
 Metrics scenario_rest(const Cfg& c) {
@@ -477,6 +520,42 @@ Metrics scenario_brake_and_lock(const Cfg& c) {
         w.set_control("brake", 1.0);
         w.set_control("steer", 1.0);
     });
+}
+
+// Three bodies through their own hitches: the first link carries the second's load.
+Metrics scenario_chain_rest(const Cfg& c) {
+    Rig r = build_chain(c);
+    settle(r, 4.0);
+    return run(r, 2.0, {});
+}
+
+Metrics scenario_chain_brake(const Cfg& c) {
+    Rig r = build_chain(c, -700.0);
+    settle(r, 2.0);
+    launch(r, k100KmH);
+    run(r, 1.0, {});
+    return run(r, 15.0, [](World& w, real) {
+        w.set_control("brake", 0.8);
+        w.set_control("v1.brake", 0.8);
+        w.set_control("v2.brake", 0.8);
+    }, [&r] { return r.world->get_motion(r.a).linear.length() < 0.5; });
+}
+
+Metrics scenario_chain_lane_change(const Cfg& c, real speed) {
+    Rig r = build_chain(c, -700.0);
+    settle(r, 2.0);
+    launch(r, speed);
+    run(r, 1.0, {});
+    return run(r, 7.0, [](World& w, real t) { w.set_control("steer", t < 3.0 ? 0.03 * std::sin(2.0 * kPi * t / 3.0) : 0.0); });
+}
+
+Metrics scenario_chain_manoeuvre(const Cfg& c) {
+    Rig r = build_chain(c);
+    settle(r, 3.0);
+    r.elements.push_back(std::make_unique<SpeedHold>(Frame(r.a), 0.5, 6000.0, 4000.0));
+    r.world->add_force_element(r.elements.back().get());
+    run(r, 3.0, {});
+    return run(r, 20.0, [](World& w, real t) { w.set_control("steer", 0.5 * std::sin(2.0 * kPi * 0.2 * t)); });
 }
 
 // `skip_s`: seconds after the draft force steps on that are stepped but not recorded.
@@ -1077,6 +1156,68 @@ TEST_CASE("Coupling: bodies overlapping at the hitch neither collide nor stand o
     CHECK(contacts == 0);
 }
 
+TEST_CASE("Coupling: a disabled pair makes no contacts, every other pair does", "[machine][backend]") {
+    World world{WorldConfig{}};
+    BodyDesc d;
+    d.shape = BoxShape{Vec3{1.0, 1.0, 1.0}};
+    d.mass = 100.0;
+    d.gravity_enabled = false;
+    const BodyId a = world.create_body(d);
+    d.pose.position.x = 0.5;
+    const BodyId b = world.create_body(d);
+    d.pose.position.x = 1.0;
+    const BodyId c = world.create_body(d);
+    const auto touching = [&world](BodyId x, BodyId y) {
+        world.step();
+        for (const ContactEvent& e : world.last_contact_events()) {
+            if ((e.a == x && e.b == y) || (e.a == y && e.b == x)) return true;
+        }
+        return false;
+    };
+    const std::vector<std::pair<BodyId, BodyId>> ab = {{a, b}};
+    world.backend().set_disabled_collision_pairs(ab);
+    CHECK_FALSE(touching(a, b));
+    CHECK(touching(b, c));
+    CHECK(touching(a, c));
+    // All three carry the filter now: a and c still meet, as a tractor meets its second trailer.
+    const std::vector<std::pair<BodyId, BodyId>> chain = {{a, b}, {b, c}};
+    world.backend().set_disabled_collision_pairs(chain);
+    CHECK_FALSE(touching(a, b));
+    CHECK_FALSE(touching(b, c));
+    CHECK(touching(a, c));
+    world.backend().set_disabled_collision_pairs({});
+    CHECK(touching(a, b));
+}
+
+TEST_CASE("Coupling: a chain of two trailers shares one island", "[machine][vehicle]") {
+    Cfg c;
+    c.tractor = true;
+    c.trailer_mass = 7500.0;
+    c.trailer_brakes = true;
+    c.hitch = load_class("drawbar_pin");
+    const Metrics rest = scenario_chain_rest(c);
+    CHECK(rest.finite);
+    CHECK(rest.err_max_mm < 0.2);
+    CHECK(rest.err2_max_mm < 0.2);
+    const Metrics brake = scenario_chain_brake(c);
+    CHECK(brake.finite);
+    CHECK(brake.err_max_mm < 0.5);
+    CHECK(brake.err2_max_mm < 0.5);
+    CHECK(brake.end_speed < 1.0);
+    const Metrics lane = scenario_chain_lane_change(c, 60.0 / 3.6);
+    CHECK(lane.finite);
+    CHECK(lane.err_max_mm < 0.5);
+    CHECK(lane.err2_max_mm < 0.5);
+
+    // One sweep would leave the first link at half this: it never sees the second link's force in the same substep.
+    CHECK(rest.err_max_mm == Catch::Approx(0.014).margin(0.002));
+    // Two sweeps have converged: the first link's error is the same at four.
+    Cfg more = c;
+    more.passes = 4;
+    CHECK(scenario_chain_rest(more).err_max_mm == Catch::Approx(rest.err_max_mm).margin(1e-3));
+    CHECK(scenario_chain_brake(more).err_max_mm == Catch::Approx(brake.err_max_mm).margin(2e-3));
+}
+
 TEST_CASE("Coupling: a free swing keeps its energy at the shipped rates", "[machine][vehicle]") {
     // The bar swings about the anchor for 10 s, a few full periods. -41.4 % of m g L in 60 s before the backend's step
     // was made to land on the shadow's end pose; a socket spring then fought the difference between the two paths.
@@ -1268,6 +1409,28 @@ TEST_CASE("Coupling diag limits", "[.][diag][machine][vehicle]") {
         Cfg overlap = free_case;
         overlap.drawbar_overlap = true;
         print_row("free overlap " + m + " brake+lock", scenario_brake_and_lock(overlap));
+    }
+}
+
+TEST_CASE("Coupling diag chain", "[.][diag][machine][vehicle]") {
+    std::printf("  %-34s %8s %8s %8s %8s %7s\n", "case", "max mm", "max2 mm", "ring mm", "F kN", "art deg");
+    const auto row = [](const std::string& label, const Metrics& m) {
+        std::printf("  %-34s %8.3f %8.3f %8.4f %8.2f %7.1f%s\n", label.c_str(), m.err_max_mm, m.err2_max_mm, m.ring_err_mm, m.force_peak_n / 1e3, m.artic_max_deg, m.finite ? "" : "  DIVERGED");
+    };
+    for (const real mass : {1500.0, 7500.0}) {
+        for (const int passes : {1, 2, 4, 8}) {
+            Cfg c;
+            c.tractor = mass > 3000.0;
+            c.trailer_mass = mass;
+            c.trailer_brakes = true;
+            c.hitch = load_class("drawbar_pin");
+            c.passes = passes;
+            const std::string label = std::to_string(static_cast<int>(mass)) + " x2 passes " + std::to_string(passes);
+            row(label + " rest", scenario_chain_rest(c));
+            row(label + " brake", scenario_chain_brake(c));
+            row(label + " lane", scenario_chain_lane_change(c, 60.0 / 3.6));
+            row(label + " 0.5 m/s", scenario_chain_manoeuvre(c));
+        }
     }
 }
 

@@ -54,11 +54,11 @@ public:
 
     // Attachment spike A0: couples two vehicles at their sockets. Setup time. Vehicles joined by couplings form an
     // island: one job that steps them substep by substep, the couplings solved in id order (one pass, exact for one
-    // coupling, Gauss-Seidel along a chain). A vehicle outside any coupling takes the plain step_tick path, and a
-    // World with no coupling never reaches any of this.
+    // coupling, coupling_passes Gauss-Seidel sweeps along a chain). A vehicle outside any coupling takes the plain
+    // step_tick path, and a World with no coupling never reaches any of this.
     HitchId create_coupling(const machine::CouplingDesc& desc, IRigidBackend& backend);
     [[nodiscard]] bool contains(HitchId id) const { return id.generation == 1 && id.index < couplings_.size(); }
-    void set_coupling_options(int passes) { coupling_passes_ = passes; }
+    void set_coupling_passes(int passes) { coupling_passes_ = passes; }
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
 
     // Called by World right before the backend steps, sequential: see VehicleInstance::align_backend_with_shadow.
@@ -123,7 +123,7 @@ private:
 
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
     std::vector<Coupling> couplings_;
-    int coupling_passes_ = 1;
+    int coupling_passes_ = 2;
     std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
     std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only
     std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs

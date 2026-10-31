@@ -71,6 +71,8 @@ World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / confi
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers, config.job_queue_capacity);
     articulation_system_ = std::make_unique<articulation::System>();
     vehicle_system_ = std::make_unique<vehicle::System>();
+    if (config.coupling_passes < 1) throw std::invalid_argument("WorldConfig::coupling_passes must be at least 1");
+    vehicle_system_->set_coupling_passes(config.coupling_passes);
     RigidBackendSettings backend_settings;
     backend_settings.baumgarte = config.baumgarte;
     backend_settings.num_velocity_steps = config.num_velocity_steps;
@@ -705,10 +707,6 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
 
 HitchId World::create_coupling(const machine::CouplingDesc& desc) {
     return vehicle_system_->create_coupling(desc, *backend_);
-}
-
-void World::set_coupling_options(int passes) {
-    vehicle_system_->set_coupling_options(passes);
 }
 
 const machine::CouplingState& World::coupling_state(HitchId id) const {

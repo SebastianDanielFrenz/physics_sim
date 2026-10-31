@@ -123,7 +123,8 @@ void System::step_island(Island& island, IRigidBackend& backend, const std::vect
             Coupling& c = couplings_[ci];
             c.force = c.torque_towing = c.torque_towed = Vec3::zero();
         }
-        for (int pass = 0; pass < coupling_passes_; ++pass) {
+        const int passes = island.couplings.size() > 1 ? coupling_passes_ : 1;
+        for (int pass = 0; pass < passes; ++pass) {
             for (const std::size_t ci : island.couplings) solve_coupling(couplings_[ci], h);
         }
         for (const std::size_t ci : island.couplings) {
