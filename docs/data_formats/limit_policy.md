@@ -143,7 +143,8 @@ Read by: run_dyno_sweep (MapGridEdge).
 
 ### `driveline`
 
-Read by: check_driveline_limits (ClutchCapacity).
+Read by: check_driveline_limits (ClutchCapacity: Near below the static capacity; Limiting/Exceeded above it use the `gearbox`
+group's `gearbox_rating_over_exceeded`).
 
 | Key | Default | Source of the default |
 |---|---|---|
@@ -242,12 +243,14 @@ Read by: check_buildable (LiftFamilyOrder, LiftMinimumBand).
 
 ### `gearbox`
 
-Read by: check_buildable / check_gearbox_rating (GearboxRating), check_driveline_limits (GearboxInputTorque and its Closed remedy).
+Read by: check_buildable / check_gearbox_rating (GearboxRating), check_driveline_limits (GearboxInputTorque and its Closed remedy;
+`gearbox_rating_over_exceeded` also grades ClutchCapacity Exceeded - the key keeps its name and group, its meaning widened to
+"driveline torque over a rating" on the owner's decision of 2026-10-20 to reuse the gearbox band for clutches).
 
 | Key | Default | Source of the default |
 |---|---|---|
 | `gearbox_rating_over_limiting` | 0.05 | [AS] transmission plan 7.1: 5 % over the rating; a gearbox is rated with margin, so the first few percent o... |
-| `gearbox_rating_over_exceeded` | 0.15 | [AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused |
+| `gearbox_rating_over_exceeded` | 0.15 | [AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused; owner 2026-10-20: also a clutch peak more than 15 % over its static capacity is Exceeded |
 | `gearbox_rating_remedy_margin` | 1.1 | [AS] transmission plan 7.1: required rating = peak x 1.1 |
 
 ### `hitch`

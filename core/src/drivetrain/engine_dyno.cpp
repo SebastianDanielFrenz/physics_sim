@@ -1076,10 +1076,8 @@ std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const P
         const ClutchDesc* cl = std::get_if<ClutchDesc>(&c.params);
         if (cl == nullptr || !(cl->capacity_nm > real(0.0))) continue;
         const real static_capacity = cl->capacity_nm * cl->static_factor;
-        LimitSeverity s = LimitSeverity::Near;
-        if (peak->torque_nm >= static_capacity) s = LimitSeverity::Limiting;
-        else if (peak->torque_nm * margin >= static_capacity) s = LimitSeverity::Near;
-        else continue;
+        LimitSeverity s{};
+        if (!clutch_capacity_severity(peak->torque_nm, static_capacity, pol, s)) continue;
         LimitFinding f = make_finding(LimitKind::ClutchCapacity, s, peak->rpm, peak->torque_nm, static_capacity, LimitUnit::NewtonMetre,
                                       PartRef{"clutch", clutch_file, "/capacity_nm"});
         Remedy r;
