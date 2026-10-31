@@ -1147,6 +1147,35 @@ public:
         return body != nullptr && body->IsStatic();
     }
 
+    BodyMotionType motion_type(BodyId id) const override {
+        if (!slot_live(id)) return BodyMotionType::Static;
+        const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
+        if (body == nullptr) return BodyMotionType::Static;
+        switch (body->GetMotionType()) {
+            case JPH::EMotionType::Kinematic: return BodyMotionType::Kinematic;
+            case JPH::EMotionType::Dynamic: return BodyMotionType::Dynamic;
+            default: return BodyMotionType::Static;
+        }
+    }
+
+    bool is_active(BodyId id) const override {
+        if (!slot_live(id)) return false;
+        const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
+        return body != nullptr && body->IsActive();
+    }
+
+    void move_kinematic(BodyId id, const Pose& target, real dt) override {
+        require_kinematic(id);
+        body_interface().MoveKinematic(lookup(id), to_rvec3(target.position), to_jph_quat(target.orientation), static_cast<float>(dt));
+    }
+
+    void stop_kinematic(BodyId id) override {
+        require_kinematic(id);
+        const JPH::BodyID jid = lookup(id);
+        body_interface().SetLinearAndAngularVelocity(jid, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        body_interface().DeactivateBody(jid);
+    }
+
     // Load-time only (allocates) - see i_rigid_backend.h. Decorated/compound
     // shapes (e.g. the heightfield's RotatedTranslatedShape wrapper) cannot
     // be triangulated directly, so the body's shape is first flattened into
@@ -1721,6 +1750,17 @@ private:
         const JoltRigidBackend& backend_;
         std::span<const BodyId> excluded_;
     };
+
+    bool slot_live(BodyId id) const {
+        return id.valid() && id.index < slots_.size() && slots_[id.index].alive && slots_[id.index].generation == id.generation;
+    }
+
+    void require_kinematic(BodyId id) const {
+        if (!slot_live(id)) {
+            throw std::invalid_argument("kinematic move: invalid or stale BodyId");
+        }
+        if (motion_type(id) != BodyMotionType::Kinematic) throw std::invalid_argument("kinematic move: body is not Kinematic");
+    }
 
     JPH::BodyID lookup(BodyId id) const {
         assert(id.index < slots_.size() && slots_[id.index].alive && slots_[id.index].generation == id.generation && "stale or invalid BodyId");

@@ -470,6 +470,8 @@ void World::step() {
     vehicle_system_->apply_pending_engine_maps_swaps();
     // Contents mass: the chassis bodies of opted-in vehicles carry their tank / bottle contents (semi-live).
     apply_contents_mass(false);
+    // Kinematic doors: issue this tick's MoveKinematic calls (sim thread, outside any job).
+    if (!doors_.empty()) step_doors();
 
     pipeline_->run(*job_system_);
     in_step_ = false;
@@ -648,6 +650,62 @@ real World::chassis_dry_mass(VehicleId id) const {
     return contents_mass_[id.index].dry_kg;
 }
 
+void World::move_kinematic(BodyId id, const Pose& target) { backend_->move_kinematic(id, target, dt_); }
+
+DoorId World::create_door(BodyId kinematic_body, const DoorDesc& desc) {
+    DoorDriver driver(desc); // validates
+    if (backend_->motion_type(kinematic_body) != BodyMotionType::Kinematic) {
+        throw std::invalid_argument("create_door: body is not a live Kinematic body");
+    }
+    backend_->stop_kinematic(kinematic_body); // a door at rest is asleep from the start
+    doors_.push_back(DoorEntry{kinematic_body, driver, DoorState{}});
+    if (door_scratch_.capacity() < 64) door_scratch_.reserve(64);
+    return DoorId{static_cast<id_index_t>(doors_.size() - 1), 1};
+}
+
+void World::set_door_command(DoorId id, real fraction) {
+    if (!id.valid() || id.index >= doors_.size()) throw std::invalid_argument("invalid DoorId");
+    doors_[id.index].state.command = fraction < 0.0 ? 0.0 : (fraction > 1.0 ? 1.0 : fraction);
+}
+
+DoorState World::door_state(DoorId id) const {
+    if (!id.valid() || id.index >= doors_.size()) throw std::invalid_argument("invalid DoorId");
+    return doors_[id.index].state;
+}
+
+Pose World::door_pose_at(DoorId id, real fraction) const {
+    if (!id.valid() || id.index >= doors_.size()) throw std::invalid_argument("invalid DoorId");
+    return doors_[id.index].driver.pose_at(fraction);
+}
+
+void World::step_doors() {
+    for (DoorEntry& d : doors_) {
+        // Contact detection: collide_shape_into of the door's own shape at the pose it is about to take, against every
+        // body; only DYNAMIC bodies (vehicles, crates) count - static scenery (the door frame it slides in) and other
+        // doors are ignored. The deepest overlap wins, ties by lowest BodyId, so the result does not depend on the
+        // collector's hit order.
+        const auto probe = [&](const Pose& pose) {
+            backend_->collide_shape_into(d.driver.desc().probe_shape, pose, door_scratch_);
+            DoorProbe best;
+            const DoorDesc& dd = d.driver.desc();
+            for (const ShapeContactHit& h : door_scratch_) {
+                if (h.body == d.body || backend_->motion_type(h.body) != BodyMotionType::Dynamic) continue;
+                const real limit = backend_->get_mass(h.body) > dd.max_push_mass_kg ? dd.unpushable_penetration_m : dd.max_penetration_m;
+                const real excess = h.penetration - limit;
+                if (excess > best.excess || (excess == best.excess && h.body.index < best.body.index)) {
+                    best.excess = excess;
+                    best.penetration = h.penetration;
+                    best.body = h.body;
+                }
+            }
+            return best;
+        };
+        const DoorTick t = d.driver.tick(d.state, dt_, probe);
+        if (t.move) backend_->move_kinematic(d.body, t.target, dt_);
+        else if (t.stop) backend_->stop_kinematic(d.body);
+    }
+}
+
 std::uint64_t World::state_hash() const {
     std::uint64_t h = 14695981039346656037ULL; // FNV-1a offset basis
     h ^= tick_;
@@ -663,6 +721,16 @@ std::uint64_t World::state_hash() const {
     // Weather plan W2: the environment's clock anchor folds in only while one
     // is installed, so a World without one hashes exactly as before.
     if (environment_) h = environment_->fold_state_hash(h);
+    // Doors: folded only while one exists, so a World without doors hashes exactly as before.
+    for (const DoorEntry& d : doors_) {
+        const double vals[2] = {d.state.fraction, d.state.command};
+        for (double v : vals) {
+            const unsigned char* b = reinterpret_cast<const unsigned char*>(&v);
+            for (std::size_t k = 0; k < sizeof(v); ++k) { h ^= b[k]; h *= 1099511628211ULL; }
+        }
+        h ^= static_cast<std::uint64_t>(d.state.moving) | (static_cast<std::uint64_t>(d.state.blocked) << 1);
+        h *= 1099511628211ULL;
+    }
     // Contents mass: only opted-in vehicles fold in, so every other World hashes exactly as before.
     for (std::size_t vi = 0; vi < contents_mass_.size(); ++vi) {
         if (!contents_mass_[vi].enabled) continue;

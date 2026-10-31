@@ -143,7 +143,7 @@ TEST_CASE("Automatic A1: converter stall speed vs an independent pump-law bisect
 }
 
 TEST_CASE("Automatic A1: upshift sequence from rest, lock-up at a steady cruise, energy balance",
-          "[validation][vehicle][drivetrain][automatic]") {
+          "[validation][vehicle][drivetrain][automatic][long]") {
     for (const real throttle : {real(0.4), real(1.0)}) {
         INFO("throttle " << throttle);
         Run r("car_sedan_at.json");
@@ -341,7 +341,7 @@ TEST_CASE("Automatic/DualClutch A1: 1 vs 10 workers identical state hash every t
 }
 
 TEST_CASE("Slip-launch transmissions survive repeated hard stops and part-throttle relaunches",
-          "[validation][vehicle][drivetrain][automatic][dct_stop_start]") {
+          "[validation][vehicle][drivetrain][automatic][dct_stop_start][long]") {
     for (const char* file : {"car_sedan_dct.json", "car_sedan_cvt_clutch.json"}) {
         INFO(file);
         Run r(file);
@@ -478,7 +478,7 @@ TEST_CASE("Live transmission power is signed and populated for every gearbox kin
     }
 }
 
-TEST_CASE("Automatic, DCT and CVT reset preserves idle and starter operation", "[automatic][respawn]") {
+TEST_CASE("Automatic, DCT and CVT reset preserves idle and starter operation", "[automatic][respawn][long]") {
     for (const char* file : {"car_sedan_at.json", "car_sedan_dct.json", "car_sedan_cvt.json", "car_sedan_cvt_clutch.json"}) {
         INFO(file);
         Run r(file);

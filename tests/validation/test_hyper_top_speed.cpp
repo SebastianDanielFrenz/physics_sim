@@ -48,7 +48,7 @@ struct RefTop {
 
 } // namespace
 
-TEST_CASE("Hypercar top speed: steady-state per-gear reference vs the sim", "[validation][vehicle][powertrain][drivetrain][tyre]") {
+TEST_CASE("Hypercar top speed: steady-state per-gear reference vs the sim", "[validation][vehicle][powertrain][drivetrain][tyre][long]") {
     const real mass = 1500.0;
     const Vec3 half_extents{2.0, 0.4, 0.15};
     const real origin_height = 0.5;

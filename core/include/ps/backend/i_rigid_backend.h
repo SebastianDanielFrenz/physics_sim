@@ -271,6 +271,23 @@ public:
     // permanent ground coverage.
     [[nodiscard]] virtual bool is_static(BodyId id) const = 0;
 
+    // Kinematic bodies (moving doors, platforms). motion_type() returns the
+    // type the body was created with (Static for an invalid/stale id - use
+    // is_valid-style checks via World). is_active() is false for a body the
+    // backend has put to sleep (or deactivated), and for an invalid id.
+    [[nodiscard]] virtual BodyMotionType motion_type(BodyId id) const = 0;
+    [[nodiscard]] virtual bool is_active(BodyId id) const = 0;
+    // Drives a Kinematic body to `target` over the NEXT step(dt): the backend
+    // sets the body's linear/angular velocity so it arrives exactly at `target`
+    // at the end of that step (Jolt BodyInterface::MoveKinematic), so contacts
+    // see a real velocity and push dynamic bodies correctly (set_pose would
+    // teleport and give none). Activates the body. Sim thread, between steps.
+    // Throws std::invalid_argument for an invalid id or a non-Kinematic body.
+    virtual void move_kinematic(BodyId id, const Pose& target, real dt) = 0;
+    // Zeroes a Kinematic body's velocity and lets it sleep: a door that has
+    // stopped costs nothing in the next steps. Throws like move_kinematic.
+    virtual void stop_kinematic(BodyId id) = 0;
+
     // Appends, into caller-owned `out` (out.clear()'d first), the
     // world-space XY bounding rectangle of every triangle of `id`'s
     // collision shape at its current pose. Convex primitives are

@@ -935,3 +935,32 @@ TEST_CASE("applicator parts: the loader's rules", "[machine][io][applicator]") {
     // A soil tool still needs all of its blocks.
     CHECK_THROWS(io::load_machine_json(scratch_file("soil_bare.json", text("", "", "soil")), sockets));
 }
+
+TEST_CASE("Ledger diag: where engine_out goes, tool lifted and in ground", "[.][diag][machine][vehicle]") {
+    for (int mode = 0; mode < 2; ++mode) {
+        MountRig r = worked_rig(on_dirt(), 6, 0.0, mode == 0 ? 0.3 : kWorkingAngle);
+        const int ticks = 9 * 240, from = 6 * 240;
+        drivetrain::PowertrainEnergy e0;
+        real ke0 = 0, hx = 0, v = 0;
+        for (int i = 0; i < ticks; ++i) {
+            if (i == from) e0 = r.world->powertrain_energy(r.tractor);
+            r.world->step();
+            if (i >= from) {
+                hx += r.world->coupling_state(r.hitch).mean_force_on_towing_world.x;
+                v += r.world->get_motion(r.tractor_body).linear.x;
+            }
+        }
+        const auto e1 = r.world->powertrain_energy(r.tractor);
+        const real T = (ticks - from) / 240.0;
+        const real n = ticks - from;
+        auto kw = [&](real a, real b) { return (b - a) / T * 1e-3; };
+        printf("== %s: v %.3f m/s, hitch x %.0f N (%.2f kW)\n", mode == 0 ? "lifted" : "in ground", v / n, hx / n, -hx / n * v / n * 1e-3);
+        printf("engine_out %.2f starter %.2f wheel_out %.2f tyre %.2f brake %.2f gear %.2f diff %.2f awd %.2f pto %.2f ext %.2f integ %.2f clutch %.2f synchro %.2f engfric %.2f engage %.2f dKE %.2f balerr(last) %.2e\n",
+               kw(e0.engine_out, e1.engine_out), kw(e0.starter_in, e1.starter_in), kw(e0.wheel_out, e1.wheel_out), kw(e0.tyre_loss, e1.tyre_loss), kw(e0.brake_loss, e1.brake_loss), kw(e0.gear_loss, e1.gear_loss),
+               kw(e0.diff_loss, e1.diff_loss), kw(e0.awd_clutch_loss, e1.awd_clutch_loss), kw(e0.pto_clutch_loss, e1.pto_clutch_loss), kw(e0.external_absorbed, e1.external_absorbed),
+               kw(e0.integrator_loss, e1.integrator_loss), kw(e0.clutch_loss, e1.clutch_loss), kw(e0.synchro_loss, e1.synchro_loss), kw(e0.engine_friction_loss, e1.engine_friction_loss),
+               kw(e0.engagement_loss, e1.engagement_loss), kw(e0.rotor_ke, e1.rotor_ke), e1.balance_error);
+        printf("engine pumping %.2f friction %.2f indicated %.2f\n", kw(e0.pumping_work, e1.pumping_work), kw(e0.friction_work, e1.friction_work), kw(e0.indicated_work, e1.indicated_work));
+        (void)ke0;
+    }
+}

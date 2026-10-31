@@ -389,7 +389,7 @@ TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan run
     REQUIRE_THROWS_WITH(plain.world->set_engine_cooling_capacity(plain.vehicle, unity), ContainsSubstring("no cooling_system"));
 }
 
-TEST_CASE("Engine wear: 1.0 is bit-identical, worn internals add friction and oil heat, rejections", "[thermal][drivetrain][engine_wear]") {
+TEST_CASE("Engine wear: 1.0 is bit-identical, worn internals add friction and oil heat, rejections", "[thermal][drivetrain][engine_wear][long]") {
     // Part throttle for 10 s, then 20 s with or without worn internals; compare friction heat, oil and engine speed.
     const auto run = [](const drivetrain::EngineWear* wear, int workers) {
         Rig rig = make_rig(thermal_desc(), workers);

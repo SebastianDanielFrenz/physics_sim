@@ -86,7 +86,7 @@ void run_free_rev(F&& on_tick) {
 }
 } // namespace
 
-TEST_CASE("R1 car_hyper: a free rev in neutral returns to idle without DFCO cycling", "[drivetrain][turbo][vehicle]") {
+TEST_CASE("R1 car_hyper: a free rev in neutral returns to idle without DFCO cycling", "[drivetrain][turbo][vehicle][long]") {
     int dfco_on_after_overrun = 0;
     bool overrun_done = false, prev_dfco = false;
     real worst_dev = 0.0, max_rpm_late = 0.0, min_rpm_late = 1e9;
