@@ -170,7 +170,7 @@ void write_lc(Rig& r, real v) {
 
 } // namespace
 
-TEST_CASE("LD1: a mode change sets the effective LC enable and writes the channel; one driver write of any value wins at once", "[assist][drive_modes][vehicle][drivetrain]") {
+TEST_CASE("LD1: a mode change sets the effective LC enable and writes the channel; one driver write of any value wins at once", "[assist][drive_modes][vehicle][drivetrain][long]") {
     Rig r = make_rig(n2o());
     World& w = r.w();
     base_controls(w, 1);
