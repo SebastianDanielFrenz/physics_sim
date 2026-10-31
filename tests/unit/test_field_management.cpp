@@ -331,6 +331,47 @@ TEST_CASE("M6 establishment: rate, depth, moisture, lateness and no sowing at al
     CHECK(f.management_view(0).plants_m2 == Approx(0.0).margin(1e-12));
 }
 
+TEST_CASE("M6b a dry top soil stops a shallow seed; a deep seed reaches the moisture below", "[field][management]") {
+    // Twelve rainless days dry the evaporation layer and leave the root zone moist; then seed lies at `depth` with no rain.
+    auto sown = [](double depth) {
+        FieldConfig c = mcfg(1, 1, 0.1);
+        c.initial_day = 100;
+        Field f(c);
+        tf::run_synth(f, 12, 8.0, 22.0);
+        OperationEffect drill = op(c, "drill");
+        drill.seed.depth_m = depth;
+        f.apply_all(drill);
+        int days = 0;
+        while (f.management_view(0).plants_m2 <= 0.0 && days < 60) {
+            tf::run_synth(f, 1, 8.0, 22.0);
+            ++days;
+        }
+        const double plants = f.management_view(0).plants_m2;
+        std::printf("M6b depth %.3f: emerged after %d days, %.1f plants/m2\n", depth, days, plants);
+        return std::make_pair(days, plants);
+    };
+    const auto shallow = sown(0.02);
+    const auto deep = sown(0.05);
+    CHECK(deep.first < shallow.first);
+    CHECK(deep.first < 40);        // the seed at 5 cm is not waiting for rain
+    CHECK(deep.second > 1.5 * shallow.second);   // same depth factor at 2 and 5 cm: the difference is seed lost to the dry layer
+}
+
+TEST_CASE("M6c a thin stand costs each crop what its compensation allows", "[field][management]") {
+    // The share of the reference stand kept by half the reference density, from the shipped crop files.
+    auto kept = [](const char* id) {
+        const CropDesc cr = tf::crop_named(id);
+        const double ref = cr.plant_density_per_ha * 1.0e-4, d0 = cr.management.compensation_density_m2;
+        return (1.0 - std::exp(-0.5 * ref / d0)) / (1.0 - std::exp(-ref / d0));
+    };
+    CHECK(kept("winter_wheat") > 0.9);      // tillers
+    CHECK(kept("winter_rapeseed") > 0.95);  // branches
+    CHECK(kept("grain_maize") > 0.8);       // not the near-linear 0.53 of wheat's constant on a stand of 9 plants/m2
+    CHECK(kept("grain_maize") < 0.9);       // and less forgiving than the crops above
+    CHECK(kept("sugar_beet") > 0.8);
+    CHECK(kept("sugar_beet") < 0.95);
+}
+
 TEST_CASE("M7 a winter wheat sown in spring vernalises late and yields little", "[field][management][long]") {
     DailyWeatherSource& src = tf::weather30();
     // Fertilised crop (CAN at doy 95 and 130), sown at `sow_doy`, harvested when mature or at doy 285 at the latest.

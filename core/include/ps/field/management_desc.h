@@ -159,7 +159,8 @@ struct CropManagementDesc {
     real seedbed_floor = 0.55;          // emergence factor of the worst seedbed
     real residue_emergence_penalty = 0.35;   // emergence lost at full residue cover for a tool with residue_tolerance 0
     // Germination needs a moist seed layer; a dry seed layer stops development and kills seed.
-    real germ_wet_min = 0.15, germ_wet_full = 0.5;   // wetness of the evaporation layer (1 - De/TEW)
+    // Wetness at sowing depth: 1 - De/TEW at the surface, blended to the root zone at the foot of the evaporation layer.
+    real germ_wet_min = 0.15, germ_wet_full = 0.5;
     real dry_hazard_per_day = 0.03;
     // Plants per m2 at which canopy and yield reach the reference: ccx x (1-exp(-d/d0)) / (1-exp(-d_ref/d0)).
     real compensation_density_m2 = 40.0;

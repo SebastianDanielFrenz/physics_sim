@@ -271,8 +271,14 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         }
         if (mgmt && s.sow_seeds[c] > 0.0 && st < cr->stage_emergence) {   // a sown seed needs a moist seed layer
             const CropManagementDesc& cm = cr->management;
+            // The evaporation layer is one bucket; in the soil it dries from the top while its lower end stays near the
+            // moisture of the root zone. A seed sees the layer at the surface and the root zone at the layer's foot, the
+            // root zone's deficit taken per metre so that both wetness values share the 1 - De/TEW scale.
             const real tew_s = tew_of(c);
-            const real wet = tew_s > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew_s) : 1.0;
+            const real ze = so.evaporation_depth_m;
+            const real wet_top = tew_s > 0.0 ? clamp01(1.0 - s.d_evap[c] / tew_s) : 1.0;
+            const real wet_low = tew_s > 0.0 ? clamp01(1.0 - s.d_root[c] / s.zr[c] * ze / tew_s) : 1.0;
+            const real wet = wet_top + (wet_low - wet_top) * clamp01(s.sow_depth[c] / ze);
             dev *= clamp01((wet - cm.germ_wet_min) / (cm.germ_wet_full - cm.germ_wet_min));
             if (wet < cm.germ_wet_min) s.sow_viab[c] *= 1.0 - cm.dry_hazard_per_day;
         }
@@ -785,7 +791,7 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
         for (const auto& v : s_.res_p) h = fold_vec(h, v);
         for (const auto& v : s_.res_k) h = fold_vec(h, v);
         for (const auto* v : {&s_.res_chop, &s_.loose, &s_.damage, &s_.seedbed, &s_.soc, &s_.tilth_e2, &s_.sow_seeds, &s_.sow_fe,
-                              &s_.sow_viab, &s_.plants, &s_.w_seed_s, &s_.w_seed_a, &s_.w_seed_b, &s_.w_dens, &s_.w_bio,
+                              &s_.sow_viab, &s_.sow_depth, &s_.plants, &s_.w_seed_s, &s_.w_seed_a, &s_.w_seed_b, &s_.w_dens, &s_.w_bio,
                               &s_.w_tt, &s_.w_n, &s_.w_seed_pl, &s_.w_res_pl, &s_.w_res_sd, &s_.h_act, &s_.l_c_crop,
                               &s_.l_c_wg, &s_.l_c_rem, &s_.l_c_co2, &s_.weed_f})
             h = fold_vec(h, *v);

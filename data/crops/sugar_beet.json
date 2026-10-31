@@ -273,7 +273,7 @@
     "germ_wet_min": 0.15,
     "germ_wet_full": 0.5,
     "dry_hazard_per_day": 0.03,
-    "compensation_density_m2": 40.0,
+    "compensation_density_m2": 2.5,
     "source": {
       "root_dm_fraction": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: root dry matter as a share of the aboveground dry matter at harvest; cereal root:shoot at maturity is about 0.1-0.2 (recalled).)",
       "root_upper_share": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: share of the root residue in the top 0.10 m of the 0.30 m management layers.)",
@@ -285,10 +285,10 @@
       "depth_surface_factor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence of seed lying on the surface (birds, drying) relative to the optimum depth.)",
       "seedbed_floor": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence factor of the worst seedbed; field emergence of drilled wheat is typically 75-85 % of the seeds, which this reproduces together with seed_viability.)",
       "residue_emergence_penalty": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: emergence lost at full residue cover for a tool with residue_tolerance 0.)",
-      "germ_wet_min": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: wetness of the evaporation layer (1 - De/TEW) below which the seed does not germinate.)",
+      "germ_wet_min": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: wetness at sowing depth (1 - De/TEW at the surface, blended to the root zone at the foot of the evaporation layer) below which the seed does not germinate.)",
       "germ_wet_full": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: wetness from which germination runs at full rate.)",
       "dry_hazard_per_day": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: share of the sown seed that dies per day in a seed layer below germ_wet_min.)",
-      "compensation_density_m2": "[AS] value of winter_wheat.json reused for sugar_beet, not crop-specific (wheat entry: constant d0 of the yield-density law 1 - exp(-d/d0) (Willey and Heath 1969 form); wheat compensates thin stands by tillering, 100 plants/m2 give about 92 % of the 250 plants/m2 reference.)"
+      "compensation_density_m2": "[AS] beet roots grow larger in a gappy stand: 5 plants/m2 give about 88 % of the 10 plants/m2 reference (recalled, not looked up); constant d0 of the yield-density law 1 - exp(-d/d0)."
     }
   },
   "pathogen": {

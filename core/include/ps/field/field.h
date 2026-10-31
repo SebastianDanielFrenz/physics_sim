@@ -253,7 +253,7 @@ struct FieldState {
     std::array<std::vector<real>, kResPools> res_c, res_n;      // loose straw, stubble, buried upper, buried lower (kg C, kg N per ha)
     std::array<std::vector<real>, 2> res_p, res_k;              // P2O5, K2O still in the loose straw and the stubble
     std::vector<real> res_chop, loose, damage, seedbed, soc, tilth_e2;
-    std::vector<real> sow_seeds, sow_fe, sow_viab, plants;      // sow_seeds < 0: legacy sow (full stand), 0: nothing sown
+    std::vector<real> sow_seeds, sow_fe, sow_viab, sow_depth, plants;   // sow_seeds < 0: legacy sow (full stand), 0: nothing sown
     std::vector<real> w_seed_s, w_seed_a, w_seed_b, w_dens, w_bio, w_tt, w_n, w_seed_pl, w_res_pl, w_res_sd;   // [cell * groups (* moa)]
     std::vector<real> h_act;                                    // [cell * herbicides]
     std::vector<real> l_c_crop, l_c_wg, l_c_rem, l_c_co2;

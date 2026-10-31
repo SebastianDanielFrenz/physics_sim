@@ -99,7 +99,7 @@ the rest (stubble, chaff, leaf litter) stays on the field as residue. winter_whe
 Needed by every crop of a field with `"management": true`. Required keys with source tags: `root_dm_fraction`, `root_upper_share`
 (root residue at harvest), `seed_mass_g`, `seed_viability`, `depth_opt_min_m`, `depth_opt_max_m`, `depth_zero_m`,
 `depth_surface_factor` (emergence against sowing depth, piecewise linear), `seedbed_floor`, `residue_emergence_penalty`,
-`germ_wet_min`, `germ_wet_full`, `dry_hazard_per_day` (germination needs a moist seed layer; a dry one kills seed),
+`germ_wet_min`, `germ_wet_full`, `dry_hazard_per_day` (germination needs a moist seed layer; a dry one kills seed. The wetness is read at sowing depth: the evaporation layer's 1 - De/TEW at the surface, blended linearly to the root zone's deficit per metre on the same scale at the foot of the layer, so a deep seed outlasts a dry top that stops a shallow one),
 `compensation_density_m2` (plants per m2 at which canopy and yield reach the reference: ccx x (1 - exp(-d/d0)) / (1 - exp(-d_ref/d0))).
 A crop starts from a sowing operation (operation.md `seed`); `Field::sow` of the F1a/F1b tests still gives a full stand.
 

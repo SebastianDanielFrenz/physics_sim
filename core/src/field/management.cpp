@@ -112,7 +112,7 @@ void Field::init_management() {
     for (auto& v : s_.res_n) v.assign(n, 0.0);
     for (auto& v : s_.res_p) v.assign(n, 0.0);
     for (auto& v : s_.res_k) v.assign(n, 0.0);
-    for (auto* v : {&s_.res_chop, &s_.loose, &s_.damage, &s_.soc, &s_.sow_seeds, &s_.sow_fe, &s_.plants, &s_.l_c_crop, &s_.l_c_wg,
+    for (auto* v : {&s_.res_chop, &s_.loose, &s_.damage, &s_.soc, &s_.sow_seeds, &s_.sow_fe, &s_.sow_depth, &s_.plants, &s_.l_c_crop, &s_.l_c_wg,
                     &s_.l_c_rem, &s_.l_c_co2})
         v->assign(n, 0.0);
     s_.sow_viab.assign(n, 1.0);
@@ -194,6 +194,7 @@ void Field::reset_crop_state(std::size_t c) {
     s.sow_seeds[c] = 0.0;
     s.sow_fe[c] = 0.0;
     s.sow_viab[c] = 1.0;
+    s.sow_depth[c] = 0.0;
     s.plants[c] = 0.0;
     set_root_depth(c, soil_of(c).fallow_root_depth_m);
 }
@@ -452,6 +453,7 @@ void Field::do_seeding(std::size_t c, const SeedPlacement& sp, real cov) {
     if (s.crop[c] == sp.crop && s.sow_seeds[c] > 0.0) {   // a second pass adds seed
         const real tot = s.sow_seeds[c] + rate;
         s.sow_fe[c] = (s.sow_seeds[c] * s.sow_fe[c] + rate * fe) / tot;
+        s.sow_depth[c] = (s.sow_seeds[c] * s.sow_depth[c] + rate * sp.depth_m) / tot;
         s.sow_seeds[c] = tot;
         return;
     }
@@ -461,6 +463,7 @@ void Field::do_seeding(std::size_t c, const SeedPlacement& sp, real cov) {
     s.sow_seeds[c] = rate;
     s.sow_fe[c] = fe;
     s.sow_viab[c] = 1.0;
+    s.sow_depth[c] = sp.depth_m;
     s.plants[c] = 0.0;
     s.cc[c] = 0.0;
     s.stand[c] = 1.0;
