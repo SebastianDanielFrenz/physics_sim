@@ -82,7 +82,8 @@ TEST_CASE("Electric pins: state hashes of EV, fuel-cell and hybrid pulls", "[ev]
         {"car_hybrid Normal WOT", 0x2712a8e54088a401ull},
         {"car_hybrid Sport WOT", 0x9f0ef54b6962910cull},
         {"car_hybrid Racing WOT", 0x9f0ef54b6962910cull},
-        {"car_hybrid Normal low SOC WOT", 0x1f4ec359be170779ull},
+        // Power-target charging and disconnected-engine traction-cut isolation (2026-10-23).
+        {"car_hybrid Normal low SOC WOT", 0xbb6bf7af0f6af1a3ull},
     };
     for (int i = 0; i < 9; ++i) {
         std::printf("pin %-44s 0x%016llxull\n", pins[i].name, static_cast<unsigned long long>(got[i]));

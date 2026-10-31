@@ -144,6 +144,7 @@ public:
     [[nodiscard]] real intake_pressure_pa() const override { return p_ambient_last_; }
     // Pedal plan P1: Z = m + theta_idle_last*(w - m) (m in fuel cut), F = w; no residual band (fired_floor NaN).
     [[nodiscard]] PedalEnvelope request_envelope(real rpm) const override;
+    [[nodiscard]] real charging_fuel_g_s(real rpm, real torque_nm) const override;
     // Pedal plan P1: the Powertrain decides the law once its throttle stage kind is known (build time only).
     void set_manual_pedal_law(bool on) { desc_.manual_pedal_law = on; }
 
