@@ -9,7 +9,7 @@
 // Recorded sabotages (2026-10-31, harvest chain G3), each shown to fail the cases named:
 //   S1  apply_contents_mass without `+ cm.payload_kg`           -> "payload ..." body-mass and inertia cases fail
 //   S2  set_vehicle_payload_mass without the enabled check      -> the "needs the block" case fails
-//   S3  payload not part of the semi-live threshold test        -> "payload follows" case fails (a 0.05 kg change is applied)
+//   S3  update threshold forced to 0 (every change applied)    -> "payload ... semi-live" case fails (a 0.05 kg change is applied)
 
 #include "ps/io/vehicle_io.h"
 #include "ps/io/surface_table.h"
