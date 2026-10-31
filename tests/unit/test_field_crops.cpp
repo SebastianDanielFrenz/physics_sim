@@ -5,6 +5,7 @@
 //  - CR-a: the pollination switch ignored in field.cpp (always on) -> CR3 fails (the beet harvest index collapses at Tmax 42); CR2 does not
 //    notice it, the beet never meets the heat limit on the home climate;
 //  - CR-b: sugar_beet.json yield.pollination removed -> loader keeps the default 1, CR1 and CR3 fail (not re-run after the CR3 rewrite, by construction);
+//  - VS-a: winter_wheat.json vernalisation min_rate_factor 1 and days_saturation 1 -> VS2 fails (delay 0); VS1 does NOT notice (ratio 0.770);
 //  - CR-c: grain_maize.json biomass.rue_g_mj doubled -> CR2 maize fails its upper band (15.44 t/ha, ratio 1.62).
 #include "field_test_support.h"
 #include "ps/field/field_scenario.h"
@@ -115,4 +116,69 @@ TEST_CASE("CR3 a root crop has no pollination: heat at 'flowering' does not touc
     };
     CHECK_THAT(final_hi(beet), Catch::Matchers::WithinRel(beet.hi0, 0.01));   // irrigated: Ks_sto = 1; the build-up is 99.5 % complete at the maturity day
     CHECK(final_hi(flowering_beet) < 1e-6);                     // pollination fails completely
+}
+
+TEST_CASE("VS1 winter wheat sown on 1 March yields 10-40 % less than the autumn sowing", "[field][crop]") {
+    // Twenty years on the deep loess of the home climate, same fertiliser, same N; spring: sown doy 60, harvested doy 265.
+    // Measured 2026-10-31: autumn 5.57, spring 4.37 t/ha dry matter, ratio 0.785. Reference figures: no trial comparing a March
+    // sowing of a winter cultivar with the autumn sowing was found (the search turned up Landwirtschaftskammer NRW late-sowing
+    // trials, 7-20 % less for a sowing 4 weeks late, and an unverified BayWa statement of 40-60 %), so the 20-40 % of the task
+    // brief is an [AS] bracket; the band here is widened to 10-40 %.
+    const auto mean_grain = [](const char* file, double* bbch_min) {
+        const io::FieldScenario sc = io::load_field_scenario(test_field::data_dir() / "field_scenarios" / file);
+        const io::FieldRunSummary sum = io::run_field_scenario(sc);
+        REQUIRE(sum.harvests.size() >= 19);
+        double m = 0.0;
+        *bbch_min = 1e9;
+        for (const auto& h : sum.harvests) {
+            m += h.result.grain_dm_t_ha;
+            *bbch_min = std::min(*bbch_min, h.result.bbch);
+        }
+        return m / static_cast<double>(sum.harvests.size());
+    };
+    double b_aut = 0.0, b_spr = 0.0;
+    const double autumn = mean_grain("wheat_autumn_sown_20y.json", &b_aut);
+    const double spring = mean_grain("wheat_spring_sown_20y.json", &b_spr);
+    std::printf("VS1 autumn %.2f spring %.2f t/ha dm, ratio %.3f (min BBCH at harvest %.1f / %.1f)\n", autumn, spring, spring / autumn, b_aut, b_spr);
+    CHECK(spring / autumn < 0.90);
+    CHECK(spring / autumn > 0.60);
+    CHECK(b_spr >= 87.0);       // the spring crop is ripe at the harvest date in every year
+}
+
+TEST_CASE("VS2 vernalisation delays a late-spring sowing of winter wheat; the floor is not what limits a March sowing", "[field][crop]") {
+    // A winter wheat sown on 10 April (doy 100) meets only a few cool weeks: with the Wang-Engel vernalisation it reaches
+    // stem elongation later than the same crop without any requirement. Measured 2026-10-31 on the 30-year farm record, years
+    // 3-12: the delay is reported below. The floor itself (min_rate_factor 0.3 [AS]) hardly matters for a March sowing because the
+    // vernalisation saturates within about 50 cool days anyway (VS1: with the floor 0.02 the 1 March sowing loses 20.6 %, with
+    // the floor 0.3 21.5 %, with no vernalisation at all 23.0 % - the March loss is the shorter season, not the cold requirement).
+    const CropDesc with = test_field::wheat();
+    CropDesc without = with;
+    without.vernalises = false;
+    REQUIRE(with.vernalises);
+    double total_delay = 0.0;
+    int n = 0;
+    for (int year = 3; year < 13; ++year) {
+        double day_with = 0.0, day_without = 0.0;
+        for (int k = 0; k < 2; ++k) {
+            const CropDesc& c = k == 0 ? with : without;
+            DailyWeatherSource& src = test_field::weather30();
+            const std::int64_t sow = test_field::find_doy(src, static_cast<std::int64_t>(year) * 365, 100);
+            std::int64_t d = sow;
+            FieldConfig cfg = test_field::one_cell_config(test_field::loess(), c);
+            cfg.initial_day = sow - 1;
+            Field g(cfg);
+            g.set_irrigate_to_capacity(true);
+            g.sow_all(1);
+            for (d = sow; d < sow + 300; ++d) {
+                g.step_day(src.record(d));
+                if (g.view(0).bbch >= 31.0) break;
+            }
+            (k == 0 ? day_with : day_without) = static_cast<double>(d - sow);
+        }
+        total_delay += day_with - day_without;
+        ++n;
+    }
+    const double delay = total_delay / n;
+    std::printf("VS2 mean delay to BBCH 31 of a 10 April sowing: %.1f days\n", delay);
+    CHECK(delay > 20.0);            // measured 48.7 days
 }

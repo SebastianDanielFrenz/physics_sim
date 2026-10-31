@@ -74,7 +74,7 @@
       "t_opt_c": "[AS] see t_min_c.",
       "t_max_c": "[AS] see t_min_c.",
       "days_saturation": "[AS] effective vernalisation days for the full development rate of a winter wheat; the literature spans roughly 30-60 days. With the DWD-calibrated stage table the vernalisation completes in January in every season of the Frankfurt record, so the value has little effect on the dates.",
-      "min_rate_factor": "[AS] relative development rate of an unvernalised emerged winter wheat before stem elongation (the model slows development only after emergence)."
+      "min_rate_factor": "[AS] relative development rate of an unvernalised emerged winter wheat before stem elongation (the model slows development only after emergence). F1d part 3: with this floor between 0.02 and 0.3 (and with no vernalisation at all) a 1 March sowing yields 20.6-23.0 % less than the autumn sowing on the home loess (tests VS1/VS2), so the floor is not what limits a March sowing - the cold requirement is met within about 50 cool days; a 10 April sowing is delayed by 49 days to BBCH 31. No trial figure for the loss of a March-sown winter wheat was found (Landwirtschaftskammer NRW late-sowing trials: 7-20 % for a sowing four weeks late; an unverified BayWa statement: 40-60 %); the 20-40 % of the task brief was not confirmed."
     }
   },
   "canopy": {

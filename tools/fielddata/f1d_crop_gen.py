@@ -406,9 +406,35 @@ def scenario(name, years=30):
     }
 
 
+def wheat_sowing_scenario(spring, years=20):
+    """Winter wheat 20 years on the home loess, sown in autumn (doy 288) or in spring (doy 60 = 1 March) - F1d part 3."""
+    sow, harvest, fy = (60, 265, 0) if spring else (288, 212, 1)
+    nd = (85, 120, 150) if spring else (95, 130, 160)
+    s = scenario("winter_barley", years)       # same fertiliser material palette and grid
+    s["crops"] = ["../crops/winter_wheat.json"]
+    s["operations"] = [
+        {"op": "apply", "material": "dap_18_46", "method": "broadcast", "rate_t_ha": 0.15, "doy": 262},
+        {"op": "apply", "material": "mop_60", "method": "broadcast", "rate_t_ha": 0.17, "doy": 262},
+        {"op": "sow", "crop": "winter_wheat", "doy": sow},
+        {"op": "apply", "material": "can_27", "method": "broadcast", "rate_n_kg_ha": 60, "doy": nd[0], "first_year": fy},
+        {"op": "apply", "material": "can_27", "method": "broadcast", "rate_n_kg_ha": 50, "doy": nd[1], "first_year": fy},
+        {"op": "apply", "material": "can_27", "method": "broadcast", "rate_n_kg_ha": 40, "doy": nd[2], "first_year": fy},
+        {"op": "harvest", "doy": harvest, "first_year": fy, "straw_removed": 0.0},
+    ]
+    s["source"] = ("F1d part 3 control pair: winter wheat on the deep loess of the home climate, %s (CAN 150 kg N/ha in three dressings, "
+                   "DAP 69 kg P2O5 and MOP 102 kg K2O each autumn), straw left. Test-only operations.") % (
+        "sown on 1 March (doy 60) and harvested on doy 265" if spring else "sown on doy 288 and harvested on doy 212")
+    return s
+
+
 if __name__ == "__main__":
     os.makedirs(SCN, exist_ok=True)
     for nme in PLANS:
         with open(os.path.join(SCN, "crop_%s_30y.json" % nme), "w", encoding="utf-8", newline="\n") as f:
             json.dump(scenario(nme), f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    for sp in (False, True):
+        name = "wheat_%s_sown_20y.json" % ("spring" if sp else "autumn")
+        with open(os.path.join(SCN, name), "w", encoding="utf-8", newline="\n") as f:
+            json.dump(wheat_sowing_scenario(sp), f, indent=2, ensure_ascii=False)
             f.write("\n")

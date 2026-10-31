@@ -1,0 +1,79 @@
+{
+  "format": "physics_sim.field_scenario/1",
+  "climate": "../climates/farm_de_home.json",
+  "seed": 21,
+  "years": 20,
+  "nutrients": true,
+  "soils": [
+    "../soils/silt_loam_loess.json"
+  ],
+  "crops": [
+    "../crops/winter_wheat.json"
+  ],
+  "materials": [
+    "../field_materials/can_27.json",
+    "../field_materials/dap_18_46.json",
+    "../field_materials/mop_60.json",
+    "../field_materials/lime_carbonate_90.json"
+  ],
+  "methods": "../field_materials/methods.json",
+  "grid": {
+    "nx": 2,
+    "ny": 2,
+    "cell_size_m": 4.0
+  },
+  "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
+  "operations": [
+    {
+      "op": "apply",
+      "material": "dap_18_46",
+      "method": "broadcast",
+      "rate_t_ha": 0.15,
+      "doy": 262
+    },
+    {
+      "op": "apply",
+      "material": "mop_60",
+      "method": "broadcast",
+      "rate_t_ha": 0.17,
+      "doy": 262
+    },
+    {
+      "op": "sow",
+      "crop": "winter_wheat",
+      "doy": 60
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 60,
+      "doy": 85,
+      "first_year": 0
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 50,
+      "doy": 120,
+      "first_year": 0
+    },
+    {
+      "op": "apply",
+      "material": "can_27",
+      "method": "broadcast",
+      "rate_n_kg_ha": 40,
+      "doy": 150,
+      "first_year": 0
+    },
+    {
+      "op": "harvest",
+      "doy": 265,
+      "first_year": 0,
+      "straw_removed": 0.0
+    }
+  ],
+  "source": "F1d part 3 control pair: winter wheat on the deep loess of the home climate, sown on 1 March (doy 60) and harvested on doy 265 (CAN 150 kg N/ha in three dressings, DAP 69 kg P2O5 and MOP 102 kg K2O each autumn), straw left. Test-only operations."
+}
