@@ -652,7 +652,7 @@ TEST_CASE("ManualTcu: auto-shift thresholds and hysteresis", "[unit][drivetrain]
     CHECK(out.gearbox_target == 1);
 }
 
-TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin", "[hyper_clutch][tcu]") {
+TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin", "[hyper_clutch][tcu][long]") {
     ps::jobs::JobSystem pool(10); ps::io::EngineMapOptions opt; opt.pool=&pool;
     auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(real kmh : {70.,80.,100.}) {
@@ -712,7 +712,7 @@ TEST_CASE("Auto clutch uses signed anti-stall RPM rather than launch bite RPM wh
     CHECK(tcu.step(s,1./960,false).e_auto==real(1)); // manual pedal remains authoritative
 }
 
-TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in a forward gear", "[tcu][hyper_clutch]") {
+TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in a forward gear", "[tcu][hyper_clutch][long]") {
     ps::jobs::JobSystem pool(10); ps::io::EngineMapOptions opt; opt.pool=&pool;
     const auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(real kmh : {60.,120.,200.}) {

@@ -271,7 +271,7 @@ GustFactorStats gust_factor_ensemble(real U, real label_g, int records) {
 
 } // namespace
 
-TEST_CASE("Gusts: 3-s gust factor over 10 minutes, open land", "[environment][wind]") {
+TEST_CASE("Gusts: 3-s gust factor over 10 minutes, open land", "[environment][wind][long]") {
     // The WMO intensity I = c_u kappa / ln(z / z0) = 0.1515 (z 10 m, z0 0.03 m) at U = 10 m/s is the
     // reference_gust_factor (default 1.35) label: the field MEASURES a 3-s/10-min factor of 1.346
     // there. The plan's cited open-land value 1.66 is a different number for a Gaussian field: it needs

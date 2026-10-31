@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 namespace ps::vehicle {
 
@@ -97,7 +98,7 @@ public:
     // Pass 1 (every substep, before pre_solve() below - ARB needs every
     // wheel's fresh measurement first): cylinder shape cast along the
     // suspension axis to find ground contact and this substep's compression.
-    void measure_contact(const Pose& chassis_pose, real steer_angle, const IRigidBackend& backend);
+    void measure_contact(const Pose& chassis_pose, real steer_angle, const IRigidBackend& backend, std::span<const BodyId> excluded = {});
 
     // Pass 2 (plan section 5.6): suspension force from the measured
     // compression, tyre force PREDICTOR from relaxed slip (final alpha,

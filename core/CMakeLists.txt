@@ -267,6 +267,9 @@ add_library(ps_core STATIC
   src/vehicle/assist_unit.cpp
   src/vehicle/vehicle_instance.cpp
   src/vehicle/system.cpp
+  src/machine/coupling_solver.cpp
+  src/machine/hitch_class.cpp
+  src/machine/hitch_limits.cpp
   src/io/vehicle_io.cpp
   src/io/turbo_stage_io.cpp
   src/io/fuel_io.cpp
@@ -274,6 +277,7 @@ add_library(ps_core STATIC
   src/io/engine_thermal_io.cpp
   src/io/engine_parts.cpp
   src/io/electronics_io.cpp
+  src/io/hitch_io.cpp
   src/io/limit_policy_io.cpp
   src/io/knock_model_io.cpp
 

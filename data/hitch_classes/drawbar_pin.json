@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.hitch_class/1",
+  "name": "drawbar_pin",
+  "source": "A pin through a drawbar eye, the tractor and agricultural trailer hitch. Limits [AS]: yaw up to the tyres or the drawbar frame, pitch and roll the eye's play in the jaw.",
+  "yaw": {"mode": "limited", "min_deg": -75, "max_deg": 75},
+  "pitch": {"mode": "limited", "min_deg": -20, "max_deg": 20},
+  "roll": {"mode": "limited", "min_deg": -25, "max_deg": 25},
+  "frequency_hz": 60,
+  "damping_ratio": 1,
+  "latch": {"time_s": 0.5, "max_error_m": 0.1, "max_angle_deg": 5, "max_speed_m_s": 0.5}
+}

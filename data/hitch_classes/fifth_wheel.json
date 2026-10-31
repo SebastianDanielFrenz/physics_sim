@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.hitch_class/1",
+  "name": "fifth_wheel",
+  "source": "A fifth wheel: the kingpin turns, the plate tilts fore and aft and carries roll. Limits [AS]: 12 degrees of pitch from EU 94/20/EC as remembered, 90 of yaw to the cab; the plate's 3 degrees of roll play are not modelled.",
+  "yaw": {"mode": "limited", "min_deg": -90, "max_deg": 90},
+  "pitch": {"mode": "limited", "min_deg": -12, "max_deg": 12},
+  "roll": {"mode": "locked"},
+  "frequency_hz": 60,
+  "damping_ratio": 1,
+  "latch": {"time_s": 0.5, "max_error_m": 0.05, "max_angle_deg": 5, "max_speed_m_s": 0.5}
+}

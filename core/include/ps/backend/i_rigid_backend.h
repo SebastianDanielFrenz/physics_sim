@@ -16,6 +16,8 @@
 #include "ps/world/ids.h"
 
 #include <cstdint>
+#include <span>
+#include <utility>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -269,6 +271,23 @@ public:
     // permanent ground coverage.
     [[nodiscard]] virtual bool is_static(BodyId id) const = 0;
 
+    // Kinematic bodies (moving doors, platforms). motion_type() returns the
+    // type the body was created with (Static for an invalid/stale id - use
+    // is_valid-style checks via World). is_active() is false for a body the
+    // backend has put to sleep (or deactivated), and for an invalid id.
+    [[nodiscard]] virtual BodyMotionType motion_type(BodyId id) const = 0;
+    [[nodiscard]] virtual bool is_active(BodyId id) const = 0;
+    // Drives a Kinematic body to `target` over the NEXT step(dt): the backend
+    // sets the body's linear/angular velocity so it arrives exactly at `target`
+    // at the end of that step (Jolt BodyInterface::MoveKinematic), so contacts
+    // see a real velocity and push dynamic bodies correctly (set_pose would
+    // teleport and give none). Activates the body. Sim thread, between steps.
+    // Throws std::invalid_argument for an invalid id or a non-Kinematic body.
+    virtual void move_kinematic(BodyId id, const Pose& target, real dt) = 0;
+    // Zeroes a Kinematic body's velocity and lets it sleep: a door that has
+    // stopped costs nothing in the next steps. Throws like move_kinematic.
+    virtual void stop_kinematic(BodyId id) = 0;
+
     // Appends, into caller-owned `out` (out.clear()'d first), the
     // world-space XY bounding rectangle of every triangle of `id`'s
     // collision shape at its current pose. Convex primitives are
@@ -392,6 +411,14 @@ public:
         return hit.hit&&hit.body==excluded ? RayCastHit{} : hit;
     }
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+    // The same two queries blind to several bodies: a coupled vehicle's wheels and ground probes do not see its
+    // partners' chassis, whatever the geometry at the hitch.
+    [[nodiscard]] virtual ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded) const = 0;
+    [[nodiscard]] virtual RayCastHit ray_cast_excluding(const Vec3& origin, const Vec3& direction, real distance, std::span<const BodyId> excluded) const = 0;
+
+    // Replaces the list of body pairs that make no contacts with each other. Sim thread, between steps; every listed
+    // body must be live. Queries still see these bodies.
+    virtual void set_disabled_collision_pairs(std::span<const std::pair<BodyId, BodyId>> pairs) = 0;
 
     // Pure narrowphase overlap query (no sweep, no side effects on the
     // backend) - PLAN.md P1.5b strategy A: "Jolt is used only as a collision

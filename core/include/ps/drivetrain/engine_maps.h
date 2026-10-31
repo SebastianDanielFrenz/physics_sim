@@ -159,6 +159,12 @@ struct EngineMaps {
     // filled and counted the same way (they used to make the load throw).
     int nonbreathing_points = 0;
     int wot_dropped_rows = 0;
+    // rpm rows from the engine's breathing limit to the top of the axis (a rev limit extended past it) that were
+    // generated as copies of the highest valid row below the lowest failing row - the old Table2D edge clamp at the
+    // breathing limit. A row fails when the maps cannot be assembled from its points (trim not settled, throttle
+    // saturated, no net fresh air, VE/eta_i out of range, air not strictly increasing in p_im, ...). See
+    // EngineMapGenTask::finish for when rows are held. Diagnostic, not hashed, not cached - 0 after a cache hit.
+    int held_rpm_rows = 0;
     // Engine garage P7 (knock-limited engines only; diagnostics, not hashed,
     // not cached - 0 after a cache hit): grid nodes x fuels whose knock-safe
     // advance lies below the search's upper bound (theta_MBT + 10), of which
@@ -235,7 +241,9 @@ public:
     // network and the resolved installation, throttle trimmed to the point's
     // p_im); a grid node whose p_im the fully open throttle cannot reach (or
     // the trim does not settle to within its tolerance) fails the task with
-    // "engine map generator: plenum target ..." (PROVISIONAL P6). A node
+    // "engine map generator: plenum target ..." (PROVISIONAL P6) - judged
+    // in finish(), which may hold its rpm row instead
+    // (EngineMaps::held_rpm_rows). A node
     // BELOW the closed-throttle floor (overlap backflow) is generated with
     // the plenum held at the node pressure instead (held_plenum_points). Sweep
     // points only feed normalised ratios and are not held to the target.
@@ -258,10 +266,20 @@ public:
     // consume the task.
     void build_check() const;
     // Throws if a point was not run, or a speed line's air mass is not
-    // strictly increasing in p_im (the eta_i resampling needs it).
+    // strictly increasing in p_im (the eta_i resampling needs it). When the
+    // maps cannot be assembled, rows r0..top (r0 = the lowest failing row)
+    // are held - generated as copies of row r0 - 1 (held_rpm_rows) - if
+    // every row from r0 up fails, or if the engine is past its breathing
+    // limit there: the top manifold node's air flow at r0 - 1, or on every
+    // valid row above r0, lies below its maximum P over the rows below r0.
+    // Otherwise (row 0 fails, or a valid row above r0 reaches P while the
+    // flow at r0 - 1 is P) the unchanged message is thrown.
     [[nodiscard]] EngineMapsPtr finish();
 
 private:
+    // finish()'s map assembly with output rpm row ir built from the points of
+    // rpm row row_src[ir] (identity = every row from its own points).
+    [[nodiscard]] EngineMapsPtr build_maps(const std::vector<std::size_t>& row_src) const;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

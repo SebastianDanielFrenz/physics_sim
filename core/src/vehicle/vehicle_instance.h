@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ps::vehicle {
@@ -32,9 +33,8 @@ struct PendingChannelWrite {
     real value = 0;
 };
 
-// PLAN.md P2/M1 step 3's named control channels, read by World and handed
-// down here (out/handover_p3.md decision 5: global, not per-vehicle, for
-// P3/M1's one-car scope).
+// PLAN.md P2/M1 step 3's named control channels, read by World in this
+// vehicle's channel scope and handed down here.
 struct ControlInputs {
     real steer = 0.0;     // -1..1
     real throttle = 0.0;  // 0..1
@@ -94,6 +94,35 @@ struct VehicleTickEnv {
     // World fills it per tick from the environment. Without it the wheel's
     // friction is exactly the class lambda_mu (bit-identical to before W6).
     const environment::ConditionGrip* grip = nullptr;
+    // What the hitch asks of this vehicle's brakes, 0..1; it adds to the brake channel as a second driver would.
+    real brake_link = 0.0;
+};
+
+// One tick's working state between tick_begin and tick_end, owned by the caller:
+// what step_tick would otherwise keep in locals. Exists so that coupled vehicles
+// can take turns substep by substep (vehicle::System's islands, ps::machine).
+struct VehicleTickWork {
+    VehicleTickEnv env{};
+    real tick_dt = 0.0;
+    std::size_t num_substeps = 1;
+    real substep_dt = 0.0;
+    ControlInputs controls{};
+    real clutch_pedal = 0.0, gear_request = 0.0, shift_up_count = 0.0, shift_down_count = 0.0, ignition = 0.0, starter = 0.0;
+    bool assist_auto_clutch = false, assist_auto_blip = false, assist_auto_shift = false;
+    const DriveModeParams* drive_params = nullptr;
+    DriveMode drive_mode_req = DriveMode::Normal, drive_mode_eff = DriveMode::Normal;
+    bool assist_abs = false, assist_esc = false, assist_traction = false, assist_launch = false, assist_aero = false;
+    EscMode esc_mode_req = EscMode::Off, esc_mode_eff = EscMode::Off;
+    TractionMode tc_mode_requested = TractionMode::Off, tc_mode_effective = TractionMode::Off;
+    const TractionControlDesc* tc_desc = nullptr;
+    real ceiling_throttle = 0.0, aero_control_target_deg = 0.0, aero_world_command = 0.0, imu_accel = 0.0, delta_avg = 0.0;
+    BodyIntegrationParams ip{};
+    Vec3 a_ext{}, alpha_ext{};
+    Pose pose_s{};
+    Motion twist_s{};
+    Vec3 force_s{}, torque_s{}; // this substep's wrench about the shadow's centre of mass
+    Vec3 force_sum{}, torque_sum{}, aero_force_sum{}, aero_torque_sum{};
+    real fan_energy_used = 0.0, front_downforce_sum = 0.0, rear_downforce_sum = 0.0;
 };
 
 class VehicleInstance {
@@ -112,6 +141,30 @@ public:
     // array, indexed by control_indices_ below.
     void step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                     real tick_dt, real substep_rate_hz);
+
+    // step_tick in pieces, for vehicles stepped together in one island: tick_begin once, then for each substep
+    // substep_forces, any substep_add_wrench (a coupling force about the shadow's centre of mass), substep_advance,
+    // then tick_end once. step_tick is exactly this sequence with no added wrench.
+    void tick_begin(VehicleTickWork& tw, IRigidBackend& backend, const std::vector<real>& channel_values,
+                    const VehicleTickEnv& env, real tick_dt, real substep_rate_hz);
+    void substep_forces(VehicleTickWork& tw, std::size_t s, IRigidBackend& backend);
+    static void substep_add_wrench(VehicleTickWork& tw, const Vec3& force, const Vec3& torque);
+    static void substep_advance(VehicleTickWork& tw);
+    void tick_end(VehicleTickWork& tw, IRigidBackend& backend);
+
+    // Coupled vehicles only, after tick_end and before the backend steps: moves the chassis to the pose from which the
+    // backend's own x1 = x0 + dt*v1 lands on the shadow's end pose. The shadow took another path through the tick, the
+    // force on it is known only there, and a socket spring that sees the difference next tick fights a phantom error
+    // (a free swing lost 41 % of its energy in 60 s at 240/960). Whatever a contact does to v1 still acts: this sets
+    // the start of the backend's step, not its end.
+    void align_backend_with_shadow(const VehicleTickWork& tw, IRigidBackend& backend) const;
+
+    // Every chassis of this vehicle's island, its own included: its wheels and ground probes do not see them. Empty
+    // for a vehicle in no coupling, whose queries stay the plain ones. Sim thread, between steps.
+    void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
+
+    [[nodiscard]] const std::optional<machine::TowBrakeDesc>& tow_brake() const { return desc_.tow_brake; }
+    [[nodiscard]] const std::vector<machine::HitchPointDesc>& hitch_points() const { return desc_.hitch_points; }
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.
@@ -305,6 +358,7 @@ private:
     // sized once at construction (zero-alloc scratch, PLAN.md D8) - wheels_
     // is never resized after the constructor, same invariant this reuses.
     std::vector<real> hub_omega_old_scratch_;
+    std::vector<BodyId> cast_exclusions_;
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value, control_indices_.

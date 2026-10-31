@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.hitch_class/1",
+  "name": "ball",
+  "source": "A trailer ball coupling. Limits [AS] from the free rotation EU 94/20/EC asks of a ball: 90 degrees horizontal, 20 vertical, 25 axial, quoted from memory.",
+  "yaw": {"mode": "limited", "min_deg": -90, "max_deg": 90},
+  "pitch": {"mode": "limited", "min_deg": -20, "max_deg": 20},
+  "roll": {"mode": "limited", "min_deg": -25, "max_deg": 25},
+  "frequency_hz": 60,
+  "damping_ratio": 1,
+  "latch": {"time_s": 0.5, "max_error_m": 0.15, "max_angle_deg": 5, "max_speed_m_s": 0.5}
+}

@@ -14,6 +14,8 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/machine/hitch_point.h"
+#include "ps/machine/tow_brake.h"
 #include "ps/math/pose.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
@@ -193,6 +195,10 @@ struct VehicleDesc {
     // gearbox at its data-file initial_gear forever (no gear_request/
     // counter channel has any effect without a TCU to arbitrate them).
     std::vector<drivetrain::ControllerDesc> controllers;
+    // What drives this vehicle's service brakes while it is towed. Absent: its own brake channel only.
+    std::optional<machine::TowBrakeDesc> tow_brake;
+    // Where hitches go on this vehicle.
+    std::vector<machine::HitchPointDesc> hitch_points;
 };
 
 } // namespace ps::vehicle

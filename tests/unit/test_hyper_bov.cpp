@@ -295,7 +295,7 @@ TEST_CASE("H2: the valve stays shut at idle and at steady cruise", "[turbo][driv
     }
 }
 
-TEST_CASE("H3: the valve does not touch the WOT torque", "[turbo][drivetrain]") {
+TEST_CASE("H3: the valve does not touch the WOT torque", "[turbo][drivetrain][long]") {
     for (const char* car : {"car_hyper.json", "car_hyper_n2o.json"}) {
         const auto desc = load_car(car);
         const SimulatedEngineDesc& with = sim_engine(desc);

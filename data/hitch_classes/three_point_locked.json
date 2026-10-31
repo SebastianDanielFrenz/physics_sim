@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.hitch_class/1",
+  "name": "three_point_locked",
+  "source": "A three-point implement with the lift held and the links stabilised: one rigid body with the tractor for as long as it hangs there. The lift actuator and the links' float are not modelled.",
+  "yaw": {"mode": "locked"},
+  "pitch": {"mode": "locked"},
+  "roll": {"mode": "locked"},
+  "frequency_hz": 60,
+  "damping_ratio": 1,
+  "latch": {"time_s": 0.5, "max_error_m": 0.05, "max_angle_deg": 5, "max_speed_m_s": 0.5}
+}
