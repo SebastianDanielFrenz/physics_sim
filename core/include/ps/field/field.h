@@ -62,6 +62,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace ps::field {
@@ -85,6 +86,10 @@ struct FieldConfig {
     bool management_enabled = false;
     std::vector<WeedGroupDesc> weeds;     // palette; empty = no weed model
     std::vector<HerbicideDesc> herbicides;   // palette; Spray::product = index + 1
+    // Pathogens (F1d): inoculum and suppression per crop family and cell, built by each same-family crop, decaying over
+    // break years, raised by surface residue, lowering the growth of the crop of the family through stress_rotation.
+    // Needs management_enabled (residue) and a pathogen block and family in every crop. false = bit-identical.
+    bool pathogens_enabled = false;
 };
 
 struct StressFactors {
@@ -177,6 +182,14 @@ struct ManagementView {
     std::vector<WeedGroupView> weeds;
     std::vector<real> herbicide_residual;   // residual activity per herbicide
 };
+// Pathogen state of one cell (copy; pathogens_enabled only). Index = family index (family_names()).
+struct PathogenView {
+    std::vector<real> inoculum;          // P per family, 0..1
+    std::vector<real> suppression;       // S per family, 0..1 (the antagonists of take-all decline)
+    real loss_untreated = 0.0;           // yield loss the growing crop was given at emergence (before any fungicide)
+    real fungicide_protection = 0.0;     // protection of the growing crop by sprays now
+    real growth_factor = 1.0;            // stress_rotation of the last step
+};
 // Cumulative carbon ledger of the residue and weed pools (kg C/ha).
 struct CarbonLedger {
     real c_from_crop = 0.0;              // crop biomass entering the residue pools (harvest, termination, damage)
@@ -227,6 +240,10 @@ struct FieldState {
     std::vector<real> h_act;                                    // [cell * herbicides]
     std::vector<real> l_c_crop, l_c_wg, l_c_rem, l_c_co2;
     std::vector<real> weed_f;                                   // weed competition factor (1 = none); always sized
+    // pathogens (empty unless FieldConfig::pathogens_enabled)
+    std::vector<real> path_p, path_s;                           // [cell * families]
+    std::vector<real> path_loss0;                               // untreated loss fraction of the growing crop, fixed at emergence
+    std::vector<std::uint8_t> res_crop;                         // crop id whose residue lies on the surface (0 = none)
 };
 
 struct FieldCheckpoint {
@@ -281,6 +298,7 @@ public:
     void apply(int cell, const OperationEffect& effect, HarvestResult* harvest_out = nullptr);
     HarvestResult apply_all(const OperationEffect& effect);   // the field mean of the harvest effects
 
+    // With pathogens_enabled the model owns `rotation` (std::logic_error when f.rotation != 1).
     void set_stress(int cell, const StressFactors& f);
     // Test only: every day starts with the profile brought back to field
     // capacity (booked as irrigation, so the balance still closes).
@@ -310,6 +328,13 @@ public:
     // Carbon in - out - stored in the residue pools and living weeds; zero up to rounding.
     real c_balance_residual(int cell) const;
 
+    // Pathogens (std::logic_error without pathogens_enabled).
+    bool pathogens_enabled() const { return cfg_.pathogens_enabled; }
+    const std::vector<std::string>& family_names() const { return family_names_; }
+    PathogenView pathogen_view(int cell) const;
+    // Test/scenario hook: sets the inoculum and suppression of a family in a cell (both in [0, 1)).
+    void set_pathogen(int cell, const std::string& family, real inoculum, real suppression);
+
     // --- persistence ---
     FieldCheckpoint checkpoint() const;
     // Throws std::invalid_argument when the checkpoint does not fit this grid.
@@ -318,7 +343,7 @@ public:
 
 private:
     struct DayFlows {            // what the water balance of the day hands to the nutrients
-        real taw1 = 0.0, dp = 0.0, drain = 0.0, bio_before = 0.0, bbch = 0.0, shed_g_m2 = 0.0;
+        real taw1 = 0.0, dp = 0.0, drain = 0.0, bio_before = 0.0, bbch = 0.0, shed_g_m2 = 0.0, gdd = 0.0;
         int stage = 0;
         bool emerged = false;
     };
@@ -349,6 +374,11 @@ private:
     void crop_to_residue(std::size_t c, real fraction, bool with_grain);   // kills `fraction` of the standing crop into the residue pools
     void clear_crop(std::size_t c);
     void step_weeds(std::size_t c, const DailyWeather& w);
+    // Pathogens (pathogens.cpp)
+    void init_pathogens();
+    void step_pathogens(std::size_t c, const DayFlows& fl);
+    void pathogen_emergence(std::size_t c);              // fixes the untreated loss of the crop that emerged today
+    real fungicide_protection(std::size_t c) const;      // of the growing crop, 0..1
     void weed_to_residue(std::size_t c, std::size_t gi, real fraction);
     void release_residue_pk(std::size_t c, int pool, real fraction);
     real workability(std::size_t c) const;
@@ -362,6 +392,9 @@ private:
     FieldConfig cfg_;
     std::vector<real> co2_f_;          // per crop (index = id - 1): WP* / rue multiplier of cfg_.co2_ppm
     std::vector<int> weed_vol_crop_;   // per weed group: crop id whose shed grain seeds it, 0 = none
+    std::vector<std::string> family_names_;   // pathogens: sorted crop families
+    std::vector<int> crop_family_;            // per crop (index = id - 1): index into family_names_
+    std::vector<real> fam_decay_, fam_sdecay_;   // per family: daily factors of the inoculum and of the suppression
     int moa_count_ = 0;
     int nx_ = 0, ny_ = 0;
     std::vector<std::uint16_t> soil_idx_;

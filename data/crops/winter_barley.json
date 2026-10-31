@@ -294,5 +294,28 @@
       "compensation_density_m2": "[AS] value of winter_wheat.json reused for winter_barley, not crop-specific (wheat entry: constant d0 of the yield-density law 1 - exp(-d/d0) (Willey and Heath 1969 form); wheat compensates thin stands by tillering, 100 plants/m2 give about 92 % of the 250 plants/m2 reference.)"
     }
   },
+  "pathogen": {
+    "agent": "take-all (Gaeumannomyces tritici) and other cereal root and foot diseases",
+    "loss_max": 0.66,
+    "build_per_season": 0.7,
+    "season_gdd": 2300.0,
+    "decay_half_life_days": 110.0,
+    "suppression_max": 0.9,
+    "suppression_gain": 0.4,
+    "suppression_half_life_days": 1800.0,
+    "residue_source_per_day": 0.0002,
+    "residue_ref_c_kg_ha": 1500.0,
+    "source": {
+      "loss_max": "[M] fitted with build_per_season, suppression_* and the half-lives to three published margins: second wheat 10-15 % below first wheat and 10-20 % in second and third wheat (AHDB take-all guidance; Farmers Weekly 'How to make second wheat profitable'), the peak of take-all in the 3rd to 5th cropping year and the later decline to 80-90 % of the early yields (Rothamsted take-all decline as summarised on Wikipedia 'Take-all'; not checked against the Rothamsted primary source). Measured in the field model as yield ratios against the same run without pathogens (home loess, 4 wheats / 1 rapeseed / wheat cycle for the break, test P8a): first wheat after a one-year break 0.967, continuous wheat second 0.847 (12.4 % below the break wheat), third 0.823 (15 %), worst year 3, years 11-16 mean 0.872 (10 % below).",
+      "build_per_season": "[M] fitted together with loss_max (see there): 1 - exp(-0.7 X) of the free inoculum gap is closed by a season with X = (gdd of the season)/season_gdd, about 1.2 for autumn-sown wheat.",
+      "season_gdd": "[D] development units (daily gdd, clamped Tmin/Tmax) from emergence to maturity along the same thermal rule as data/crops/winter_barley.json's stages, rounded; the build per day is proportional to the day's gdd over this number.",
+      "decay_half_life_days": "[AS] half-life of the inoculum without a host, 110 d: a year without a host leaves a tenth of it (AHDB: a break crop cuts take-all risk strongly and two years nearly clear it; no numeric half-life was found).",
+      "suppression_max": "[M] fitted with loss_max: the antagonists of take-all decline remove at most 90 % of the loss (Wikipedia 'Take-all' summary: yields return to 80-90 % of the early level).",
+      "suppression_gain": "[M] fitted with loss_max: S closes 1 - exp(-0.4 P x) of its gap per season, so decline needs several seasons at a high inoculum (peak in year 3-5).",
+      "suppression_half_life_days": "[AS] half-life of the antagonist level, 1800 d: it outlasts the usual one-year break (AHDB: decline is lost only after a long break; no numeric half-life was found).",
+      "residue_source_per_day": "[AS] inoculum built per day, at full residue, from infected stubble and straw lying on the surface; ploughing it under removes the source.",
+      "residue_ref_c_kg_ha": "[AS] surface residue carbon (loose straw + stubble) at which the source is complete: about 3 t/ha of dry matter."
+    }
+  },
   "source": "F1d winter barley (family cereal with wheat: both are hosts of take-all and eyespot, see the pathogen notes of the F1d report). Annex I.11 Barley values of the AquaCrop reference manual v7.3 are [C]; the stage table is [D] from DWD phenology and the Frankfurt station; nutrient removal is [D] from LfL Bayern Bas22; whatever else is [AS] says so. No vernalisation is modelled (the crop is only sown in autumn; a spring sowing of this file would skip the cold requirement)."
 }

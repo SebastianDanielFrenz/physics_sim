@@ -151,6 +151,23 @@ struct CropManagementDesc {
     real compensation_density_m2 = 40.0;
 };
 
+// Crop: soil-borne pathogen of the crop's family (F1d; physics_sim.crop/1, optional "pathogen"). The field keeps one
+// inoculum level P in [0, 1) and one antagonist (suppression) level S in [0, 1) per crop family and cell. Crops of one
+// family (wheat and barley) share them: decay_half_life_days and suppression_half_life_days are family properties and
+// must be equal across the crops of a family. All the others belong to the crop that is growing or that left the residue.
+struct PathogenDesc {
+    std::string agent;                  // information: the disease (e.g. take-all)
+    real loss_max = 0.0;                // yield loss at inoculum 1 without suppression or fungicide
+    real build_per_season = 0.0;        // the crop closes 1 - exp(-this) of the gap 1 - P over a whole season
+    real season_gdd = 1.0;              // development units after emergence (to maturity) that the season is made of
+    real decay_half_life_days = 0.0;    // inoculum half-life while no host of the family grows (family property)
+    real suppression_max = 0.0;         // share of the loss removed at S = 1
+    real suppression_gain = 0.0;        // S: 1 - exp(-this x P) of the gap 1 - S is closed over a whole season
+    real suppression_half_life_days = 0.0;   // half-life of S (family property)
+    real residue_source_per_day = 0.0;  // inoculum built per day from surface residue of this crop at residue_ref (gap share)
+    real residue_ref_c_kg_ha = 1.0;     // surface residue carbon at which that source is complete
+};
+
 // ----------------------------------------------------------------------------------------------------------
 // Weeds (physics_sim.weed_group/1) and herbicides (physics_sim.herbicide/1).
 // ----------------------------------------------------------------------------------------------------------
@@ -218,6 +235,13 @@ struct HerbicideDesc {
     real damage_dose_exponent = 1.5;    // crop damage ~ dose^exponent
     real default_damage_in = 0.0, default_damage_out = 0.0, default_max_bbch = 0.0;   // for crops not listed
     std::vector<HerbicideCropResponse> crops;
+    // Fungicide (F1d, optional "fungicide" block): a spray protects the growing crop of the family against its pathogen.
+    // Protection p = efficacy_max x dose/(dose + dose_half), added as 1 - (1-p_old)(1-p), capped at efficacy_max (a
+    // fungicide never buys back all the loss), and it decays with fungicide_half_life_days.
+    real fungicide_efficacy_max = 0.0;  // 0 = not a fungicide
+    real fungicide_dose_half = 0.5;     // dose (relative to the label rate) for half of efficacy_max
+    real fungicide_half_life_days = 21.0;
+    std::string fungicide_family;       // crop family the product protects; empty = every family
 };
 
 // First problem with the descriptor ("soil <name>: management.<field> ..."), or empty.
@@ -225,6 +249,7 @@ std::string soil_management_validation_error(const std::string& soil_name, const
 std::string crop_management_validation_error(const std::string& crop_name, const CropManagementDesc& m);
 std::string weed_group_validation_error(const WeedGroupDesc& w);
 std::string herbicide_validation_error(const HerbicideDesc& h);
+std::string pathogen_validation_error(const std::string& crop_name, const PathogenDesc& p);
 std::string operation_validation_error(const std::string& name, const OperationEffect& e);
 
 } // namespace ps::field

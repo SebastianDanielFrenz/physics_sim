@@ -172,12 +172,33 @@ std::string herbicide_validation_error(const HerbicideDesc& h) {
     c.frac("default_damage_in", h.default_damage_in);
     c.frac("default_damage_out", h.default_damage_out);
     c.nonneg("default_max_bbch", h.default_max_bbch);
+    c.fail_if(!(fin(h.fungicide_efficacy_max) && h.fungicide_efficacy_max >= 0.0 && h.fungicide_efficacy_max < 1.0),
+              "fungicide_efficacy_max must be in [0, 1): a fungicide never buys back the whole loss");
+    if (h.fungicide_efficacy_max > 0.0) {
+        c.pos("fungicide_dose_half", h.fungicide_dose_half);
+        c.pos("fungicide_half_life_days", h.fungicide_half_life_days);
+    }
     for (const HerbicideCropResponse& r : h.crops) {
         c.fail_if(r.crop.empty(), "crop entries need a crop name");
         c.frac("crops.damage_in", r.damage_in);
         c.frac("crops.damage_out", r.damage_out);
         c.nonneg("crops.max_bbch", r.max_bbch);
     }
+    return c.err;
+}
+
+std::string pathogen_validation_error(const std::string& name, const PathogenDesc& p) {
+    Check c{"crop " + name + ": pathogen.", {}};
+    c.fail_if(p.agent.empty(), "agent must not be empty");
+    c.frac("loss_max", p.loss_max);
+    c.fail_if(!(fin(p.build_per_season) && p.build_per_season >= 0.0 && p.build_per_season < 20.0), "build_per_season must be in [0, 20)");
+    c.pos("season_gdd", p.season_gdd);
+    c.pos("decay_half_life_days", p.decay_half_life_days);
+    c.fail_if(!(fin(p.suppression_max) && p.suppression_max >= 0.0 && p.suppression_max < 1.0), "suppression_max must be in [0, 1)");
+    c.fail_if(!(fin(p.suppression_gain) && p.suppression_gain >= 0.0 && p.suppression_gain < 20.0), "suppression_gain must be in [0, 20)");
+    c.pos("suppression_half_life_days", p.suppression_half_life_days);
+    c.nonneg("residue_source_per_day", p.residue_source_per_day);
+    c.pos("residue_ref_c_kg_ha", p.residue_ref_c_kg_ha);
     return c.err;
 }
 

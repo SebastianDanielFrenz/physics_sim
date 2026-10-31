@@ -135,6 +135,12 @@ void Field::do_spray(std::size_t c, const Spray& sp, real cov) {
     }
     // residual activity in the soil (decays in manage_poststep)
     real& a = s.h_act[c * H + hi];
+    if (hd.fungicide_efficacy_max > 0.0) {   // a fungicide: h_act is the protection of the growing crop (F1d)
+        if (s.crop[c] == 0) return;
+        const real p = hd.fungicide_efficacy_max * phi * dose / (dose + hd.fungicide_dose_half);
+        a = std::min(hd.fungicide_efficacy_max, 1.0 - (1.0 - a) * (1.0 - p));
+        return;
+    }
     a = std::max(a, std::min(2.0, dose) * phi);
 }
 

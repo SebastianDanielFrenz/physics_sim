@@ -379,6 +379,20 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
     } else {
         r.skip("management");
     }
+    if (r.has("pathogen")) {
+        ObjectReader w(block_of(r, "pathogen", origin), "pathogen", origin);
+        PathogenDesc& p = d.pathogen;
+        d.has_pathogen = true;
+        p.agent = w.string("agent", true, "");
+#define PA(f) p.f = w.number(#f, true, 0.0)
+        PA(loss_max); PA(build_per_season); PA(season_gdd); PA(decay_half_life_days); PA(suppression_max); PA(suppression_gain);
+        PA(suppression_half_life_days); PA(residue_source_per_day); PA(residue_ref_c_kg_ha);
+#undef PA
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("pathogen");
+    }
     r.finish();
     const std::string e = crop_validation_error(d);
     if (!e.empty()) throw std::runtime_error(origin + ": " + e);
@@ -633,6 +647,17 @@ HerbicideDesc parse_herbicide_json(const json& j, const std::string& origin) {
         h.damage_dose_exponent = w.number("dose_exponent", true, 0.0);
         w.skip("source");
         w.finish();
+    }
+    if (r.has("fungicide")) {
+        ObjectReader w(block_of(r, "fungicide", origin), "fungicide", origin);
+        h.fungicide_efficacy_max = w.number("efficacy_max", true, 0.0);
+        h.fungicide_dose_half = w.number("dose_half", true, 0.0);
+        h.fungicide_half_life_days = w.number("half_life_days", true, 0.0);
+        h.fungicide_family = w.string("family", false, "");
+        w.skip("source");
+        w.finish();
+    } else {
+        r.skip("fungicide");
     }
     r.finish();
     const std::string e = herbicide_validation_error(h);

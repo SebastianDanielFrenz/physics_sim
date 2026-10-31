@@ -152,6 +152,7 @@ std::string crop_validation_error(const CropDesc& d) {
     c.frac("shed_rate_per_day", d.shed_rate_per_day);
     if (c.err.empty() && d.has_nutrients) c.err = crop_nutrient_validation_error(d.name, d.nutrients);
     if (c.err.empty() && d.has_management) c.err = crop_management_validation_error(d.name, d.management);
+    if (c.err.empty() && d.has_pathogen) c.err = pathogen_validation_error(d.name, d.pathogen);
     return c.err;
 }
 

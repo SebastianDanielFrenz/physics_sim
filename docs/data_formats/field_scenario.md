@@ -58,3 +58,10 @@ and the optional overrides `coverage`, `seeds_per_m2`, `depth_m`, `dose`, `straw
 (residue, cover, loosening, seedbed, crop plants, weed factor/plants/biomass/seeds, humus carbon, per-group plants and seeds).
 Scenarios: data/field_scenarios/wheat_managed_11y.json (combine with chopped straw, stubble cultivator, plough, seedbed harrow, drill,
 autumn grass herbicide, spring broadleaf herbicide, fertiliser plan) and wheat_unmanaged_11y.json (no plough, no spray).
+
+## Pathogens (F1d part 4)
+
+Optional `"pathogens": true` (needs `"management": true`; every crop needs `family` and its `pathogen` block, crop.md). The CSV gains
+`path_p_<family>`, `path_s_<family>` (field means of the inoculum and the suppression, families in sorted order) and
+`path_loss_untreated`, `fungicide_protection`, `rotation_factor`. Pathogen state is hashed and checkpointed only when enabled (a
+scenario without the key is bit-identical to before).

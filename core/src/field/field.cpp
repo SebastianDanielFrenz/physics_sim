@@ -125,6 +125,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     if (!(cfg_.co2_ppm > 0.0)) throw std::invalid_argument("Field: co2_ppm must be > 0");
     for (const CropDesc& cr : cfg_.crops) co2_f_.push_back(cr.co2_factor(cfg_.co2_ppm));
     if (cfg_.management_enabled && !cfg_.nutrients_enabled) throw std::invalid_argument("Field: management_enabled needs nutrients_enabled");
+    if (cfg_.pathogens_enabled && !cfg_.management_enabled) throw std::invalid_argument("Field: pathogens_enabled needs management_enabled");
     if (cfg_.nutrients_enabled) {
         for (const SoilDesc& so : cfg_.soils)
             if (!so.has_nutrients) throw std::invalid_argument("Field: soil " + so.name + " has no nutrient block");
@@ -174,6 +175,7 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     }
     if (cfg_.management_enabled) init_management();   // before the nutrients: their initial N includes the weeds'
     if (cfg_.nutrients_enabled) init_nutrients();
+    if (cfg_.pathogens_enabled) init_pathogens();
 }
 
 int Field::cell_at_world(real x, real y) const {
@@ -281,6 +283,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             if (prev < cr->stage_emergence) {
                 if (mgmt) establish(c, *cr);   // plants from the seeds sown (sow() stored the full stand otherwise)
                 s.cc_peak[c] = s.cc[c];
+                if (cfg_.pathogens_enabled) pathogen_emergence(c);
             }
             else s.gdd_em[c] += gdd;
             const real t_em = cr->stages[static_cast<std::size_t>(cr->stage_emergence)].gdd;
@@ -288,6 +291,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             real zt = cr->zr_min_m + (cr->zr_max_m - cr->zr_min_m) * frac;
             if (mgmt) zt *= 1.0 - so.management.damage_root_penalty * s.damage[c];
             if (zt > s.zr[c]) set_root_depth(c, zt);
+            if (cfg_.pathogens_enabled) s.stress_rotation[c] = 1.0 - s.path_loss0[c] * (1.0 - fungicide_protection(c));
         }
     }
 
@@ -484,8 +488,10 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         fl.stage = st;
         fl.emerged = emerged;
         fl.shed_g_m2 = shed_g;
+        fl.gdd = gdd;
         step_nutrients(c, w, fl);
         if (mgmt) manage_poststep(c, w, fl);
+        if (cfg_.pathogens_enabled) step_pathogens(c, fl);
     }
 }
 
@@ -645,6 +651,8 @@ void Field::set_stress(int cell, const StressFactors& f) {
     if (cell < 0 || cell >= cell_count()) throw std::out_of_range("Field::set_stress: bad cell");
     for (real v : {f.n, f.pk, f.ph, f.weed, f.rotation})
         if (!(v >= 0.0 && v <= 1.0)) throw std::invalid_argument("Field::set_stress: factors must be in [0, 1]");
+    if (cfg_.pathogens_enabled && f.rotation != 1.0)
+        throw std::logic_error("Field::set_stress: the pathogen model owns the rotation factor (pathogens_enabled)");
     const std::size_t c = static_cast<std::size_t>(cell);
     s_.stress_n[c] = f.n;
     s_.stress_pk[c] = f.pk;
@@ -731,7 +739,9 @@ FieldCheckpoint Field::checkpoint() const {
 
 void Field::restore(const FieldCheckpoint& cp) {
     if (cp.nx != nx_ || cp.ny != ny_ || cp.state.d_root.size() != s_.d_root.size() ||
-        cp.state.crop.size() != s_.crop.size() || cp.state.no3_1.size() != s_.no3_1.size())
+        cp.state.crop.size() != s_.crop.size() || cp.state.no3_1.size() != s_.no3_1.size() ||
+        cp.state.res_c[0].size() != s_.res_c[0].size() || cp.state.path_p.size() != s_.path_p.size() ||
+        cp.state.res_crop.size() != s_.res_crop.size())
         throw std::invalid_argument("Field::restore: checkpoint does not fit this grid");
     s_ = cp.state;
 }
@@ -765,6 +775,12 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
                               &s_.w_tt, &s_.w_n, &s_.w_seed_pl, &s_.w_res_pl, &s_.w_res_sd, &s_.h_act, &s_.l_c_crop,
                               &s_.l_c_wg, &s_.l_c_rem, &s_.l_c_co2, &s_.weed_f})
             h = fold_vec(h, *v);
+    }
+    if (cfg_.pathogens_enabled) {
+        h = fold_vec(h, s_.path_p);
+        h = fold_vec(h, s_.path_s);
+        h = fold_vec(h, s_.path_loss0);
+        h = fold_vec(h, s_.res_crop);
     }
     return h;
 }

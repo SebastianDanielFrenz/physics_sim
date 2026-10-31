@@ -118,3 +118,36 @@ A crop starts from a sowing operation (operation.md `seed`); `Field::sow` of the
 (`ppol`, cold/heat) are still required and unused. Every key a new crop does not state keeps the wheat value with the source
 tag [AS] ("reused, not crop-specific"). The generator is `tools/fielddata/f1d_crop_gen.py`; the single-crop 30-year runs are
 `data/field_scenarios/crop_<name>_30y.json`. Tests `tests/unit/test_field_crops.cpp` (CR1-CR3).
+
+
+## Optional `pathogen` block (F1d part 4)
+
+Needed by every crop of a field with `"pathogens": true` (which also needs management and a non-empty `family` in every crop). The
+field keeps per cell and per `family` an inoculum P (0..1) and a suppression S (0..1); crops of one family (wheat and barley) share
+them. Required keys, each with a source tag: `agent` (text), `loss_max` (yield loss at P = 1 without suppression or fungicide, in
+[0, 1]), `build_per_season` (a whole season closes `1 - exp(-this)` of the gap 1 - P), `season_gdd` (development units from emergence
+to maturity that the build is measured against), `decay_half_life_days` (inoculum half-life while no host of the family grows;
+FAMILY property), `suppression_max` (< 1: share of the loss removed at S = 1), `suppression_gain` (S closes `1 - exp(-this P x)` of
+its gap per season, x = gdd/season_gdd), `suppression_half_life_days` (FAMILY property), `residue_source_per_day` and
+`residue_ref_c_kg_ha` (inoculum built per day from the surface residue left by a crop of this family, in proportion to the loose
+straw plus stubble carbon up to the reference). The two family half-lives must be equal across the crops of a family (the field
+refuses a palette where they differ).
+
+Daily, per family: while a crop of the family is emerged and before maturity: `P += (1-P)(1 - exp(-b x (1-protection)))`,
+`S += (1-S)(1 - exp(-g P x))`; otherwise `P *= exp(-ln2/half-life)`; S always decays; surface residue adds to P. When a crop
+emerges its untreated loss is fixed: `loss0 = loss_max P (1 - suppression_max S)`; every day it grows with the factor
+`stress_rotation = 1 - loss0 (1 - protection)` inside the biomass law (so `Field::set_stress` refuses a rotation factor while
+pathogens are on). Protection is the fungicide sprays since (herbicide.md). Tests `tests/unit/test_field_pathogens.cpp` P1-P8.
+
+Shipped values (data/crops/*.json, generator `tools/fielddata/f1d_path_gen.py`, tags in the files):
+
+| Crop | family | loss_max | build | decay half-life d | suppression | Basis |
+|---|---|---|---|---|---|---|
+| winter_wheat, winter_barley | cereal | 0.66 | 0.7 | 110 | max 0.9, gain 0.4, half-life 1800 d | [M] to AHDB second wheat 10-15 % below first wheat, 10-20 % in second and third wheat, take-all peak in year 3-5 and decline (Rothamsted via Wikipedia) |
+| winter_rapeseed | brassica | 0.5 | 0.8 | 700 | none | [M] to topagrar: a 4-year break yields 8-15 % more than rapeseed every third year |
+| grain_maize | maize | 0.15 | 0.6 | 400 | none | [AS], no number found |
+| sugar_beet | beet | 0.25 | 1.0 | 700 | none | [AS], no number found |
+
+Measured in the field model (test P8, home loess, yield ratios against the same run without pathogens): first wheat after a
+one-year break 0.967, continuous wheat second 0.847, third 0.823 (worst), years 11-16 mean 0.872; rapeseed every 3rd year 0.804,
+every 5th year 0.913 (+13 %).

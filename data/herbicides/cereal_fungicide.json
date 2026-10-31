@@ -1,0 +1,51 @@
+{
+  "format": "physics_sim.herbicide/1",
+  "name": "cereal_fungicide",
+  "moa": "group_fungicide_demethylation_inhibitor",
+  "label_rate": 1.0,
+  "targets": {},
+  "resistance": {
+    "ed50_factor": 1.0,
+    "source": {
+      "ed50_factor": "[AS] resistance of fungi is not modelled; the factor must be >= 1."
+    }
+  },
+  "residual": {
+    "half_life_days": 0.0,
+    "germ_kill": 0.0,
+    "source": {
+      "half_life_days": "[AS] no soil residual; the protection decays with the fungicide block.",
+      "germ_kill": "[AS] a fungicide does not act on weed seedlings."
+    }
+  },
+  "crops": {
+    "default": {
+      "max_bbch": 99.0,
+      "damage_in": 0.0,
+      "damage_out": 0.0,
+      "source": {
+        "max_bbch": "[AS] applied at any stage.",
+        "damage_in": "[AS] no crop damage at the label rate.",
+        "damage_out": "[AS] no crop damage at the label rate."
+      }
+    }
+  },
+  "damage": {
+    "dose_exponent": 1.5,
+    "source": {
+      "dose_exponent": "[AS] unused: the product does no crop damage."
+    }
+  },
+  "fungicide": {
+    "efficacy_max": 0.6,
+    "dose_half": 0.3,
+    "half_life_days": 200.0,
+    "family": "cereal",
+    "source": {
+      "efficacy_max": "[AS] largest share of the take-all loss a seed treatment or foliar programme buys back; AHDB advises a seed treatment for third wheat and calls take-all control by chemistry partial; no numeric efficacy was found. Always below 1: a fungicide never buys back the whole loss.",
+      "dose_half": "[AS] dose relative to the label rate that gives half of efficacy_max (saturation dose/(dose + dose_half)); at the label rate 0.77 of efficacy_max (0.46).",
+      "half_life_days": "[AS] the protection of one application fades with this half-life, 200 d: a seed or early-autumn treatment protects through the root-infection period."
+    }
+  },
+  "source": "F1d part 4: a partial-protection fungicide for the pathogen model. The spray path is the herbicide one (operation \"spray\": {\"product\", \"dose\"})."
+}

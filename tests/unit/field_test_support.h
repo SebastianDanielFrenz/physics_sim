@@ -262,4 +262,26 @@ inline double mean_of_range(const std::vector<YearResult>& v, std::size_t from, 
     return n ? s / static_cast<double>(n) : 0.0;
 }
 
+
+// --- pathogens (F1d part 4) -------------------------------------------------------------------------
+// Crop ids of pathogen_config(): 1 winter_wheat, 2 winter_barley, 3 winter_rapeseed, 4 grain_maize, 5 sugar_beet;
+// herbicide (fungicide) id 1 = cereal_fungicide. Management and pathogens on, no weeds, deep loess.
+inline field::CropDesc crop_named(const std::string& name) { return ps::io::load_crop_json(data_dir() / "crops" / (name + ".json")); }
+inline field::FieldConfig pathogen_config(int nx = 1, int ny = 1, double depletion = 0.2) {
+    field::FieldConfig cfg = nutrient_config(loess(), wheat(), nx, ny);
+    cfg.crops.clear();
+    for (const char* n : {"winter_wheat", "winter_barley", "winter_rapeseed", "grain_maize", "sugar_beet"}) cfg.crops.push_back(crop_named(n));
+    cfg.herbicides.push_back(ps::io::load_herbicide_json(data_dir() / "herbicides/cereal_fungicide.json"));
+    cfg.initial_depletion_fraction = depletion;
+    cfg.management_enabled = true;
+    cfg.pathogens_enabled = true;
+    return cfg;
+}
+inline field::OperationEffect fungicide_spray(double dose = 1.0) {
+    field::OperationEffect e;
+    e.spray.product = 1;
+    e.spray.dose = dose;
+    return e;
+}
+
 } // namespace ps::test_field

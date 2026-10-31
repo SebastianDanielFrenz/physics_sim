@@ -119,6 +119,10 @@ struct CropDesc {
     bool has_management = false;
     CropManagementDesc management;
 
+    // Optional pathogen block (F1d); required when the field runs with pathogens_enabled.
+    bool has_pathogen = false;
+    PathogenDesc pathogen;
+
     int stage_count() const { return static_cast<int>(stages.size()); }
     // Canopy cover at emergence for a given density scale.
     real cc0(real density_scale) const { return cc0_cm2_per_plant * 1.0e-4 * plant_density_per_ha * density_scale / 1.0e4; }

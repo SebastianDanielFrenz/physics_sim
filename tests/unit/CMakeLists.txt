@@ -369,6 +369,7 @@ add_executable(ps_field_tests
   test_field_nutrient_processes.cpp
   test_field_reference.cpp
   test_field_crops.cpp
+  test_field_pathogens.cpp
 )
 
 target_link_libraries(ps_field_tests

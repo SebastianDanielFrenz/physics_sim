@@ -14,3 +14,16 @@ a kind that is absent is not affected), `resistance.ed50_factor` (ED50 multiplie
 
 Kill of a weed group: `1 - (1 - r) S(dose) - r S(dose / ed50_factor)`-style two-biotype mixture with the susceptible share `1 - r`;
 the survivors raise `r` (selection): `r' = r (1 - kr) / ((1 - r)(1 - ks) + r (1 - kr))`. Seed produced by the survivors inherits `r'`.
+
+## Optional `fungicide` block (F1d part 4)
+
+A product with a `fungicide` block is a fungicide: it acts on the pathogen pressure of the growing crop, not on weeds (give it an
+empty `targets` object and zero crop damage). Keys, all with source tags: `efficacy_max` (in [0, 1): the largest protection, a
+fungicide never buys back the whole loss), `dose_half` (dose relative to the label rate that gives half of it), `half_life_days`
+(the protection fades with it), and the optional string `family` (the crop family it protects; empty or absent = every family).
+A spray of dose d on a cell with a crop sets `p = efficacy_max d/(d + dose_half)` (times the coverage share) and adds it as
+`1 - (1 - old)(1 - p)`, capped at `efficacy_max`; on bare soil it does nothing. The protection (the product's `h_act`, decaying
+with `half_life_days` instead of the residual half-life) divides the crop's untreated pathogen loss by `1 - protection` and slows
+the build of next season's inoculum. Shipped: data/herbicides/cereal_fungicide.json ([AS]: efficacy_max 0.6, dose_half 0.3,
+half-life 200 d, family cereal; operation data/operations/spray_cereal_fungicide.json): at the label dose it buys back about a
+third of the take-all loss when applied right after emergence (test P6: 37 %).

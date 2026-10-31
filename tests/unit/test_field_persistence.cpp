@@ -445,3 +445,135 @@ TEST_CASE("P9 with nutrients: the daily step and the applications allocate nothi
     CHECK(g_allocations.load() == 0);
     CHECK(std::isfinite(acc));
 }
+
+// ---- with pathogens (F1d part 4) ---------------------------------------------------------------------
+
+namespace {
+
+FieldConfig mixed_pathogen(int nx = 3, int ny = 2) {
+    FieldConfig cfg = test_field::pathogen_config(nx, ny, 0.3);
+    return cfg;
+}
+
+const OperationEffect& fungicide_op() {
+    static const OperationEffect e = test_field::fungicide_spray(1.0);
+    return e;
+}
+
+// Every cell its own crop of the five (wheat, barley, rapeseed, maize, beet), sown on doy 288 (also over a standing crop),
+// harvested on doy 212 from year 1, a fungicide spray on doy 300.
+void apply_ops_p(Field& f, const DailyWeather& w) {
+    if (w.doy == 288)
+        for (int c = 0; c < f.cell_count(); ++c) f.sow(c, 1 + (c % 5));
+    if (w.doy == 212 && w.day > 365) f.harvest_all(0.5);
+    if (w.doy == 300) f.apply_all(fungicide_op());
+}
+
+void play_p(Field& f, DailyWeatherSource& src, std::int64_t last) {
+    for (std::int64_t d = f.last_day() + 1; d <= last; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops_p(f, w);
+        f.step_day(w);
+    }
+}
+
+bool same_pathogens(const Field& a, const Field& b) {
+    if (a.fold_hash(1469598103934665603ull) != b.fold_hash(1469598103934665603ull)) return false;
+    for (int c = 0; c < a.cell_count(); ++c) {
+        const PathogenView x = a.pathogen_view(c), y = b.pathogen_view(c);
+        if (x.inoculum != y.inoculum || x.suppression != y.suppression || x.loss_untreated != y.loss_untreated ||
+            x.fungicide_protection != y.fungicide_protection || x.growth_factor != y.growth_factor)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+TEST_CASE("P10 with pathogens: 1, 2, 3 and 10 threads give the same state, jumps and a checkpoint too", "[field][persistence][pathogen]") {
+    DailyWeatherSource src(test_field::farm_climate(), 5);
+    src.prefetch(0, 900);
+    const FieldConfig cfg = mixed_pathogen(8, 8);
+    Field seq(cfg);
+    for (std::int64_t d = 0; d <= 900; ++d) {
+        apply_ops_p(seq, src.record(d));
+        seq.step_day(src.record(d));
+    }
+    const std::uint64_t want = seq.fold_hash(1469598103934665603ull);
+    // the run carries real pathogen state (some cell has inoculum and a loss), or the comparison would be vacuous
+    bool any_inoculum = false, any_loss = false;
+    for (int c = 0; c < seq.cell_count(); ++c) {
+        const PathogenView v = seq.pathogen_view(c);
+        for (double p : v.inoculum) any_inoculum = any_inoculum || p > 0.01;
+        any_loss = any_loss || v.loss_untreated > 0.01;
+    }
+    CHECK(any_inoculum);
+    CHECK(any_loss);
+    for (int threads : {1, 2, 3, 10}) {
+        Field f(cfg);
+        const int n = f.cell_count();
+        std::barrier start(threads + 1), done(threads + 1);
+        const DailyWeather* today = nullptr;
+        bool stop = false;
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t) {
+            const int begin = n * t / threads, end = n * (t + 1) / threads;
+            pool.emplace_back([&, begin, end] {
+                for (;;) {
+                    start.arrive_and_wait();
+                    if (stop) return;
+                    f.step_cells(begin, end, *today);
+                    done.arrive_and_wait();
+                }
+            });
+        }
+        for (std::int64_t d = 0; d <= 900; ++d) {
+            const DailyWeather& w = src.record(d);
+            apply_ops_p(f, w);
+            today = &w;
+            start.arrive_and_wait();
+            done.arrive_and_wait();
+            f.finish_day(d);
+        }
+        stop = true;
+        start.arrive_and_wait();
+        for (std::thread& th : pool) th.join();
+        INFO(threads << " threads");
+        CHECK(f.fold_hash(1469598103934665603ull) == want);
+        CHECK(same_pathogens(f, seq));
+    }
+    // checkpoint in the middle of a season and restore
+    Field a(cfg);
+    play_p(a, src, 500);
+    const FieldCheckpoint cp = a.checkpoint();
+    play_p(a, src, 900);
+    Field b(cfg);
+    b.restore(cp);
+    play_p(b, src, 900);
+    CHECK(same_pathogens(a, b));
+    CHECK(a.fold_hash(1469598103934665603ull) == want);
+    // a checkpoint from a field without pathogens does not fit
+    FieldConfig plain_cfg = cfg;
+    plain_cfg.pathogens_enabled = false;
+    Field plain(plain_cfg);
+    CHECK_THROWS_AS(b.restore(plain.checkpoint()), std::invalid_argument);
+}
+
+TEST_CASE("P11 with pathogens: the daily step and the sprays allocate nothing once warm", "[field][persistence][pathogen]") {
+    DailyWeatherSource src(test_field::farm_climate(), 3);
+    src.prefetch(0, 900);
+    Field f(mixed_pathogen(8, 8));
+    play_p(f, src, 5);
+    g_allocations.store(0);
+    g_count_allocations.store(true);
+    for (std::int64_t d = 6; d <= 900; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops_p(f, w);
+        f.step_day(w);
+    }
+    g_count_allocations.store(false);
+    CHECK(g_allocations.load() == 0);
+    double acc = 0.0;
+    for (int c = 0; c < f.cell_count(); ++c) acc += f.pathogen_view(c).loss_untreated;
+    CHECK(std::isfinite(acc));
+}

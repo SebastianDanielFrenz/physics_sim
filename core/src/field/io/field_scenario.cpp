@@ -108,6 +108,14 @@ FieldScenario load_field_scenario(const std::filesystem::path& path) {
     } else {
         r.skip("management");
     }
+    if (r.has("pathogens")) {
+        const json* b = r.child("pathogens");
+        if (!b->is_boolean()) r.fail("\"pathogens\" must be a boolean");
+        sc.field.pathogens_enabled = b->get<bool>();
+        if (sc.field.pathogens_enabled && !sc.field.management_enabled) r.fail("\"pathogens\" needs \"management\": true");
+    } else {
+        r.skip("pathogens");
+    }
     if (r.has("weeds")) {
         const json* a = r.child("weeds");
         if (!a->is_array()) r.fail("\"weeds\" must be an array of file names");
@@ -237,6 +245,10 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
     if (csv) *csv << (sc.field.nutrients_enabled ? ",nmin_kg_ha,nh4_kg_ha,tan_surface_kg_ha,ph,p_test,k_test,f_n,f_pk,n_crop_kg_ha,n_leached_cum,nh3_cum,n_mineralised_cum,n_denitrified_cum" : "");
     if (csv && sc.field.management_enabled)
         *csv << ",residue_t_ha,residue_cover,loosening,seedbed,crop_plants_m2,weed_factor,weed_plants_m2,weed_biomass_g_m2,weed_seeds_m2,humus_c_kg_ha,g0_plants,g1_plants,g2_plants,g3_plants,g0_seeds,g1_seeds,g2_seeds,g3_seeds";
+    if (csv && sc.field.pathogens_enabled) {
+        for (const std::string& fam : f.family_names()) *csv << ",path_p_" << fam << ",path_s_" << fam;
+        *csv << ",path_loss_untreated,fungicide_protection,rotation_factor";
+    }
     if (csv) *csv << "\n";
     for (std::int64_t d = 0; d < n_days; ++d) {
         const field::DailyWeather& w = src.record(d);
@@ -323,6 +335,23 @@ FieldRunSummary run_field_scenario(const FieldScenario& sc, std::ostream* csv) {
                 std::snprintf(b3, sizeof b3, ",%.3f,%.4f,%.4f,%.4f,%.2f,%.4f,%.3f,%.3f,%.2f,%.1f,%.2f,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f", res / n, cov / n, loose / n, sb / n,
                               pl / n, wf / n, wp / n, wbm / n, ws / n, soc / n, gp[0] / n, gp[1] / n, gp[2] / n, gp[3] / n, gs[0] / n, gs[1] / n, gs[2] / n, gs[3] / n);
                 *csv << b3;
+            }
+            if (sc.field.pathogens_enabled) {   // field mean
+                const std::size_t nf = f.family_names().size();
+                std::vector<double> pp(nf, 0.0), ps(nf, 0.0);
+                double lo = 0, fp = 0, gf = 0;
+                for (int c = 0; c < n; ++c) {
+                    const field::PathogenView pv = f.pathogen_view(c);
+                    for (std::size_t k = 0; k < nf; ++k) { pp[k] += pv.inoculum[k]; ps[k] += pv.suppression[k]; }
+                    lo += pv.loss_untreated; fp += pv.fungicide_protection; gf += pv.growth_factor;
+                }
+                char b4[64];
+                for (std::size_t k = 0; k < nf; ++k) {
+                    std::snprintf(b4, sizeof b4, ",%.5f,%.5f", pp[k] / n, ps[k] / n);
+                    *csv << b4;
+                }
+                std::snprintf(b4, sizeof b4, ",%.5f,%.5f,%.5f", lo / n, fp / n, gf / n);
+                *csv << b4;
             }
             *csv << "\n";
         }

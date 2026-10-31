@@ -208,6 +208,7 @@ void Field::crop_to_residue(std::size_t c, real fraction, bool standing) {
     if (fraction > 1.0) fraction = 1.0;
     const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(s.crop[c] - 1)];
     const SoilManagementDesc& m = soil_of(c).management;
+    if (cfg_.pathogens_enabled) s.res_crop[c] = s.crop[c];   // its residue now carries the family's inoculum
     const std::size_t pool = standing ? 1 : 0;
     const real dm_above = fraction * s.biomass[c];                  // g/m2
     const real c_above = dm_above * 10.0 * m.res_c_fraction;        // kg C/ha
@@ -245,6 +246,7 @@ void Field::do_harvest_mgmt(std::size_t c, const HarvestEffect& h, real cov, Har
     const SoilManagementDesc& m = soil_of(c).management;
     const real phi = std::min(1.0, cov);
     if (!(phi > 0.0)) return;
+    if (cfg_.pathogens_enabled) s.res_crop[c] = s.crop[c];
     const real g_all = phi * s.grain[c];                             // g/m2 on the plants
     const real lost = h.grain_loss * g_all;                          // dropped on the ground by the machine
     const real g = g_all - lost;                                     // taken away
@@ -571,7 +573,8 @@ void Field::manage_poststep(std::size_t c, const DailyWeather& w, const DayFlows
     const std::size_t H = cfg_.herbicides.size();
     for (std::size_t h = 0; h < H; ++h) {
         real& a = s.h_act[c * H + h];
-        const real hl = cfg_.herbicides[h].residual_half_life_days;
+        const HerbicideDesc& hd = cfg_.herbicides[h];
+        const real hl = hd.fungicide_efficacy_max > 0.0 ? hd.fungicide_half_life_days : hd.residual_half_life_days;
         a = (hl > 0.0 && a > 1.0e-9) ? a * ps::math::exp(-0.6931471805599453 / hl) : 0.0;
     }
 
