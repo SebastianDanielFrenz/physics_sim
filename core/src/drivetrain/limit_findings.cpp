@@ -27,6 +27,9 @@ const char* to_string(LimitKind k) {
     case LimitKind::BeyondEngineData: return "BeyondEngineData";
     case LimitKind::TowedMass: return "TowedMass";
     case LimitKind::TongueLoad: return "TongueLoad";
+    case LimitKind::LiftCapacity: return "LiftCapacity";
+    case LimitKind::PtoShaftTorque: return "PtoShaftTorque";
+    case LimitKind::ToolPower: return "ToolPower";
     }
     return "Unknown";
 }
@@ -55,6 +58,7 @@ const char* to_string(LimitUnit u) {
     case LimitUnit::Second: return "s";
     case LimitUnit::CrankDegree: return "deg";
     case LimitUnit::Newton: return "N";
+    case LimitUnit::Kilowatt: return "kW";
     }
     return "Unknown";
 }

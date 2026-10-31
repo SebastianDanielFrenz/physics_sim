@@ -457,7 +457,7 @@ void Pto::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Ass
     // `out` decays instead of spinning forever (otherwise a mode change
     // could never become eligible again after disengagement).
     if (engagement_ == real(0.0)) {
-        const real c = out_node_inertia_ / desc_.disengaged_brake_time_s;
+        const real c = (out_node_inertia_ + load_.inertia_kgm2) / desc_.disengaged_brake_time_s;
         stub_tau0_ = -c * omega_old_out_;
         stub_d_ = c;
         assembly.torque(out_, stub_tau0_, stub_d_);
@@ -465,6 +465,20 @@ void Pto::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Ass
         stub_tau0_ = real(0.0);
         stub_d_ = real(0.0);
     }
+
+    // The implement's rotor on `out_`: its inertia implicit, its load a friction that holds the shaft still instead of
+    // turning it backwards. Linear below kLoadStop rad/s, with the slope in d: the solve then stops it at zero.
+    constexpr real kLoadStop = real(1.0);
+    const real d_inertia = load_.inertia_kgm2 / ctx.h;
+    if (std::abs(omega_old_out_) < kLoadStop) {
+        const real slope = load_.torque_nm / kLoadStop;
+        load_tau0_ = -slope * omega_old_out_;
+        load_d_ = d_inertia + slope;
+    } else {
+        load_tau0_ = -load_.torque_nm * sign(omega_old_out_);
+        load_d_ = d_inertia;
+    }
+    if (load_d_ != real(0.0) || load_tau0_ != real(0.0)) assembly.torque(out_, load_tau0_, load_d_);
 }
 
 void Pto::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&, PowertrainEnergy& ledger) {
@@ -477,6 +491,8 @@ void Pto::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, co
     const real omega_new_out = net.omega(out_);
     const real tau_applied = stub_tau0_ - stub_d_ * (omega_new_out - omega_old_out_);
     ledger.pto_clutch_loss += -ctx.h * tau_applied * omega_new_out;
+    const real tau_load = load_tau0_ - load_d_ * (omega_new_out - omega_old_out_);
+    ledger.external_absorbed += -ctx.h * tau_load * omega_new_out;
 
     lambda_row_prev_ = lambda;
     if (desc_.efficiency < real(1.0)) {
@@ -497,6 +513,15 @@ std::uint64_t Pto::fold_state_hash(std::uint64_t seed) const {
     }
     h ^= mode_1000_ ? std::uint64_t(1) : std::uint64_t(0);
     h *= 1099511628211ULL;
+    if (load_.inertia_kgm2 != real(0.0)) {
+        for (const real v : {load_.inertia_kgm2, load_.torque_nm}) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(&v);
+            for (std::size_t i = 0; i < sizeof(v); ++i) {
+                h ^= bytes[i];
+                h *= 1099511628211ULL;
+            }
+        }
+    }
     if (desc_.efficiency < real(1.0)) {
         const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_row_prev_);
         for (std::size_t i = 0; i < sizeof(lambda_row_prev_); ++i) {
