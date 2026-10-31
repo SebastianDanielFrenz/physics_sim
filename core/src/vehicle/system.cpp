@@ -1,7 +1,5 @@
 #include "system.h"
 
-#include "../machine/coupling_solver.h"
-
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
@@ -23,9 +21,7 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
 HitchId System::create_coupling(const machine::CouplingDesc& desc) {
     if (!contains(desc.towing) || !contains(desc.towed)) throw std::invalid_argument("create_coupling: unknown vehicle");
     if (desc.towing == desc.towed) throw std::invalid_argument("create_coupling: a vehicle cannot tow itself");
-    if (desc.frequency_hz < 0.0 || desc.damping_ratio < 0.0 || desc.stiffness_n_m < 0.0 || desc.damping_n_s_m < 0.0)
-        throw std::invalid_argument("create_coupling: negative stiffness or damping");
-    if (desc.frequency_hz == 0.0 && desc.stiffness_n_m == 0.0) throw std::invalid_argument("create_coupling: no stiffness");
+    machine::validate_hitch_class(desc.hitch);
     Coupling c;
     c.desc = desc;
     c.towing = desc.towing.index;
@@ -64,25 +60,26 @@ void System::rebuild_islands() {
 void System::solve_coupling(Coupling& c, real h) {
     VehicleTickWork& wa = tick_work_[c.towing];
     VehicleTickWork& wb = tick_work_[c.towed];
-    const auto socket_body = [h](const VehicleTickWork& w, const Vec3& socket_local) {
+    // Every other force of this substep, this coupling's own from an earlier pass excepted.
+    const auto socket_body = [h](const VehicleTickWork& w, const Vec3& socket_local, const Quat& frame_local, const Vec3& own_force, const Vec3& own_torque) {
         machine::SocketBody b;
         b.socket_offset = w.pose_s.orientation.rotate(socket_local);
         b.socket_position = w.pose_s.position + b.socket_offset;
-        b.linear = w.twist_s.linear + (w.force_s * w.ip.inv_mass + w.a_ext) * h;
-        b.angular = w.twist_s.angular + (w.ip.inv_inertia_world * w.torque_s + w.alpha_ext) * h;
+        b.hitch_frame = w.pose_s.orientation * frame_local;
+        b.linear = w.twist_s.linear + ((w.force_s - own_force) * w.ip.inv_mass + w.a_ext) * h;
+        b.angular = w.twist_s.angular + (w.ip.inv_inertia_world * (w.torque_s - own_torque) + w.alpha_ext) * h;
         b.inv_mass = w.ip.inv_mass;
         b.inv_inertia_world = w.ip.inv_inertia_world;
         return b;
     };
-    const machine::SocketBody a = socket_body(wa, c.desc.socket_towing_local);
-    const machine::SocketBody b = socket_body(wb, c.desc.socket_towed_local);
-    const machine::SocketSolve solved = machine::solve_socket_coupling(a, b, c.desc, h);
-    VehicleInstance::substep_add_wrench(wa, solved.force_on_a, cross(a.socket_offset, solved.force_on_a));
-    VehicleInstance::substep_add_wrench(wb, -solved.force_on_a, cross(b.socket_offset, -solved.force_on_a));
-    c.state.mean_force_on_towing_world += solved.force_on_a;
-    c.state.error_world = solved.error;
-    c.state.max_error_m = std::max(c.state.max_error_m, solved.error.length());
-    c.state.work_j += solved.work_j;
+    const machine::SocketBody a = socket_body(wa, c.desc.socket_towing_local, c.desc.frame_towing_local, c.force, c.torque_towing);
+    const machine::SocketBody b = socket_body(wb, c.desc.socket_towed_local, c.desc.frame_towed_local, -c.force, c.torque_towed);
+    c.last = machine::solve_socket_coupling(a, b, c.desc.hitch, h);
+    VehicleInstance::substep_add_wrench(wa, c.last.force_on_a - c.force, c.last.torque_on_a - c.torque_towing);
+    VehicleInstance::substep_add_wrench(wb, c.force - c.last.force_on_a, c.last.torque_on_b - c.torque_towed);
+    c.force = c.last.force_on_a;
+    c.torque_towing = c.last.torque_on_a;
+    c.torque_towed = c.last.torque_on_b;
 }
 
 void System::step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
@@ -106,7 +103,23 @@ void System::step_island(Island& island, IRigidBackend& backend, const std::vect
     const real h = tick_work_[island.vehicles.front()].substep_dt;
     for (std::size_t s = 0; s < num_substeps; ++s) {
         for (const std::size_t i : island.vehicles) instances_[i]->substep_forces(tick_work_[i], s, backend);
-        for (const std::size_t ci : island.couplings) solve_coupling(couplings_[ci], h);
+        for (const std::size_t ci : island.couplings) {
+            Coupling& c = couplings_[ci];
+            c.force = c.torque_towing = c.torque_towed = Vec3::zero();
+        }
+        for (int pass = 0; pass < coupling_passes_; ++pass) {
+            for (const std::size_t ci : island.couplings) solve_coupling(couplings_[ci], h);
+        }
+        for (const std::size_t ci : island.couplings) {
+            Coupling& c = couplings_[ci];
+            c.state.mean_force_on_towing_world += c.last.force_on_a;
+            c.state.error_world = c.last.error;
+            c.state.max_error_m = std::max(c.state.max_error_m, c.last.error.length());
+            c.state.yaw_rad = c.last.angle[0];
+            c.state.pitch_rad = c.last.angle[1];
+            c.state.roll_rad = c.last.angle[2];
+            c.state.work_j += c.last.work_j;
+        }
         for (const std::size_t i : island.vehicles) VehicleInstance::substep_advance(tick_work_[i]);
     }
     for (const std::size_t ci : island.couplings) couplings_[ci].state.mean_force_on_towing_world /= static_cast<real>(num_substeps);

@@ -707,6 +707,10 @@ HitchId World::create_coupling(const machine::CouplingDesc& desc) {
     return vehicle_system_->create_coupling(desc);
 }
 
+void World::set_coupling_options(int passes) {
+    vehicle_system_->set_coupling_options(passes);
+}
+
 const machine::CouplingState& World::coupling_state(HitchId id) const {
     if (!vehicle_system_->contains(id)) throw std::invalid_argument("invalid coupling");
     return vehicle_system_->coupling_state(id);

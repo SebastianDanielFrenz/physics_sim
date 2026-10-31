@@ -310,6 +310,7 @@ public:
     // setup time. The two vehicles then step together in one job, substep by substep. Couplings are never destroyed.
     HitchId create_coupling(const machine::CouplingDesc& desc);
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
+    void set_coupling_options(int passes);
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the

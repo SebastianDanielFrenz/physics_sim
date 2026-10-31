@@ -16,6 +16,8 @@
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/ids.h"
 
+#include "../machine/coupling_solver.h"
+
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -55,6 +57,7 @@ public:
     // World with no coupling never reaches any of this.
     HitchId create_coupling(const machine::CouplingDesc& desc);
     [[nodiscard]] bool contains(HitchId id) const { return id.generation == 1 && id.index < couplings_.size(); }
+    void set_coupling_options(int passes) { coupling_passes_ = passes; }
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
 
     // Called by World right before the backend steps, sequential: see VehicleInstance::align_backend_with_shadow.
@@ -101,6 +104,9 @@ private:
         machine::CouplingDesc desc;
         std::size_t towing = 0, towed = 0; // indices into instances_
         machine::CouplingState state;
+        // This substep's wrench so far: a later pass replaces it, it does not add to it.
+        Vec3 force{}, torque_towing{}, torque_towed{};
+        machine::SocketSolve last{};
     };
     // Sorted by lowest vehicle index; vehicles and couplings ascending. Built at setup, read only during the tick.
     struct Island {
@@ -115,6 +121,7 @@ private:
 
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
     std::vector<Coupling> couplings_;
+    int coupling_passes_ = 1;
     std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
     std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only
     std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs
