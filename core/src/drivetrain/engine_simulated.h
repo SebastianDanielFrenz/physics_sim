@@ -277,6 +277,7 @@ public:
     // and DFCO latch of the last pre_solve, the live ambient and friction estimate). manual_law false on a mechanical
     // linkage.
     [[nodiscard]] PedalEnvelope request_envelope(real rpm) const override;
+    [[nodiscard]] real charging_fuel_g_s(real rpm, real torque_nm) const override;
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
     void reset(EngineState state) override;
 

@@ -1,5 +1,6 @@
 #include "powertrain.h"
 #include "ps/drivetrain/hybrid_split.h"
+#include "hybrid_charge.h"
 
 #include "engine_params_util.h"
 #include "engine_simulated.h"
@@ -1882,7 +1883,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     for(const auto& c:pt.components)if(const auto* control=std::get_if<HybridControlDesc>(&c.params)) {
         if(hybrid_)throw std::invalid_argument("only one hybrid supervisor is supported");
         if(!engine_||!gearbox_||(!clutch_&&!auto_))throw std::invalid_argument("hybrid supervisor requires an ICE and disconnecting gearbox");
-        if(!std::isfinite(control->requested_power_w)||control->requested_power_w<=0||!std::isfinite(control->low_soc)||control->low_soc<0||
+        if(!std::isfinite(control->charge_power_w)||control->charge_power_w<=0||!std::isfinite(control->requested_power_w)||control->requested_power_w<=0||!std::isfinite(control->low_soc)||control->low_soc<0||
            !std::isfinite(control->charge_target_soc)||control->charge_target_soc>1||control->low_soc>=control->charge_target_soc||
            !std::isfinite(control->charge_rpm)||control->charge_rpm<=0||!std::isfinite(control->generator_fraction)||control->generator_fraction<0||control->generator_fraction>1||
            !std::isfinite(control->stop_delay_s)||control->stop_delay_s<0||!std::isfinite(control->crank_timeout_s)||control->crank_timeout_s<=0)
@@ -2427,6 +2428,31 @@ void Powertrain::begin_substep() {
     if (!compliant_.empty()) assembly_.begin_substep_implicit(network_.node_count());
 }
 
+real Powertrain::hybrid_generator_power(real rpm,real fraction) const {
+    real total=0;
+    for(const auto& battery:batteries_) {
+        real mechanical=0,electrical=0;
+        for(const auto* m:electric_motors_)if(m->is_crank_machine() && &m->battery()==battery.get()) {
+            const auto& d=m->desc();
+            const real p=std::min(d.regen_torque_nm*rpm_to_rad_per_s(rpm)*fraction,
+                d.regen_power_w>0?d.regen_power_w:d.max_power_w);
+            mechanical+=p;electrical+=p*d.efficiency;
+        }
+        total+=mechanical*std::min(real(1),battery->desc.max_charge_w/std::max(real(1),electrical));
+    }
+    return total;
+}
+
+void Powertrain::plan_hybrid_charge() {
+    const auto plan=select_hybrid_charge_point(hybrid_->charge_power_w,engine_->idle_rpm()*real(1.4),
+        engine_limiter_rpm_*real(.95),hybrid_->charge_optimize_efficiency,
+        [&](real rpm){
+            for(const auto* m:electric_motors_)if(m->is_crank_machine()&&rpm>=m->desc().max_rpm)return real(0);
+            return std::min(hybrid_generator_power(rpm,1),engine_->request_envelope(rpm).f_nm*rpm_to_rad_per_s(rpm)/real(1.1));},
+        [&](real rpm,real power){return engine_->charging_fuel_g_s(rpm,power/rpm_to_rad_per_s(rpm));});
+    hybrid_charge_rpm_=plan.rpm;hybrid_charge_power_w_=plan.power_w;
+}
+
 int Powertrain::hybrid_fit_gear(const ComponentSubstepCtx& ctx) const {
     if (!gearbox_) return 0;
     constexpr real kRpm = real(60) / (real(2) * real(3.14159265358979323846));
@@ -2522,8 +2548,24 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         if(hybrid_charge_latched_&&running&&hybrid_disconnect_&&!hybrid_electric_active_) {
             const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
             const real taper=std::clamp((hybrid_->charge_target_soc-battery_soc())/real(.02),real(0),real(1));
-            ctx.electric_charge=rpm>engine_->idle_rpm()*real(1.4)?hybrid_->generator_fraction*taper:0;
-            ctx.throttle=std::clamp(real(.45)+real(.0006)*(hybrid_->charge_rpm-rpm),real(0),real(1));
+            hybrid_charge_plan_s_-=ctx.h;
+            if(hybrid_charge_plan_s_<=0){plan_hybrid_charge();hybrid_charge_plan_s_=real(.5);}
+            const real omega=std::max(real(1),rpm_to_rad_per_s(rpm));
+            // Unload below target speed so the engine can accelerate into its feasible band.
+            const real ramp=std::clamp((rpm-engine_->idle_rpm())/std::max(real(1),hybrid_charge_rpm_-engine_->idle_rpm()),real(0),real(1));
+            const real power=hybrid_charge_power_w_*taper*ramp;
+            real lo=0,hi=1;
+            for(int i=0;i<24;++i){const real mid=(lo+hi)*real(.5);if(hybrid_generator_power(rpm,mid)<power)lo=mid;else hi=mid;}
+            ctx.electric_charge=power>0?hi:0;
+            const auto env=engine_->request_envelope(rpm);
+            const real ff=std::clamp((power/omega-env.z_nm)/std::max(real(1),env.f_nm-env.z_nm),real(0),real(1));
+            const real error=hybrid_charge_rpm_-rpm;
+            const real raw=ff+real(.0003)*error+hybrid_charge_integral_;
+            if((raw>0&&raw<1)||(raw<=0&&error>0)||(raw>=1&&error<0))
+                hybrid_charge_integral_=std::clamp(hybrid_charge_integral_+real(.00015)*error*ctx.h,real(-.5),real(.5));
+            ctx.throttle=std::clamp(raw,real(0),real(1));
+        } else {
+            hybrid_charge_plan_s_=hybrid_charge_rpm_=hybrid_charge_power_w_=hybrid_charge_integral_=0;
         }
         // ICE connect while rolling: engaging a gear on an idling engine at road speed dragged the engine up through the
         // clutch (or shifted through every gear). Engage the gear the schedule fits, keep the clutch open and rev the
@@ -2820,6 +2862,14 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         if (!(gearbox_ && (tcu_ || auto_))) {
             last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
         }
+        // A disconnected engine produces no tyre torque. Keep wheel interventions on the
+        // traction motors, but remove their throttle and ignition cuts from the ICE.
+        if(hybrid_&&hybrid_disconnect_) {
+            auto engine_ctx=ctx;
+            engine_ctx.traction_throttle_ceiling=engine_ctx.tcu_throttle_ceiling=engine_ctx.launch_throttle_ceiling=1;
+            engine_ctx.tcu_throttle_floor=0;
+            last_throttle_command_=throttle_stage_.evaluate(engine_ctx,last_throttle_hand_lever_raw_);
+        }
         const ThrottleCommand& throttle_cmd = last_throttle_command_;
 
         EngineTorqueMap::Sensors s;
@@ -2863,10 +2913,10 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             nitrous_->step(ni);
             s.nitrous = nitrous_->engine_input();
         }
-        EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
-        req.hold_boost_control = ctx.tcu_ignition_cut || ctx.tcu_throttle_ceiling < real(1.0); // Boost B0: shift in progress
-        req.traction_cut = ctx.traction_ignition_cut && !ctx.tcu_ignition_cut; // pedal P1 (b), engine.h TcuRequest
-        if (ctx.launch_limiter_rpm > real(0.0)) req.limiter_rpm = ctx.launch_limiter_rpm; // assists I4: the unit's launch control (Armed)
+        EngineTorqueMap::TcuRequest req{!(hybrid_&&hybrid_disconnect_) && (ctx.tcu_ignition_cut || ctx.traction_ignition_cut)};
+        req.hold_boost_control = !(hybrid_&&hybrid_disconnect_) && (ctx.tcu_ignition_cut || ctx.tcu_throttle_ceiling < real(1.0)); // Boost B0: shift in progress
+        req.traction_cut = !(hybrid_&&hybrid_disconnect_) && ctx.traction_ignition_cut && !ctx.tcu_ignition_cut; // pedal P1 (b), engine.h TcuRequest
+        if (!(hybrid_&&hybrid_disconnect_) && ctx.launch_limiter_rpm > real(0.0)) req.limiter_rpm = ctx.launch_limiter_rpm; // assists I4: the unit's launch control (Armed)
         if (launch_) { // engine garage P8 (A16): the second rev limit, through the engine's own limiter
             LaunchControl::Inputs li;
             li.switch_on = ctx.assist_launch_control;
@@ -3297,6 +3347,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     b_prev_request_ = kGearRequestNone;
     if (brakes_ != nullptr) brakes_->set_hold_level(real(0.0));
     hybrid_connect_s_ = real(0.0);
+    hybrid_charge_plan_s_=hybrid_charge_rpm_=hybrid_charge_power_w_=hybrid_charge_integral_=0;
     // 1. Snapshot total rotational KE BEFORE any change (signed delta booked
     //    as ledger_.external_reset below - unlike apply_topology_switch's
     //    always-non-negative engagement_loss, a reset is an arbitrary
@@ -3485,6 +3536,7 @@ real Powertrain::clutch_slip() const {
 std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = network_.fold_state_hash(seed);
     for(const auto& b:batteries_)h=b->fold_state_hash(h);
+    if(hybrid_charge_rpm_>0){for(real v:{hybrid_charge_plan_s_,hybrid_charge_rpm_,hybrid_charge_power_w_,hybrid_charge_integral_}){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}}}
     if(hybrid_){for(real v:{real(hybrid_charge_latched_),hybrid_selector_,hybrid_idle_s_,hybrid_crank_s_}){const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}
         if(hybrid_connect_s_>0){const real v=hybrid_connect_s_;const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}}
     if(!electric_motors_.empty()) {

@@ -240,3 +240,39 @@ The existing Eco pedal mapping and low-SOC charging supervisor remain active: th
 but stays disconnected from the wheels. B uses the existing available motor regeneration, charge acceptance,
 wheel-slip protection and low-speed auto-hold. Leaving both Eco and Electric clears B; changing between them keeps it.
 ICE-only cars do not gain B.
+
+### Hybrid launch-control motor limits
+
+When a fitted combustion launch controller holds the clutch open, wheel-path motors produce no drive torque.
+On release its throttle ceiling also scales electric drive after the constant-power corner, alongside the TC limit.
+Crank-assist generators remain available for engine start and regeneration is unaffected. The host drive-mode policy
+controls where the fitted controller is allowed to operate.
+
+## Disconnected hybrid charging power (2026-10-23)
+
+`hybrid_control.charge_power_w` is requested mechanical ICE output (default 50000 W).
+`charge_optimize_efficiency` defaults true; false selects the lowest sampled feasible
+RPM. Legacy `charge_rpm` and `generator_fraction` remain accepted for old files but
+no longer determine the charging operating point. The low-SOC latch, target SOC,
+Electric-mode prohibition and end-of-charge taper remain in effect.
+
+The planner samples 65 speeds from 1.4 times engine idle to 95% of its limiter,
+checks engine full-load power with 10% speed-control reserve, generator torque,
+generator power, generator maximum RPM and the connected batteries' charge power.
+It first establishes achievable power, then minimizes estimated fuel per unit work
+at that power. Unsupported fuel estimates fall back to lowest feasible speed.
+The plan updates every 0.5 s; throttle feed-forward and PI speed control track it,
+and generator loading ramps in below target RPM. Actual engine and electrical
+outputs remain physical simulation results rather than imposed power sources.
+
+Simulated engines estimate fuel with their combustion maps at the candidate net
+crank torque. Turbo charge temperature and exhaust pressure interpolate from
+ambient to the full-load envelope with load; cam/lift use the current plant.
+This is an approximate steady model, not a settled turbo dyno sweep or a certified
+global optimum. Torque-map engines with a fuel map use it; without a supported
+fuel map they retain the RPM fallback. Generator losses and traction demand mean
+net battery charging power can be lower than the requested ICE output.
+
+Disconnected ICE throttle and ignition ignore wheel traction-control cuts while
+electric traction motors retain those interventions. Standalone generator loading
+also respects its regen power rating (regen_power_w, or max_power_w when absent).

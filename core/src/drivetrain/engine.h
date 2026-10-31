@@ -361,6 +361,11 @@ public:
     // engine's CURRENT ECU state (DFCO latch, idle controller output of the last pre_solve, ambient, friction
     // estimate). Net crank torque, N*m. Never hashed; for tests and the later automatic power request.
     [[nodiscard]] virtual PedalEnvelope request_envelope(real rpm) const = 0;
+    // Fuel estimate at a requested net crank torque. NaN means no supported fuel model;
+    // the charge planner then retains its lowest feasible RPM fallback.
+    [[nodiscard]] virtual real charging_fuel_g_s(real, real) const {
+        return std::numeric_limits<real>::quiet_NaN();
+    }
 
     [[nodiscard]] virtual std::uint64_t fold_state_hash(std::uint64_t seed) const = 0;
 

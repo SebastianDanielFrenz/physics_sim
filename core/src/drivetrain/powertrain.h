@@ -733,6 +733,9 @@ private:
     // ICE connect while rolling: > 0 = the rev-match window is open (clutch held open, engine revved toward the fit gear's
     // input speed), the time since it opened. Hashed only while > 0.
     real hybrid_connect_s_=0;
+    real hybrid_charge_plan_s_=0,hybrid_charge_rpm_=0,hybrid_charge_power_w_=0,hybrid_charge_integral_=0;
+    void plan_hybrid_charge();
+    [[nodiscard]] real hybrid_generator_power(real rpm,real fraction) const;
     // The gear a hybrid's ICE connects in at the present speed (0 = none: CVT or no gearbox).
     [[nodiscard]] int hybrid_fit_gear(const ComponentSubstepCtx& ctx) const;
     int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;

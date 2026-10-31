@@ -444,6 +444,13 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     return r;
 }
 
+real EngineTorqueMap::charging_fuel_g_s(real rpm, real torque_nm) const {
+    if (!desc_.has_fuel_map) return std::numeric_limits<real>::quiet_NaN();
+    const PedalEnvelope e = request_envelope(rpm);
+    const real command = std::clamp((torque_nm-e.cut_nm)/std::max(real(1),e.f_nm-e.cut_nm),real(0),real(1));
+    return desc_.fuel_map.value(rpm,command);
+}
+
 std::uint64_t EngineTorqueMap::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = seed;
     auto fold = [&h](const auto& v) {

@@ -69,7 +69,8 @@ public:
             const real reserved=battery_.reserve_discharge(r.wanted_j);
             torque_nm=direction*motor_drive_torque(desc_,r,reserved,battery_.content(),ctx.h,&drive_limit);
         } else if(direction!=0&&(regen>0||b_regen_nm_>0)&&std::abs(omega)>1) {
-            real demand=desc_.regen_torque_nm*regen;
+            real demand=std::min(desc_.regen_torque_nm*regen,
+                (desc_.regen_power_w>0?desc_.regen_power_w:desc_.max_power_w)/std::abs(omega));
             real total_request_nm=request_nm_;
             if(blend_) {
                 // Brake blending: the motor takes the pedal's request first (request_nm_, motor-shaft terms, set by the
@@ -207,6 +208,14 @@ private:
             in.drives=motor_drives(desc_,in.pedal,in.regen,in.direction,in.rpm);
             in.command=in.pedal;
             in.scale=in.pedal>0&&ceiling<in.pedal?ceiling/in.pedal:real(1);
+        }
+        // Launch control owns wheel propulsion while staging / launching a hybrid too.
+        // The crank generator must remain available to start the combustion engine.
+        // Scale drive after the power corner; never scale regeneration.
+        if (!desc_.crank_assist) {
+            if (ctx.launch_hold_clutch) in.scale = real(0);
+            else if (in.pedal > real(0))
+                in.scale = std::min(in.scale, std::clamp(ctx.launch_throttle_ceiling, real(0), real(1)) / in.pedal);
         }
         return in;
     }
