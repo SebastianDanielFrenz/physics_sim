@@ -633,7 +633,7 @@ void World::apply_contents_mass(bool force) {
         const VehicleId id{static_cast<id_index_t>(vi), 1};
         const real contents = std::max(real(0.0), vehicle_system_->at(id).fuel_tank_mass()) +
                               std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass()) +
-                              vehicle_system_->at(id).fuel_cell_hydrogen_kg();
+                              vehicle_system_->at(id).fuel_cell_hydrogen_kg() + cm.payload_kg;
         if (!force && std::abs(contents - cm.applied_kg) < cm.threshold_kg) continue;
         backend_->set_mass(cm.chassis, cm.dry_kg + contents);
         cm.applied_kg = contents;
@@ -648,6 +648,18 @@ real World::chassis_contents_mass(VehicleId id) const {
 real World::chassis_dry_mass(VehicleId id) const {
     if (id.index >= contents_mass_.size() || !contents_mass_[id.index].enabled) return 0.0;
     return contents_mass_[id.index].dry_kg;
+}
+
+void World::set_vehicle_payload_mass(VehicleId id, real kg) {
+    if (!(kg >= real(0.0)) || !std::isfinite(static_cast<double>(kg))) throw std::invalid_argument("set_vehicle_payload_mass: the mass must be finite and not negative");
+    if (id.index >= contents_mass_.size() || !contents_mass_[id.index].enabled)
+        throw std::logic_error("set_vehicle_payload_mass: the vehicle has no contents_mass block (enable it in the vehicle file)");
+    contents_mass_[id.index].payload_kg = kg;
+}
+
+real World::vehicle_payload_mass(VehicleId id) const {
+    if (id.index >= contents_mass_.size() || !contents_mass_[id.index].enabled) return 0.0;
+    return contents_mass_[id.index].payload_kg;
 }
 
 void World::move_kinematic(BodyId id, const Pose& target) { backend_->move_kinematic(id, target, dt_); }

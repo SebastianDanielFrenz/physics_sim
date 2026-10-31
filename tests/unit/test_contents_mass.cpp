@@ -4,6 +4,12 @@
 // existing vehicle is unchanged.
 //
 // Fixture: tests/support/fixtures/vehicle_tank_sedan.json (car_sedan + an E5 tank, capacity 40 kg, initial 30 kg).
+//
+// Payload mass (World::set_vehicle_payload_mass, the farm game's grain and tank loads): the last four cases.
+// Recorded sabotages (2026-10-31, harvest chain G3), each shown to fail the cases named:
+//   S1  apply_contents_mass without `+ cm.payload_kg`           -> "payload ..." body-mass and inertia cases fail
+//   S2  set_vehicle_payload_mass without the enabled check      -> the "needs the block" case fails
+//   S3  payload not part of the semi-live threshold test        -> "payload follows" case fails (a 0.05 kg change is applied)
 
 #include "ps/io/vehicle_io.h"
 #include "ps/io/surface_table.h"
@@ -206,4 +212,89 @@ TEST_CASE("contents mass: the loader reads the block and rejects bad values", "[
     CHECK_THROWS_WITH(load(v), ContainsSubstring("contents_mass: unknown key 'threshold'"));
     v["contents_mass"] = true;
     CHECK_THROWS_WITH(load(v), ContainsSubstring("contents_mass must be an object"));
+}
+
+// ---- payload mass --------------------------------------------------------------------------------------------------
+
+TEST_CASE("payload mass: the body carries it on top of dry mass and fuel, the inertia scales, 0 takes it off again", "[unit][vehicle][contents_mass][payload]") {
+    Rig rig = make_rig(tank_sedan(true));
+    World& w = *rig.world;
+    const Mat3 i0 = w.backend().get_inertia_world(rig.chassis);
+    const real m0 = w.get_mass(rig.chassis);
+    CHECK(m0 == Catch::Approx(kDry + 30.0).epsilon(1e-6));
+    CHECK(w.vehicle_payload_mass(rig.vehicle) == 0.0);
+
+    w.set_vehicle_payload_mass(rig.vehicle, 12800.0);
+    CHECK(w.vehicle_payload_mass(rig.vehicle) == 12800.0);
+    CHECK(w.get_mass(rig.chassis) == Catch::Approx(m0).epsilon(1e-9)); // not before the tick boundary
+    w.step();
+    CHECK(w.get_mass(rig.chassis) == Catch::Approx(kDry + 30.0 + 12800.0).margin(0.2));
+    CHECK(w.chassis_contents_mass(rig.vehicle) == Catch::Approx(30.0 + 12800.0).margin(0.2));
+    CHECK(w.chassis_dry_mass(rig.vehicle) == Catch::Approx(kDry).epsilon(1e-6));
+    const Mat3 i1 = w.backend().get_inertia_world(rig.chassis);
+    const real ratio = w.get_mass(rig.chassis) / m0;
+    CHECK(i1(0, 0) == Catch::Approx(i0(0, 0) * ratio).epsilon(1e-5));
+    CHECK(i1(2, 2) == Catch::Approx(i0(2, 2) * ratio).epsilon(1e-5));
+
+    w.set_vehicle_payload_mass(rig.vehicle, 0.0);
+    w.step();
+    CHECK(w.get_mass(rig.chassis) == Catch::Approx(m0).margin(0.2));
+    CHECK(w.chassis_contents_mass(rig.vehicle) == Catch::Approx(30.0).margin(0.2));
+}
+
+TEST_CASE("payload mass: a vehicle that did not opt in is refused and a bad mass is refused", "[unit][vehicle][contents_mass][payload]") {
+    Rig off = make_rig(tank_sedan(false));
+    CHECK_THROWS_AS(off.world->set_vehicle_payload_mass(off.vehicle, 100.0), std::logic_error);
+    CHECK(off.world->vehicle_payload_mass(off.vehicle) == 0.0);
+    Rig on = make_rig(tank_sedan(true));
+    CHECK_THROWS_AS(on.world->set_vehicle_payload_mass(on.vehicle, -1.0), std::invalid_argument);
+    CHECK_THROWS_AS(on.world->set_vehicle_payload_mass(on.vehicle, std::nan("")), std::invalid_argument);
+    CHECK(on.world->vehicle_payload_mass(on.vehicle) == 0.0);
+}
+
+TEST_CASE("payload mass: it follows semi-live inside the threshold, as the fuel does", "[unit][vehicle][contents_mass][payload]") {
+    Rig rig = make_rig(tank_sedan(true, 0.1));
+    World& w = *rig.world;
+    w.set_vehicle_payload_mass(rig.vehicle, 1000.0);
+    w.step();
+    const real base = w.get_mass(rig.chassis);
+    // a change under the threshold is not applied, a change over it is
+    w.set_vehicle_payload_mass(rig.vehicle, 1000.05);
+    w.step();
+    CHECK(w.get_mass(rig.chassis) == Catch::Approx(base).epsilon(1e-12));
+    w.set_vehicle_payload_mass(rig.vehicle, 1000.5);
+    w.step();
+    CHECK(w.get_mass(rig.chassis) == Catch::Approx(base + 0.5).margin(0.06));
+    // an unloading at 75 kg/s in 240 Hz ticks: the body never trails the load by more than the threshold
+    real load = 1000.5;
+    for (int t = 0; t < 240; ++t) {
+        load -= 75.0 / 240.0;
+        w.set_vehicle_payload_mass(rig.vehicle, load);
+        w.step();
+        CHECK(std::abs((w.get_mass(rig.chassis) - kDry - w.fuel_tank_mass(rig.vehicle)) - load) <= 0.1 + 1e-6);
+    }
+}
+
+TEST_CASE("payload mass: a heavier body accelerates slower, and the state is the same for any worker count", "[unit][vehicle][contents_mass][payload][determinism]") {
+    auto run = [](int workers, real payload, std::uint64_t& hash) {
+        Rig rig = make_rig(tank_sedan(true), workers);
+        World& w = *rig.world;
+        w.set_vehicle_payload_mass(rig.vehicle, payload);
+        w.set_control("throttle", 1.0);
+        for (int t = 0; t < 240 * 4; ++t) {
+            if (t == 240 * 2) w.set_vehicle_payload_mass(rig.vehicle, payload * 0.5);
+            w.step();
+        }
+        hash = w.state_hash();
+        return speed(w, rig.chassis);
+    };
+    std::uint64_t h0 = 0, h1 = 0, h10 = 0, h_light = 0;
+    const real v_loaded = run(1, 1500.0, h1);
+    const real v_loaded10 = run(10, 1500.0, h10);
+    const real v_empty = run(1, 0.0, h_light);
+    (void)h0;
+    CHECK(h1 == h10);
+    CHECK(v_loaded10 == v_loaded);
+    CHECK(h1 != h_light);
+    CHECK(v_empty > v_loaded * 1.05);
 }
