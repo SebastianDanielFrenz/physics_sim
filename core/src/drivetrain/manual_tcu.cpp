@@ -112,7 +112,29 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                         const real up_th = lerp(up_z, up_f, shift_req);
                         const real down_th = lerp(dn_z, dn_f, shift_req);
                         if (dwell_ok && engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
-                        else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
+                        else if (engine_rpm < down_th && s.gearbox_current > 1) {
+                            desired_target = s.gearbox_current - 1;
+                            const real fraction = desc_.auto_shift.downshift_target_fraction;
+                            if (fraction > real(0.0) && s.forward_ratios != nullptr) {
+                                // Several gears at once: the highest gear below the current one whose input rpm at this road speed reaches the
+                                // target between the thresholds, else the floor gear (a stop ends in it); no downshift below the floor.
+                                const int floor_gear = std::max(1, desc_.auto_shift.downshift_floor_gear);
+                                if (s.gearbox_current <= floor_gear) {
+                                    desired_target = s.gearbox_current;
+                                } else {
+                                    const real target_rpm = down_th + fraction * (up_th - down_th);
+                                    int pick = floor_gear;
+                                    for (int g = s.gearbox_current - 1; g > floor_gear; --g) {
+                                        if (g > s.forward_ratio_count) continue;
+                                        if (out_rpm * std::abs(s.forward_ratios[g - 1]) >= target_rpm) {
+                                            pick = g;
+                                            break;
+                                        }
+                                    }
+                                    desired_target = pick;
+                                }
+                            }
+                        }
                     }
                 }
             }

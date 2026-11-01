@@ -99,6 +99,10 @@ public:
         // first decision comes min_time_in_gear_s after the window closes (an engine still rising to the gear's input speed
         // is not a reason to downshift). false = bit-identical to before.
         bool defer_auto_shift = false;
+        // The gearbox's forward ratios, first gear first (w_in = ratio * w_out); only AutoShiftDesc::downshift_target_fraction reads them
+        // (a downshift that picks the gear from the road speed). nullptr = none known: the one-gear downshift.
+        const real* forward_ratios = nullptr;
+        int forward_ratio_count = 0;
     };
 
     struct Outputs {

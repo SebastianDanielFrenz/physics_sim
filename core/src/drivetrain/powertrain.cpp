@@ -2731,6 +2731,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.synchro_target_ratio = last_gearbox_result_.synchro_target_ratio;
             s.min_gear = -static_cast<int>(gearbox_->desc().reverse_ratios.size());
             s.max_gear = static_cast<int>(gearbox_->desc().forward_ratios.size());
+            s.forward_ratios = gearbox_->desc().forward_ratios.data();
+            s.forward_ratio_count = s.max_gear;
             // Engine's demanded net crank torque (limiter ignored), from its
             // previous substep - EngineTorqueMap::PreSolveResult::torque_demand.
             if (engine_) s.engine_torque_nm = last_engine_result_.torque_demand;
