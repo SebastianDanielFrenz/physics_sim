@@ -1052,6 +1052,7 @@ private:
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
         slots_[id.index].prepared = std::move(prepared);
+        slots_[id.index].wheel_contact = desc.wheel_contact;
         body_interface().SetUserData(jph_id, pack_body_id(id));
         if (raw_heightfield != nullptr || is_mesh) {
             terrain_surface_body_ids_.insert(std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jph_id), jph_id);
@@ -1420,13 +1421,20 @@ public:
         return out;
     }
 
-    ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const override {
+    // Wheel casts skip bodies whose Slot::wheel_contact is false. Reads slots_ only (written at body creation / set_wheel_contact between
+    // steps), allocation-free, safe from the wheel jobs.
+    void set_wheel_contact(BodyId id, bool value) override { slots_[id.index].wheel_contact = value; }
+
+    ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance,
+                            bool skip_non_wheel_bodies) const override {
+        const WheelBodyFilter wheel_filter(slots_);
+        const JPH::BodyFilter& body_filter = skip_non_wheel_bodies ? static_cast<const JPH::BodyFilter&>(wheel_filter) : static_cast<const JPH::BodyFilter&>(default_body_filter_);
         return with_query_shape(shape, [&](const JPH::Shape& jsh) -> ShapeCastHit {
             JPH::RMat44 start = JPH::RMat44::sRotationTranslation(to_jph_quat(start_pose.orientation), to_rvec3(start_pose.position));
             JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&jsh, JPH::Vec3::sReplicate(1.0f), start, to_vec3f(sweep_world.normalized() * max_distance));
             JPH::ShapeCastSettings settings;
             JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-            physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector);
+            physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector, {}, {}, body_filter);
             // D0 (dog release spike): with the default settings Jolt's GJK cast of a cylinder that is nearly axis
             // aligned against a very large thin box (the 1000 m test-rig ground) occasionally reports a phantom -
             // fraction 0 / "started penetrating" (penetration 0.18 m with 0.07 m true clearance) or a miss with the
@@ -1441,7 +1449,7 @@ public:
                 JPH::ShapeCastSettings recheck_settings;
                 recheck_settings.mUseShrunkenShapeAndConvexRadius = true;
                 JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> recheck;
-                physics_system_.GetNarrowPhaseQuery().CastShape(cast, recheck_settings, to_rvec3(start_pose.position), recheck);
+                physics_system_.GetNarrowPhaseQuery().CastShape(cast, recheck_settings, to_rvec3(start_pose.position), recheck, {}, {}, body_filter);
                 if (recheck.HadHit() && recheck.mHit.mFraction > 0.0f) collector = recheck;
             }
             ShapeCastHit out;
@@ -1556,12 +1564,25 @@ private:
         // always aggregate-inits a Slot, so a reused index never inherits
         // the previous occupant's opt-in).
         bool integrate_sub_threshold_rotation = false;
+        bool wheel_contact = true; // BodyDesc::wheel_contact
         // Non-null only for a body created from a ShapeHandle (racing_game
         // R2): keeps the prepared shape alive while the body exists, so
         // releasing every handle copy never frees a shape in use. Released
         // in free_slot, AFTER DestroyBody dropped the body's own reference.
         std::shared_ptr<const PreparedShape> prepared{};
     };
+    class WheelBodyFilter final : public JPH::BodyFilter {
+    public:
+        explicit WheelBodyFilter(const std::vector<Slot>& slots) : slots_(slots) {}
+        bool ShouldCollideLocked(const JPH::Body& body) const override {
+            const BodyId id = unpack_body_id(body.GetUserData());
+            return id.index >= slots_.size() || slots_[id.index].wheel_contact;
+        }
+    private:
+        const std::vector<Slot>& slots_;
+    };
+
+    JPH::BodyFilter default_body_filter_;
     struct JointSlot {
         JPH::Ref<JPH::Constraint> constraint;
         bool alive = false;

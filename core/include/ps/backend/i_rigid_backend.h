@@ -37,6 +37,10 @@ struct BodyDesc {
     ShapeDesc shape = SphereShape{};
     BodyMotionType motion = BodyMotionType::Dynamic;
     real mass = 1.0;              // ignored for Static/Kinematic
+    // A wheel (shape_cast with skip_non_wheel_bodies) may stand on this body. true = today's behaviour. false: the body is invisible to wheel
+    // casts - a parked machine's collision box, a woken vehicle, a bale: the chassis/collision shapes still meet it, only the wheel does not
+    // read its side or top as ground. Read in the wheel jobs, so set at creation (or between steps with set_wheel_contact), never mid-step.
+    bool wheel_contact = true;
     Pose pose = Pose::identity();
     Motion velocity{};
     real friction = 0.5;
@@ -386,7 +390,12 @@ public:
         auto hit=ray_cast(origin,direction,distance);
         return hit.hit&&hit.body==excluded ? RayCastHit{} : hit;
     }
-    [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+    // skip_non_wheel_bodies: bodies created with BodyDesc::wheel_contact == false are not hit (the wheel path; the D0 re-cast uses the same
+    // filter). false = every body, as before.
+    [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance,
+                                                  bool skip_non_wheel_bodies = false) const = 0;
+    // Sim thread, between steps only. Default: no backend keeps the flag.
+    virtual void set_wheel_contact(BodyId, bool) {}
 
     // Pure narrowphase overlap query (no sweep, no side effects on the
     // backend) - PLAN.md P1.5b strategy A: "Jolt is used only as a collision

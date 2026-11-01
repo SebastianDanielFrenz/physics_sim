@@ -72,6 +72,7 @@ add_executable(ps_unit_tests
   test_powertrain_pto.cpp
   test_powertrain_compliance.cpp
   test_sub_threshold_rotation.cpp
+  test_wheel_contact_flag.cpp
   test_table2d.cpp
   test_fuel_io.cpp
   test_engine_thermal_io.cpp
