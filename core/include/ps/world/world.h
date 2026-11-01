@@ -17,6 +17,9 @@
 #include "ps/jobs/task_graph.h"
 #include "ps/io/surface_table.h"
 #include "ps/machine/coupling.h"
+#include "ps/machine/soil_source.h"
+#include "ps/machine/tool.h"
+#include "ps/machine/work.h"
 #include "ps/machine/hitch_limits.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
@@ -151,6 +154,9 @@ public:
     [[nodiscard]] Pose get_pose(BodyId id) const { return backend_->get_pose(id); }
     [[nodiscard]] Motion get_motion(BodyId id) const { return backend_->get_motion(id); }
     [[nodiscard]] real get_mass(BodyId id) const { return backend_->get_mass(id); }
+    // Sets a dynamic body's mass (inertia scaled with it, as at creation). Sim thread, between steps. A machine carrying
+    // a tank uses it so that a full tank is heavier to carry and to pull; an unknown, static or non-positive mass is ignored.
+    void set_body_mass(BodyId id, real mass) { backend_->set_mass(id, mass); }
 
     // PLAN.md D10/P1.5a: our own reduced-coordinate (Featherstone) solver
     // for articulated chains. Runs in the vehicle-island stage,
@@ -350,6 +356,31 @@ public:
     void detach(HitchId id);
     [[nodiscard]] bool hitch_alive(HitchId id) const;
     [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
+    // A linkage's lift reads the towing vehicle's channels (LinkageDesc): attach sets the lever to where the implement
+    // hangs and the mode to Position, so that nothing moves until someone asks.
+    // The PTO shaft across a live hitch. On it, the implement's rotor is on the tractor's pto.out: engaging is the
+    // tractor's "pto" channel. The shaft comes off with the hitch. Sim thread, between steps.
+    [[nodiscard]] machine::PtoCheck check_pto(HitchId id) const;
+    void connect_pto(HitchId id); // std::invalid_argument with check_pto's message
+    void disconnect_pto(HitchId id);
+    [[nodiscard]] bool pto_connected(HitchId id) const;
+    // What the tools work in. Read from the vehicle jobs, concurrently; replaced only between steps. nullptr: no tool
+    // has soil under it. The source stays alive through this pointer.
+    void set_soil_source(std::shared_ptr<const machine::ISoilSource> soil);
+    [[nodiscard]] std::size_t vehicle_tool_count(VehicleId id) const;
+    [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const;
+    [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const;
+    // A roller or gauge wheel's depth setting, metres.
+    void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m);
+    // Switches an applicator tool (ToolKind::Applicator) on or off; between steps only, std::invalid_argument for a soil tool.
+    void set_tool_enabled(VehicleId id, std::size_t tool, bool on);
+    // What goes through the tool, kg/s: the term `specific_energy_kj_kg` of its shaft power is taken against it. The game states it
+    // (the product out of a tank, later a combine's crop); between steps only; any tool, 0 for none.
+    void set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s);
+    // Appends the quads the tools swept since the last drain, in (tick, vehicle, tool) order. Between steps; machine::
+    // WorkLedger turns them into cells. Each tool holds 4096 quads; a fuller buffer drops the newest and counts them.
+    void drain_work(std::vector<machine::WorkQuad>& out);
+    [[nodiscard]] std::uint64_t work_dropped() const;
     // Takes a vehicle out of the simulation, detaching its hitches. Its chassis stays a plain body, for the caller to
     // destroy or reuse; every other vehicle keeps its index and channels. Whatever checks a VehicleId refuses the stale
     // one, and WorldSnapshot::vehicles keeps its slot with an invalid id and no wheels.
@@ -401,6 +432,14 @@ public:
     // opt-in). The body's mass is dry + this; it trails the true contents by less than update_threshold_kg.
     [[nodiscard]] real chassis_contents_mass(VehicleId id) const;
     [[nodiscard]] real chassis_dry_mass(VehicleId id) const;
+    // Payload mass (the game's load: grain in a tank or a trailer bed, the content of a sprayer tank): a mass the chassis body
+    // carries on top of its dry mass and the fuel / N2O contents. Needs the vehicle's contents_mass block enabled (else
+    // std::logic_error: a vehicle that did not opt in stays as it was); kg must be finite and >= 0 (else std::invalid_argument).
+    // Call between steps. The body's mass follows at the next tick boundary like the fuel contents do, inside the block's
+    // update_threshold_kg; the inertia is rescaled with it and the centre of mass does not move (the load is spread like the
+    // body, not a point mass at the bed). vehicle_payload_mass is the last value set (0 without the block).
+    void set_vehicle_payload_mass(VehicleId id, real kg);
+    [[nodiscard]] real vehicle_payload_mass(VehicleId id) const;
     // Engine thermal plan T1 (vault PHYS-063): a vehicle with a cooling_system keeps lumped coolant/oil temperatures.
     // engine_thermal_state returns the live values in deg C (sim thread only; throws for a vehicle without thermal),
     // set_engine_thermal_state queues a new state for the next tick boundary (wax/play follow the coolant, fan off;
@@ -525,6 +564,7 @@ private:
         BodyId chassis{};
         real dry_kg = 0.0;
         real applied_kg = 0.0; // contents currently in the body mass
+        real payload_kg = 0.0; // set_vehicle_payload_mass: the part of the contents the game puts on the body
         real threshold_kg = 0.1;
     };
     std::vector<ContentsMassState> contents_mass_;

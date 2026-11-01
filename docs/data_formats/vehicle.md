@@ -31,6 +31,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `steering` | [steering object](#steering) | optional | all fields at their own defaults | see below | Ackermann steering geometry |
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
 | `tow_brake` | [tow_brake object](#tow-brake) | optional | none | needs `brake_system` corners | what drives this vehicle's brakes while it is towed |
+| `machine` | object `{ref, sockets}` | optional | none | a `physics_sim.machine/1` file and the model's sockets in chassis axes; `"wheels": []` is legal only with it | an implement's tools, [machine.md](machine.md) |
 | `hitch_points` | array of [hitch point objects](#hitch-points) | optional | none | see below | where hitches go on this vehicle |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
@@ -447,6 +448,7 @@ own `shafts[]`), so `in` is typically unioned onto the same node as
 | `efficiency` | real | optional | `1.0` | must be in `(0, 1]`, else `"<ctx>: pto 'efficiency' must be in (0, 1]"` | mesh efficiency; `< 1` books an efficiency-loss torque at `in` (same lagged-reconstruction pattern as `gear_pair`/`differential`) |
 | `out_inertia_kgm2` | real (kg·m²) | optional | `0` | **must be >= 0**, else `"<ctx>: pto 'out_inertia_kgm2' must be >= 0"` | inertia at `out` (the PTO shaft/stub itself, before whatever implement is attached) |
 | `disengaged_brake_time_s` | real (s) | optional | `1.0` | **must be > 0**, else `"<ctx>: pto 'disengaged_brake_time_s' must be > 0"` | while fully disengaged (`e == 0` exactly), the `out` node is given an implicit stub-brake damping term sized so its own free-spin-down time constant is this value — a disengaged PTO shaft simply drifts to rest instead of coasting forever |
+| `stall_guard` | object | optional | none | `{full_rpm, zero_rpm, source}`, `full_rpm > zero_rpm > 0`, else `"<ctx>: pto 'stall_guard' needs full_rpm > zero_rpm > 0"` | the clutch's capacity falls linearly from full at `full_rpm` of the crank to 0 at `zero_rpm`, the way an electronically controlled PTO clutch protects the engine: a load the engine cannot carry slips the shaft instead of stalling it. Stateless |
 | `channel` | string | optional | `"pto"` | **must be non-empty**, else `"<ctx>: pto 'channel' must be non-empty"` | declared control channel (default value `0`) whose value `>= 0.5` requests engagement |
 | `speed_channel` | string | optional | `"pto_speed"` | **must be non-empty**, else `"<ctx>: pto 'speed_channel' must be non-empty"` | declared control channel (default value `540.0`) selecting the mode: `>= 750` selects `"1000"`, else `"540"` — read only while eligible to switch (see below) |
 | `axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule/message as clutch `axis_local` | rotor-reaction axis shared by `in` and `out` (one physical shaft) |
@@ -1172,6 +1174,7 @@ towed, "socket_hitch_eye")`: two points mate when one tows, the other is towed a
 | `sockets` | object name -> `[x, y, z]` | one of the two | — | at least two | a linkage standing on several rig sockets; the point sits at their centroid |
 | `max_towed_mass_kg` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
 | `max_tongue_load_n` | real | optional | 0 = not rated | >= 0, towing points only | rating, see below |
+| `linkage` | object | optional | none | towing points of a three-point class | the lift and the links, [linkage.md](linkage.md) |
 
 A point takes one hitch at a time. The ratings never refuse a hitch: `World::hitch_limits(id, policy)` returns `TowedMass` and
 `TongueLoad` limit findings against them, the whole chain behind the hitch in the mass and last tick's vertical socket force in the

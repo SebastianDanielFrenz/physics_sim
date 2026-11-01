@@ -164,6 +164,11 @@ public:
     void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
 
     [[nodiscard]] const std::optional<machine::TowBrakeDesc>& tow_brake() const { return desc_.tow_brake; }
+    // The implement end of the PTO shaft (a tick's load, set before the substeps).
+    [[nodiscard]] bool has_pto() const { return powertrain_.has_pto(); }
+    [[nodiscard]] bool pto_offers(real rpm) const { return powertrain_.pto_offers(rpm); }
+    [[nodiscard]] real pto_out_omega() const { return powertrain_.pto_out_omega(); }
+    void set_pto_load(const drivetrain::PtoLoad& load) { powertrain_.set_pto_load(load); }
     [[nodiscard]] const std::vector<machine::HitchPointDesc>& hitch_points() const { return desc_.hitch_points; }
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the

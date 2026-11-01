@@ -13,7 +13,7 @@ yaw about the towing z, pitch about the resulting y, roll about the towed x.
 | `ball` | ±90 | ±20 | ±25 | a car's tow ball |
 | `drawbar_pin` | ±75 | ±20 | ±25 | a tractor's drawbar and a trailer eye |
 | `fifth_wheel` | ±90 | ±12 | locked | a truck's turntable |
-| `three_point_locked` | locked | locked | locked | a mounted implement, held rigidly |
+| `three_point_locked` | locked | locked | locked | a mounted implement; with a `linkage` block on the towing point the angle rows make way for the lift, [linkage.md](linkage.md) |
 
 The numbers are `data/hitch_classes/*.json`'s own; check there before you quote one.
 

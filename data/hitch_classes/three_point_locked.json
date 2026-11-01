@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.hitch_class/1",
   "name": "three_point_locked",
-  "source": "A three-point implement with the lift held and the links stabilised: one rigid body with the tractor for as long as it hangs there. The lift actuator and the links' float are not modelled.",
+  "source": "A three-point implement with the links stabilised. Between two plain sockets: one rigid body with the tractor. On a hitch point with a linkage (docs/data_formats/linkage.md) the linkage replaces the pitch row and this class gives the frequency, the latch and the locked yaw and roll.",
   "yaw": {"mode": "locked"},
   "pitch": {"mode": "locked"},
   "roll": {"mode": "locked"},

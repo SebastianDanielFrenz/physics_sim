@@ -51,6 +51,9 @@ enum class LimitKind : std::uint16_t {
                                // (ps/drivetrain/limiter_range.h): Limiting inside the band, Exceeded at/after its end
     TowedMass = 20,            // coupling A1: more behind a towing point than it is rated for (ps/machine/hitch_limits.h)
     TongueLoad = 21,           // coupling A1: more down on a towing point than it is rated for
+    LiftCapacity = 22,         // linkage A3: the lift at or past its force (ps/machine/hitch_limits.h)
+    PtoShaftTorque = 23,       // tools M1: a tool's PTO torque against the tractor's PTO clutch (ps/machine/tool.h)
+    ToolPower = 24,            // tools M1: a tool's power demand against the tractor's engine (ps/machine/tool.h)
 };
 
 // Near: within a margin of the limit (information); Limiting: this part caps the output here; Exceeded: the target is
@@ -73,6 +76,7 @@ enum class LimitUnit : std::uint8_t {
     Second = 10,       // P3b-2: a duration
     CrankDegree = 11,  // P7: a spark advance / retard, deg crank
     Newton = 12,       // coupling A1: a hitch load
+    Kilowatt = 13,     // machine M1: what a tool needs of an engine
 };
 
 // The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "forced_induction",

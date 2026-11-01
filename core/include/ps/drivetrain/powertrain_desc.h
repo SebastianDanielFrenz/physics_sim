@@ -838,6 +838,11 @@ struct PtoDesc {
     real efficiency = 1.0;                   // (0, 1]
     real out_inertia_kgm2 = 0.0;             // >= 0
     real disengaged_brake_time_s = 1.0;      // > 0
+    // Optional stall guard (full 0 = none): the clutch's capacity falls from full at guard_full_rpm of the crank to 0 at
+    // guard_zero_rpm, so a load the engine cannot carry slips the shaft instead of stalling the engine. Hashes and
+    // behaves as before without the block.
+    real guard_full_rpm = 0.0;
+    real guard_zero_rpm = 0.0;
     std::string channel = "pto";             // declared (default 0) via Powertrain::declare_control_channels; non-empty
     std::string speed_channel = "pto_speed"; // declared (default 540) via same; non-empty
     Vec3 axis_local = Vec3::zero();          // shared by `in`/`out` ports (one physical shaft), plan section 6.7

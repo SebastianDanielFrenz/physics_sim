@@ -9,9 +9,11 @@
 #pragma once
 
 #include "ps/machine/hitch_class.h"
+#include "ps/machine/linkage.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,6 +32,12 @@ struct HitchPointDesc {
     // Ratings of a towing point, read by check_hitch_limits. 0: not rated.
     real max_towed_mass_kg = 0.0;
     real max_tongue_load_n = 0.0;
+
+    // A point on the three sockets of a three-point hitch, one of them named *_top: the middle of the lower two and the
+    // top one. A towing point can carry a linkage on them; a towed point mates with it through these.
+    bool three_point = false;
+    Vec3 lower_pin_local{}, top_pin_local{};
+    std::optional<LinkageDesc> linkage;
 };
 
 [[nodiscard]] inline const HitchPointDesc* find_hitch_point(const std::vector<HitchPointDesc>& points, std::string_view name) {
