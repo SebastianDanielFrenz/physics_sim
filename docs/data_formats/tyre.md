@@ -1,5 +1,7 @@
 # Tyre format — `physics_sim.tyre/1`
 
+A tyre file may name a parent with `"extends"` (a relative path; objects merge, the child wins, as in every part file): a tyre of the same family differs in size and load only.
+
 Files: `data/tyres/*.json`, **or** inline inside a wheel's `"tyre"` field in
 a vehicle file, **or** a standard MF `.tir` parameter file. Loaders:
 `ps::io::load_tyre_json` (standalone file, `core/src/io/vehicle_io.cpp`),

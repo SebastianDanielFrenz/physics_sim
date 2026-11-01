@@ -278,7 +278,7 @@ TyreDesc read_tyre_ref(const json& j, const std::string& base_dir) {
         // A standalone tyre JSON file - carries its own "format", unlike an
         // inline object (below), which has no independent version of its
         // own and inherits its enclosing vehicle file's format instead.
-        const json tj = read_json_file(path);
+        const json tj = parts::load_part(path); // "extends": a tyre of the same family differs in size and load only
         require_format(tj, "tyre", 1, path);
         return read_tyre_object(tj);
     }
@@ -3985,7 +3985,7 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
 }
 
 vehicle::TyreDesc load_tyre_json(const std::string& path) {
-    const json j = read_json_file(path);
+    const json j = parts::load_part(path); // "extends", as read_tyre_ref
     require_format(j, "tyre", 1, path);
     return read_tyre_object(j);
 }
