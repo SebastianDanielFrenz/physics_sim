@@ -123,15 +123,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                                     desired_target = s.gearbox_current;
                                 } else {
                                     const real target_rpm = down_th + fraction * (up_th - down_th);
-                                    int pick = floor_gear;
+                                    int target_gear = floor_gear;
                                     for (int g = s.gearbox_current - 1; g > floor_gear; --g) {
                                         if (g > s.forward_ratio_count) continue;
                                         if (out_rpm * std::abs(s.forward_ratios[g - 1]) >= target_rpm) {
-                                            pick = g;
+                                            target_gear = g;
                                             break;
                                         }
                                     }
-                                    desired_target = pick;
+                                    desired_target = target_gear;
                                 }
                             }
                         }
