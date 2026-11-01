@@ -832,3 +832,47 @@ TEST_CASE("ManualTcu: auto-shift pulls away from neutral in start_gear", "[unit]
     CHECK(first_target(3) == 3);
     CHECK(first_target(99) == 6); // clamped to max_gear
 }
+
+// AutoShiftDesc::downshift_target_fraction / downshift_floor_gear: a downshift follows the road speed. Ratios 12 .. 1 (forward_ratios[0] is 1st):
+// ratio(g) = 20 / 1.2^(g-1). The engine falls below the downshift point in gear 12 at a given gearbox output speed; the box takes the highest gear below
+// whose input rpm reaches the target, the floor gear at a standstill, one gear when the key is off.
+// Sabotage DS-S1: pick = current - 1 in the multi-gear branch (manual_tcu.cpp) -> the "skips" and "floor" sections fail.
+TEST_CASE("ManualTcu: downshifts that follow the road speed", "[unit][drivetrain][tcu]") {
+    const real h = 1.0 / 960.0;
+    std::vector<real> ratios;
+    for (int g = 1; g <= 12; ++g) ratios.push_back(20.0 / std::pow(1.2, g - 1));
+    const auto target_after = [&](real fraction, int floor_gear, int current, real out_rpm, real engine_rpm) {
+        ManualTcu::Desc d;
+        d.auto_shift.up_rpm_at_zero_throttle = 1600.0;
+        d.auto_shift.up_rpm_at_full_throttle = 2150.0;
+        d.auto_shift.down_rpm_at_zero_throttle = 1000.0;
+        d.auto_shift.down_rpm_at_full_throttle = 1400.0;
+        d.auto_shift.min_time_in_gear_s = 0.0;
+        d.auto_shift.downshift_target_fraction = fraction;
+        d.auto_shift.downshift_floor_gear = floor_gear;
+        ManualTcu tcu(d);
+        ManualTcu::Sensors s = base_sensors();
+        s.assist_auto_shift = true;
+        s.shift_throttle_request = 0.0; // coasting: down 1000, up 1600
+        s.min_gear = -1;
+        s.max_gear = 12;
+        s.gearbox_current = current;
+        s.gearbox_target = current;
+        s.engine_omega = rpm_to_omega(engine_rpm);
+        s.gearbox_out_omega = rpm_to_omega(out_rpm);
+        s.forward_ratios = ratios.data();
+        s.forward_ratio_count = 12;
+        (void)tcu.step(s, h, true); // baseline
+        return tcu.step(s, h, true).gearbox_target;
+    };
+    // gear 12: ratio 20/1.2^11 = 2.69; out 330 rpm -> input 888 rpm < 1000 (the downshift point). The target between 1000 and 1600 at fraction 0.5 is 1300:
+    // gear 11 gives 1065, gear 10 1278, gear 9 1533 -> gear 9 is the first at or above... walking down from 11: 1065 < 1300, 1278 < 1300, 1533 >= 1300 -> 9.
+    CHECK(target_after(0.0, 1, 12, 330.0, 888.0) == 11); // key off: one gear
+    CHECK(target_after(0.5, 1, 12, 330.0, 888.0) == 9);  // skips three
+    CHECK(target_after(0.5, 1, 12, 330.0, 888.0) != 11);
+    CHECK(target_after(0.5, 6, 12, 330.0, 888.0) == 9);  // the floor is below the pick
+    CHECK(target_after(0.5, 10, 12, 330.0, 888.0) == 10); // the floor stops it at 10
+    CHECK(target_after(0.5, 6, 12, 5.0, 888.0) == 6);    // at a near standstill no gear reaches the target: the floor
+    CHECK(target_after(0.5, 6, 6, 5.0, 300.0) == 6);     // already in the floor gear: no downshift at all
+    CHECK(target_after(0.5, 1, 1, 5.0, 300.0) == 1);
+}

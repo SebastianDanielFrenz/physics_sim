@@ -124,6 +124,15 @@ struct AutoShiftDesc {
     // gear, as before (every vehicle that does not set it is bit-identical). A higher gear is for a gearbox whose first gears are crawler gears;
     // the shift points still apply afterwards, so a load that holds the engine below the down point is shifted down.
     int start_gear = 1;
+    // Downshifts that follow the road speed. 0 = off: a downshift is one gear per decision, as before (every vehicle that does not set it is
+    // bit-identical). In (0, 1]: when the engine rpm falls below the downshift point, auto-shift takes the highest gear below the current one
+    // whose input rpm at the present road speed reaches down_th + fraction * (up_th - down_th) (the thresholds of the present throttle), or
+    // downshift_floor_gear when none does - several gears at once, in one shift. A box with many close ratios no longer walks down one gear per
+    // dwell while the vehicle slows; at a standstill it ends in the floor gear.
+    real downshift_target_fraction = 0.0;
+    // The lowest gear such a downshift goes to (>= 1; the start gear keeps a stop in the gear the vehicle pulls away in). Used only with
+    // downshift_target_fraction > 0; below it the box does not downshift at all.
+    int downshift_floor_gear = 1;
 };
 
 // The loader-facing descriptor for a "manual_tcu" controller (plan section

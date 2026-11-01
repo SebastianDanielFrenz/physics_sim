@@ -90,6 +90,10 @@ public:
         real up_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), up_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
         real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
         real close_time_s = std::numeric_limits<real>::quiet_NaN();
+        // The gearbox's forward ratios, first gear first (w_in = ratio * w_out); only AutoShiftDesc::downshift_target_fraction reads them
+        // (a downshift that picks the gear from the road speed). nullptr = none known: the one-gear downshift.
+        const real* forward_ratios = nullptr;
+        int forward_ratio_count = 0;
     };
 
     struct Outputs {

@@ -4608,6 +4608,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 md.auto_shift.kickdown_throttle = asj.value("kickdown_throttle", md.auto_shift.kickdown_throttle); // assists I7
                 md.auto_shift.start_gear = asj.value("start_gear", md.auto_shift.start_gear);
                 if (md.auto_shift.start_gear < 1) throw std::runtime_error(ctx + ".auto_shift: start_gear must be >= 1");
+                md.auto_shift.downshift_target_fraction = asj.value("downshift_target_fraction", md.auto_shift.downshift_target_fraction);
+                if (!std::isfinite(md.auto_shift.downshift_target_fraction) || md.auto_shift.downshift_target_fraction < real(0.0) || md.auto_shift.downshift_target_fraction > real(1.0))
+                    throw std::runtime_error(ctx + ".auto_shift: downshift_target_fraction must be in [0, 1] (0 = one gear per downshift)");
+                md.auto_shift.downshift_floor_gear = asj.value("downshift_floor_gear", md.auto_shift.downshift_floor_gear);
+                if (md.auto_shift.downshift_floor_gear < 1) throw std::runtime_error(ctx + ".auto_shift: downshift_floor_gear must be >= 1");
                 if (!std::isfinite(md.auto_shift.kickdown_throttle) || md.auto_shift.kickdown_throttle < real(0.0) || md.auto_shift.kickdown_throttle > real(1.0)) {
                     throw std::runtime_error(ctx + ".auto_shift: kickdown_throttle must be in [0, 1] (0 = no bypass)");
                 }
