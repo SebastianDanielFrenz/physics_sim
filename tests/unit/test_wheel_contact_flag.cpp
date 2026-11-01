@@ -3,6 +3,7 @@
 // the wheel path only (shape_cast(..., skip_non_wheel_bodies = true), D0 re-cast included); the default shape_cast and every other query
 // are unchanged.
 // Sabotage WC-S1: pass `false` for the filter in the first CastShape call of jolt_backend.cpp's shape_cast -> WC6 and WC4 fail (WC2 is rescued by the D0 re-cast, which carries the same filter: sabotage that too and WC2 fails).
+// Sabotage WC-S2: drop the exclusion check in WheelBodyFilter::ShouldCollideLocked -> WC7 fails (the cast lands on the partner).
 
 #include "vehicle_test_helpers.h"
 

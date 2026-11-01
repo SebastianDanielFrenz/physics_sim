@@ -1299,6 +1299,11 @@ not on `ps_core`'s public include path).
     ManualTcu, which reads its `command` (`Sensors::throttle_request`) for
     the launch law, auto-shift thresholds and the N->1 auto-select - the
     assists act on the torque request, not the raw pedal. `EngineSoundState::throttle_command` = the command.
+  - Auto-shift pull-away and downshift keys (ManualTcu, docs/data_formats/vehicle.md): `start_gear` (default 1) is
+    the gear taken from neutral at a standstill; `downshift_target_fraction` (default 0 = one gear per decision) picks
+    the highest gear below the current one whose input rpm at this road speed reaches down + fraction*(up - down),
+    else `downshift_floor_gear`, in one shift. For gearboxes with crawler gears and many close ratios; no shipped
+    vehicle sets them. Tests test_powertrain_tcu.cpp.
   - Auto-clutch anti-stall (ManualTcu, `manual_tcu.cpp`; ca118ec and its
     2026-10-04 fix): a Locked clutch releases AT ONCE when engine rpm OR the
     SIGNED gearbox-input rpm falls below `AutoClutchDesc::anti_stall_rpm`.
@@ -1825,6 +1830,12 @@ mass. `World::create_vehicle` opts the chassis body in; nothing else does.
 at the broad phase (each listed body gets a group id on first use, the filter is created lazily because
 `JPH::Ref` needs the allocator `ensure_jolt_registered()` installs). Both exist for hitches: a real drawbar
 reaches under its tow vehicle.
+
+`BodyDesc::wheel_contact` (default true; `IRigidBackend::set_wheel_contact` between steps): false makes a body
+invisible to the wheel path only, `shape_cast(..., skip_non_wheel_bodies = true)` and `shape_cast_excluding(...,
+excluded, true)`, D0 re-cast included (`WheelBodyFilter`, which also carries the exclusion list); every other
+query still sees it. For farm bodies a wheel must not read as ground (parked machines, woken vehicles, bales).
+Tests `tests/unit/test_wheel_contact_flag.cpp` WC1-WC7 [world][backend][wheel_contact].
 
 `IRigidBackend::get_integration_params` (PHYS-033 I1 W1, `BodyIntegrationParams`
 in `ps/backend/i_rigid_backend.h`): `inv_mass`, `inv_inertia_world` (at the
