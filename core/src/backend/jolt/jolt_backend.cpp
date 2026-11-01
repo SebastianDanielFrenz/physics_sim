@@ -1066,6 +1066,7 @@ private:
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
         slots_[id.index].prepared = std::move(prepared);
+        slots_[id.index].wheel_contact = desc.wheel_contact;
         body_interface().SetUserData(jph_id, pack_body_id(id));
         if (raw_heightfield != nullptr || is_mesh) {
             terrain_surface_body_ids_.insert(std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jph_id), jph_id);
@@ -1483,11 +1484,19 @@ public:
         return out;
     }
 
-    ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const override {
+    // Wheel casts skip bodies whose Slot::wheel_contact is false. Reads slots_ only (written at body creation / set_wheel_contact between
+    // steps), allocation-free, safe from the wheel jobs.
+    void set_wheel_contact(BodyId id, bool value) override { slots_[id.index].wheel_contact = value; }
+
+    ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance,
+                            bool skip_non_wheel_bodies) const override {
+        if (skip_non_wheel_bodies) return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, WheelBodyFilter(slots_));
         return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, JPH::BodyFilter{});
     }
 
-    ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded) const override {
+    ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded,
+                                      bool skip_non_wheel_bodies) const override {
+        if (skip_non_wheel_bodies) return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, WheelBodyFilter(slots_, excluded));
         return shape_cast_filtered(shape, start_pose, sweep_world, max_distance, ExcludedBodies(*this, excluded));
     }
 
@@ -1641,12 +1650,26 @@ private:
         // always aggregate-inits a Slot, so a reused index never inherits
         // the previous occupant's opt-in).
         bool integrate_sub_threshold_rotation = false;
+        bool wheel_contact = true; // BodyDesc::wheel_contact
         // Non-null only for a body created from a ShapeHandle (racing_game
         // R2): keeps the prepared shape alive while the body exists, so
         // releasing every handle copy never frees a shape in use. Released
         // in free_slot, AFTER DestroyBody dropped the body's own reference.
         std::shared_ptr<const PreparedShape> prepared{};
     };
+    class WheelBodyFilter final : public JPH::BodyFilter {
+    public:
+        explicit WheelBodyFilter(const std::vector<Slot>& slots, std::span<const BodyId> excluded = {}) : slots_(slots), excluded_(excluded) {}
+        bool ShouldCollideLocked(const JPH::Body& body) const override {
+            const BodyId id = unpack_body_id(body.GetUserData());
+            if (std::find(excluded_.begin(), excluded_.end(), id) != excluded_.end()) return false;
+            return id.index >= slots_.size() || slots_[id.index].wheel_contact;
+        }
+    private:
+        const std::vector<Slot>& slots_;
+        std::span<const BodyId> excluded_;
+    };
+
     struct JointSlot {
         JPH::Ref<JPH::Constraint> constraint;
         bool alive = false;

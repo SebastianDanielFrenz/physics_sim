@@ -39,6 +39,10 @@ struct BodyDesc {
     ShapeDesc shape = SphereShape{};
     BodyMotionType motion = BodyMotionType::Dynamic;
     real mass = 1.0;              // ignored for Static/Kinematic
+    // A wheel (shape_cast with skip_non_wheel_bodies) may stand on this body. true = today's behaviour. false: the body is invisible to wheel
+    // casts - a parked machine's collision box, a woken vehicle, a bale: the chassis/collision shapes still meet it, only the wheel does not
+    // read its side or top as ground. Read in the wheel jobs, so set at creation (or between steps with set_wheel_contact), never mid-step.
+    bool wheel_contact = true;
     Pose pose = Pose::identity();
     Motion velocity{};
     real friction = 0.5;
@@ -410,11 +414,17 @@ public:
         auto hit=ray_cast(origin,direction,distance);
         return hit.hit&&hit.body==excluded ? RayCastHit{} : hit;
     }
-    [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+    // skip_non_wheel_bodies: bodies created with BodyDesc::wheel_contact == false are not hit (the wheel path; the D0 re-cast uses the same
+    // filter). false = every body, as before.
+    [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance,
+                                                  bool skip_non_wheel_bodies = false) const = 0;
     // The same two queries blind to several bodies: a coupled vehicle's wheels and ground probes do not see its
     // partners' chassis, whatever the geometry at the hitch.
-    [[nodiscard]] virtual ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded) const = 0;
+    [[nodiscard]] virtual ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded,
+                                                            bool skip_non_wheel_bodies = false) const = 0;
     [[nodiscard]] virtual RayCastHit ray_cast_excluding(const Vec3& origin, const Vec3& direction, real distance, std::span<const BodyId> excluded) const = 0;
+    // Sim thread, between steps only. Default: no backend keeps the flag.
+    virtual void set_wheel_contact(BodyId, bool) {}
 
     // Replaces the list of body pairs that make no contacts with each other. Sim thread, between steps; every listed
     // body must be live. Queries still see these bodies.

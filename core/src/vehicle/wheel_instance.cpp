@@ -133,8 +133,8 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
     query_pose.orientation = chassis_pose.orientation * steer_q;
 
     const Vec3 sweep_world = -axis_world * susp.travel_max;
-    const ShapeCastHit hit = excluded.empty() ? backend.shape_cast(shape, query_pose, sweep_world, susp.travel_max)
-                                              : backend.shape_cast_excluding(shape, query_pose, sweep_world, susp.travel_max, excluded);
+    const ShapeCastHit hit = excluded.empty() ? backend.shape_cast(shape, query_pose, sweep_world, susp.travel_max, true)
+                                              : backend.shape_cast_excluding(shape, query_pose, sweep_world, susp.travel_max, excluded, true);
 
     // PHYS-033 P4 I3 plan section 6.7: computed unconditionally (steer_q
     // already applied to query_pose above, independent of hit/miss) so a
