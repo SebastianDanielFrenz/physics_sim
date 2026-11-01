@@ -127,6 +127,10 @@ struct AutoShiftDesc {
     // soft cut's taper, a governor or an armed roll-off), all four points are scaled down by one factor. Key
     // "max_limiter_fraction" in the auto_shift block, in (0, 1]. [AS] 0.985 (kDefaultShiftLimiterFraction).
     real max_limiter_fraction = 0.985;
+    // The gear auto-shift selects when the driver pulls away from neutral (throttle above the driver threshold, at a standstill). 1 = the first
+    // gear, as before (every vehicle that does not set it is bit-identical). A higher gear is for a gearbox whose first gears are crawler gears;
+    // the shift points still apply afterwards, so a load that holds the engine below the down point is shifted down.
+    int start_gear = 1;
 };
 
 // The loader-facing descriptor for a "manual_tcu" controller (plan section

@@ -5182,6 +5182,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     md.auto_shift.max_limiter_fraction > real(1.0)) {
                     throw std::runtime_error(ctx + ".auto_shift: max_limiter_fraction must be in (0, 1]");
                 }
+                md.auto_shift.start_gear = asj.value("start_gear", md.auto_shift.start_gear);
+                if (md.auto_shift.start_gear < 1) throw std::runtime_error(ctx + ".auto_shift: start_gear must be >= 1");
                 if (!std::isfinite(md.auto_shift.kickdown_throttle) || md.auto_shift.kickdown_throttle < real(0.0) || md.auto_shift.kickdown_throttle > real(1.0)) {
                     throw std::runtime_error(ctx + ".auto_shift: kickdown_throttle must be in [0, 1] (0 = no bypass)");
                 }

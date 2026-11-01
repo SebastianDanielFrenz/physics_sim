@@ -812,3 +812,23 @@ TEST_CASE("Reverse-rotation hold applies only without driver throttle", "[tcu][h
         CHECK(tcu.step(s,h,false).e_auto==real(0));
     }
 }
+
+// AutoShiftDesc::start_gear: the gear auto-shift selects from neutral. Default 1 (unchanged); a higher value is clamped to the gearbox range.
+// Sabotage SG-S1: ignore desc_.auto_shift.start_gear in manual_tcu.cpp (select 1) -> the start_gear 3 and 99 sections fail.
+TEST_CASE("ManualTcu: auto-shift pulls away from neutral in start_gear", "[unit][drivetrain][tcu]") {
+    const real h = 1.0 / 960.0;
+    const auto first_target = [&](int start_gear) {
+        ManualTcu::Desc d;
+        d.auto_shift.start_gear = start_gear;
+        ManualTcu tcu(d);
+        ManualTcu::Sensors s = base_sensors();
+        s.assist_auto_shift = true;
+        s.shift_throttle_request = 0.8;
+        s.engine_omega = rpm_to_omega(850.0);
+        (void)tcu.step(s, h, true); // baseline
+        return tcu.step(s, h, true).gearbox_target;
+    };
+    CHECK(first_target(1) == 1);
+    CHECK(first_target(3) == 3);
+    CHECK(first_target(99) == 6); // clamped to max_gear
+}
