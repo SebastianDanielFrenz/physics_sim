@@ -1,0 +1,89 @@
+{
+  "format": "physics_sim.herbicide/1",
+  "name": "total_herbicide",
+  "moa": "group_9_epsps",
+  "label_rate": 1.0,
+  "targets": {
+    "annual_grass": {
+      "ed50_rel": 0.2,
+      "slope": 3.0,
+      "stage_gdd_full": 800.0,
+      "stage_gdd_zero": 2000.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "annual_broadleaf": {
+      "ed50_rel": 0.2,
+      "slope": 3.0,
+      "stage_gdd_full": 800.0,
+      "stage_gdd_zero": 2000.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "perennial": {
+      "ed50_rel": 0.5,
+      "slope": 2.5,
+      "stage_gdd_full": 5000.0,
+      "stage_gdd_zero": 6000.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "volunteer": {
+      "ed50_rel": 0.2,
+      "slope": 3.0,
+      "stage_gdd_full": 800.0,
+      "stage_gdd_zero": 2000.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    }
+  },
+  "resistance": {
+    "ed50_factor": 30.0,
+    "source": {
+      "ed50_factor": "[AS] ED50 multiplier of the resistant biotype (target-site resistance gives resistance factors of 10 to over 100, recalled)."
+    }
+  },
+  "residual": {
+    "half_life_days": 0.0,
+    "germ_kill": 0.0,
+    "source": {
+      "half_life_days": "[AS] half-life of the soil-residual activity.",
+      "germ_kill": "[AS] share of emerging seedlings killed at full residual activity."
+    }
+  },
+  "crops": {
+    "default": {
+      "max_bbch": 0.0,
+      "damage_in": 1.0,
+      "damage_out": 1.0,
+      "source": {
+        "max_bbch": "[AS] last crop stage with the safe window.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    }
+  },
+  "damage": {
+    "dose_exponent": 1.0,
+    "source": {
+      "dose_exponent": "[AS] crop damage grows with dose^exponent (an overdose hurts more than proportionally)."
+    }
+  },
+  "source": "F1c herbicide: a generic non-selective herbicide (glyphosate type, no soil residual): it kills any emerged crop; use before sowing or on stubble. Every number [AS]."
+}

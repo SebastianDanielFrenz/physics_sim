@@ -1,0 +1,15 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "combine_straw_chopped",
+  "harvest": {
+    "straw_carried": 0.0,
+    "straw_chopped": 0.9,
+    "grain_loss": 0.015,
+    "source": {
+      "straw_carried": "[AS] combine with a chopper/spreader: the straw is chopped and spread, nothing is carried off; header and threshing losses of 1-2 % of the grain stay on the ground (extension figures for a well-set combine, recalled).",
+      "straw_chopped": "[AS] combine with a chopper/spreader: the straw is chopped and spread, nothing is carried off; header and threshing losses of 1-2 % of the grain stay on the ground (extension figures for a well-set combine, recalled).",
+      "grain_loss": "[AS] combine with a chopper/spreader: the straw is chopped and spread, nothing is carried off; header and threshing losses of 1-2 % of the grain stay on the ground (extension figures for a well-set combine, recalled)."
+    }
+  },
+  "source": "F1c operation: combine harvest, straw chopped and spread."
+}

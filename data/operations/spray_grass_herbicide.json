@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "spray_grass_herbicide",
+  "spray": {
+    "product": "grass_herbicide",
+    "dose": 1.0
+  },
+  "source": "F1c operation: field sprayer with the grass herbicide at label dose."
+}

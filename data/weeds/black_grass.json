@@ -1,0 +1,112 @@
+{
+  "format": "physics_sim.weed_group/1",
+  "name": "black_grass",
+  "kind": "annual_grass",
+  "seedbank": {
+    "seeds_init_m2": 400.0,
+    "init_surface": 0.05,
+    "init_upper": 0.65,
+    "init_lower": 0.3,
+    "decay_surface_per_day": 0.006,
+    "decay_upper_per_day": 0.003,
+    "decay_lower_per_day": 0.0015,
+    "source": {
+      "seeds_init_m2": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "init_surface": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "init_upper": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "init_lower": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "decay_surface_per_day": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "decay_upper_per_day": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand).",
+      "decay_lower_per_day": "[AS] Alopecurus myosuroides, an autumn-germinating grass weed of German cereals. A moderately infested field; the seedbank halves in about a year in the top layer (persistence of 2-3 years, recalled from the black-grass literature, no document in hand)."
+    }
+  },
+  "germination": {
+    "t_min_c": 2.0,
+    "t_opt_c": 12.0,
+    "t_max_c": 28.0,
+    "rate_per_day": 0.02,
+    "wet_min": 0.15,
+    "wet_full": 0.5,
+    "emerge_surface": 0.7,
+    "emerge_upper": 0.3,
+    "emerge_lower": 0.01,
+    "seedling_g": 0.002,
+    "source": {
+      "t_min_c": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "t_opt_c": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "t_max_c": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "rate_per_day": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "wet_min": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "wet_full": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "emerge_surface": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "emerge_upper": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "emerge_lower": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand.",
+      "seedling_g": "[AS] autumn flush of black-grass at soil temperatures of 5-15 degC with a seed layer moist enough; shares emerging by layer fall with depth (most emergence from the top 2-3 cm). Recalled, no document in hand."
+    }
+  },
+  "growth": {
+    "t_base_c": 0.0,
+    "per_gdd": 0.014,
+    "w_max_g": 3.0,
+    "area_max_g_m2": 350.0,
+    "self_thin_per_day": 0.03,
+    "shade": 0.7,
+    "n_conc_pct": 2.0,
+    "c_frac": 0.42,
+    "cold_kill_onset_c": -18.0,
+    "cold_kill_full_c": -28.0,
+    "source": {
+      "t_base_c": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "per_gdd": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "w_max_g": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "area_max_g_m2": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "self_thin_per_day": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "shade": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "n_conc_pct": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "c_frac": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "cold_kill_onset_c": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter.",
+      "cold_kill_full_c": "[AS] logistic growth in thermal time to the biomass of a plant under a crop; frost-hardy winter annual. c_frac 0.42 is the usual carbon share of herbaceous dry matter."
+    }
+  },
+  "development": {
+    "gdd_flower": 1700.0,
+    "gdd_ripe": 2150.0,
+    "gdd_death": 2300.0,
+    "seeds_per_g": 35.0,
+    "shed_per_day": 0.12,
+    "source": {
+      "gdd_flower": "[AS] thermal time since emergence to flowering (June) and seed ripeness (mid July, a few days before wheat harvest); 100-300 seeds per plant.",
+      "gdd_ripe": "[AS] thermal time since emergence to flowering (June) and seed ripeness (mid July, a few days before wheat harvest); 100-300 seeds per plant.",
+      "gdd_death": "[AS] thermal time since emergence to flowering (June) and seed ripeness (mid July, a few days before wheat harvest); 100-300 seeds per plant.",
+      "seeds_per_g": "[AS] thermal time since emergence to flowering (June) and seed ripeness (mid July, a few days before wheat harvest); 100-300 seeds per plant.",
+      "shed_per_day": "[AS] thermal time since emergence to flowering (June) and seed ripeness (mid July, a few days before wheat harvest); 100-300 seeds per plant."
+    }
+  },
+  "competition": {
+    "cousens_i_pct": 0.8,
+    "cousens_a_pct": 70.0,
+    "rel_emerge_decay": 0.5,
+    "source": {
+      "cousens_i_pct": "[AS] Cousens hyperbola (Cousens 1985): yield loss of about 0.5-1 % per plant/m2 at low density for black-grass under winter wheat, saturating at 40-90 % (recalled range, not checked in a document).",
+      "cousens_a_pct": "[AS] Cousens hyperbola (Cousens 1985): yield loss of about 0.5-1 % per plant/m2 at low density for black-grass under winter wheat, saturating at 40-90 % (recalled range, not checked in a document).",
+      "rel_emerge_decay": "[AS] Cousens hyperbola (Cousens 1985): yield loss of about 0.5-1 % per plant/m2 at low density for black-grass under winter wheat, saturating at 40-90 % (recalled range, not checked in a document)."
+    }
+  },
+  "resistance": {
+    "init": 1e-06,
+    "source": {
+      "init": "[AS] share of the seedbank resistant to each herbicide mode of action in a field never selected; resistant biotypes are present at about 1e-6 (Powles and Yu 2010, order of magnitude, recalled)."
+    }
+  },
+  "water": {
+    "kc_tr": 1.0,
+    "p_depletion": 0.5,
+    "cover_per_g_m2": 0.0075,
+    "source": {
+      "kc_tr": "[AS] the basal transpiration coefficient of the weed canopy at full cover: the FAO-56 Kcb of a closed green grass or broadleaf stand is about 1.0 (Allen et al. 1998, table 17, mid-season values 0.9-1.15; recalled). Volunteer wheat takes the 1.1 of the wheat crop file.",
+      "p_depletion": "[AS] 0.5: share of the root-zone TAW that can be used before the group is water stressed, the FAO-56 default for crops of about this rooting (table 22 lists 0.45-0.6 for cereals and grasses; recalled).",
+      "cover_per_g_m2": "[AS] canopy cover = 1 - exp(-k x biomass): leaf area about 0.015 m2 per g of dry matter (specific leaf area ~25 m2/kg, 60 % leaf) times an extinction coefficient 0.5 gives k = 0.0075 m2/g, i.e. 100 g/m2 of weeds cover 53 % of the soil."
+    }
+  },
+  "source": "F1c weed group: black-grass. Every number is [AS]; ranges recalled, not verified against a document."
+}

@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.field_material/1",
+  "name": "pig_slurry_5",
+  "kind": "slurry",
+  "composition": {
+    "dm_frac": 0.05,
+    "density_kg_m3": 1030.0,
+    "n_total_kg_t": 5.534,
+    "nh4_n_kg_t": 3.32,
+    "urea_n_kg_t": 0.0,
+    "no3_n_kg_t": 0.0,
+    "p2o5_kg_t": 2.913,
+    "k2o_kg_t": 3.398,
+    "cao_kg_t": 0.0,
+    "source": {
+      "dm_frac": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a code 21.",
+      "density_kg_m3": "[AS] recalled, no density was found in the tables.",
+      "n_total_kg_t": "[D] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a code 21, 5.7 kg N per m3, divided by the density.",
+      "nh4_n_kg_t": "[D] same table, ammonium N.",
+      "urea_n_kg_t": "[AS] hydrolysed at application.",
+      "no3_n_kg_t": "[C] no nitrate in manures.",
+      "p2o5_kg_t": "[D] same table.",
+      "k2o_kg_t": "[D] same table.",
+      "cao_kg_t": "[AS] neutralising value neglected."
+    }
+  },
+  "ammonia": {
+    "k_vol_per_day": 1.84,
+    "k_inf_per_day": 2.76,
+    "k_inf_per_mm_rain": 0.3,
+    "org_slow_fraction": 0.4,
+    "source": {
+      "k_vol_per_day": "[D] volatilisation share of the surface ammoniacal N k_vol / (k_vol + k_inf) from the broadcast emission factor, at the total rate fitted to the UBA incorporation-time reductions (docs/data_formats/field_material.md), 15 degC.",
+      "k_inf_per_day": "[D] see k_vol_per_day.",
+      "k_inf_per_mm_rain": "[AS] extra infiltration rate per mm of rain that day (the Guidebook only says that rain has a significant effect on the fertiliser emission factor).",
+      "org_slow_fraction": "[AS] share of the organic N entering the slow humus pool, the rest the fresh pool."
+    }
+  },
+  "source": "Fattening-pig slurry, 5 % dry matter (LfL code 21). Emission factor 0.40 of the ammoniacal N when broadcast (EMEP 3.B Table 3-9, finishing pigs)."
+}

@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.field_material/1",
+  "name": "mop_60",
+  "kind": "mineral",
+  "composition": {
+    "dm_frac": 1.0,
+    "density_kg_m3": 1000.0,
+    "n_total_kg_t": 0.0,
+    "nh4_n_kg_t": 0.0,
+    "urea_n_kg_t": 0.0,
+    "no3_n_kg_t": 0.0,
+    "p2o5_kg_t": 0.0,
+    "k2o_kg_t": 600.0,
+    "cao_kg_t": 0.0,
+    "source": {
+      "dm_frac": "[AS]",
+      "density_kg_m3": "[AS]",
+      "n_total_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "nh4_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "urea_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "no3_n_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "p2o5_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a",
+      "k2o_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3 / 5a: Kali 60, 60 kg K2O per 100 kg.",
+      "cao_kg_t": "[C] LfL Bayern, Basisdaten Duengung und Naehrstoffflusse Bas22 (12/2021) Tab. 3: Kali 60 has no acidifying effect."
+    }
+  },
+  "ammonia": {
+    "k_vol_per_day": 0.0,
+    "k_inf_per_day": 0.0,
+    "k_inf_per_mm_rain": 0.0,
+    "org_slow_fraction": 0.0,
+    "source": {
+      "k_vol_per_day": "[C] no N.",
+      "k_inf_per_day": "[C] no N.",
+      "k_inf_per_mm_rain": "[C] no N.",
+      "org_slow_fraction": "[C] no organic N."
+    }
+  },
+  "source": "Muriate of potash (Kali 60)."
+}

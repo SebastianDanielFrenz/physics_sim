@@ -1,0 +1,75 @@
+{
+  "format": "physics_sim.herbicide/1",
+  "name": "broadleaf_herbicide",
+  "moa": "group_2_als",
+  "label_rate": 1.0,
+  "targets": {
+    "annual_broadleaf": {
+      "ed50_rel": 0.2,
+      "slope": 3.0,
+      "stage_gdd_full": 500.0,
+      "stage_gdd_zero": 1100.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "annual_grass": {
+      "ed50_rel": 0.9,
+      "slope": 2.0,
+      "stage_gdd_full": 300.0,
+      "stage_gdd_zero": 700.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    }
+  },
+  "resistance": {
+    "ed50_factor": 50.0,
+    "source": {
+      "ed50_factor": "[AS] ED50 multiplier of the resistant biotype (target-site resistance gives resistance factors of 10 to over 100, recalled)."
+    }
+  },
+  "residual": {
+    "half_life_days": 20.0,
+    "germ_kill": 0.1,
+    "source": {
+      "half_life_days": "[AS] half-life of the soil-residual activity.",
+      "germ_kill": "[AS] share of emerging seedlings killed at full residual activity."
+    }
+  },
+  "crops": {
+    "winter_wheat": {
+      "max_bbch": 39.0,
+      "damage_in": 0.0,
+      "damage_out": 0.4,
+      "source": {
+        "max_bbch": "[AS] last crop stage with the safe window.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    },
+    "default": {
+      "max_bbch": 30.0,
+      "damage_in": 0.1,
+      "damage_out": 0.8,
+      "source": {
+        "max_bbch": "[AS] last crop stage with the safe window.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    }
+  },
+  "damage": {
+    "dose_exponent": 1.5,
+    "source": {
+      "dose_exponent": "[AS] crop damage grows with dose^exponent (an overdose hurts more than proportionally)."
+    }
+  },
+  "source": "F1c herbicide: a generic post-emergence broadleaf herbicide (ALS type). Every number [AS]."
+}

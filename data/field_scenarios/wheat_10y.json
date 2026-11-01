@@ -1,0 +1,17 @@
+{
+  "format": "physics_sim.field_scenario/1",
+  "climate": "../climates/farm_de_home.json",
+  "seed": 11,
+  "years": 10,
+  "soils": ["../soils/silt_loam_loess.json", "../soils/sandy_loam.json"],
+  "soil_pattern": [0, 0, 1, 1],
+  "crops": ["../crops/winter_wheat.json"],
+  "grid": { "nx": 4, "ny": 4, "cell_size_m": 4.0 },
+  "initial_depletion_fraction": 0.2,
+  "co2_ppm": 400.0,
+  "operations": [
+    { "op": "sow", "crop": "winter_wheat", "doy": 288 },
+    { "op": "harvest", "doy": 212, "first_year": 1 }
+  ],
+  "source": "Headless demo of ps_field F1a: winter wheat on loess and sandy loam cells, drilled 15 October (doy 288), harvested 31 July (doy 212) of the next year; test-only operations, not an agronomic plan."
+}

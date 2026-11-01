@@ -1,0 +1,112 @@
+{
+  "format": "physics_sim.weed_group/1",
+  "name": "cleavers",
+  "kind": "annual_broadleaf",
+  "seedbank": {
+    "seeds_init_m2": 150.0,
+    "init_surface": 0.05,
+    "init_upper": 0.65,
+    "init_lower": 0.3,
+    "decay_surface_per_day": 0.005,
+    "decay_upper_per_day": 0.0025,
+    "decay_lower_per_day": 0.0012,
+    "source": {
+      "seeds_init_m2": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "init_surface": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "init_upper": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "init_lower": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "decay_surface_per_day": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "decay_upper_per_day": "[AS] Galium aparine; seeds persist for several years. Recalled.",
+      "decay_lower_per_day": "[AS] Galium aparine; seeds persist for several years. Recalled."
+    }
+  },
+  "germination": {
+    "t_min_c": 0.0,
+    "t_opt_c": 10.0,
+    "t_max_c": 25.0,
+    "rate_per_day": 0.015,
+    "wet_min": 0.15,
+    "wet_full": 0.5,
+    "emerge_surface": 0.6,
+    "emerge_upper": 0.3,
+    "emerge_lower": 0.02,
+    "seedling_g": 0.01,
+    "source": {
+      "t_min_c": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "t_opt_c": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "t_max_c": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "rate_per_day": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "wet_min": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "wet_full": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "emerge_surface": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "emerge_upper": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "emerge_lower": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled.",
+      "seedling_g": "[AS] autumn and early-spring emergence of cleavers (large seed, emerges from depth better than grasses). Recalled."
+    }
+  },
+  "growth": {
+    "t_base_c": 0.0,
+    "per_gdd": 0.011,
+    "w_max_g": 6.0,
+    "area_max_g_m2": 450.0,
+    "self_thin_per_day": 0.03,
+    "shade": 0.5,
+    "n_conc_pct": 2.5,
+    "c_frac": 0.42,
+    "cold_kill_onset_c": -15.0,
+    "cold_kill_full_c": -25.0,
+    "source": {
+      "t_base_c": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "per_gdd": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "w_max_g": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "area_max_g_m2": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "self_thin_per_day": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "shade": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "n_conc_pct": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "c_frac": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "cold_kill_onset_c": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled.",
+      "cold_kill_full_c": "[AS] scrambling annual that keeps growing under the crop canopy (weak shade effect). Recalled."
+    }
+  },
+  "development": {
+    "gdd_flower": 1800.0,
+    "gdd_ripe": 2200.0,
+    "gdd_death": 2400.0,
+    "seeds_per_g": 12.0,
+    "shed_per_day": 0.15,
+    "source": {
+      "gdd_flower": "[AS] flowers in June, seed ripe at the end of July. Recalled.",
+      "gdd_ripe": "[AS] flowers in June, seed ripe at the end of July. Recalled.",
+      "gdd_death": "[AS] flowers in June, seed ripe at the end of July. Recalled.",
+      "seeds_per_g": "[AS] flowers in June, seed ripe at the end of July. Recalled.",
+      "shed_per_day": "[AS] flowers in June, seed ripe at the end of July. Recalled."
+    }
+  },
+  "competition": {
+    "cousens_i_pct": 1.5,
+    "cousens_a_pct": 60.0,
+    "rel_emerge_decay": 0.4,
+    "source": {
+      "cousens_i_pct": "[AS] Cousens hyperbola; cleavers is one of the most competitive broadleaf weeds of cereals (1-3 % per plant/m2 recalled).",
+      "cousens_a_pct": "[AS] Cousens hyperbola; cleavers is one of the most competitive broadleaf weeds of cereals (1-3 % per plant/m2 recalled).",
+      "rel_emerge_decay": "[AS] Cousens hyperbola; cleavers is one of the most competitive broadleaf weeds of cereals (1-3 % per plant/m2 recalled)."
+    }
+  },
+  "resistance": {
+    "init": 1e-06,
+    "source": {
+      "init": "[AS] as for black_grass."
+    }
+  },
+  "water": {
+    "kc_tr": 1.0,
+    "p_depletion": 0.5,
+    "cover_per_g_m2": 0.0075,
+    "source": {
+      "kc_tr": "[AS] the basal transpiration coefficient of the weed canopy at full cover: the FAO-56 Kcb of a closed green grass or broadleaf stand is about 1.0 (Allen et al. 1998, table 17, mid-season values 0.9-1.15; recalled). Volunteer wheat takes the 1.1 of the wheat crop file.",
+      "p_depletion": "[AS] 0.5: share of the root-zone TAW that can be used before the group is water stressed, the FAO-56 default for crops of about this rooting (table 22 lists 0.45-0.6 for cereals and grasses; recalled).",
+      "cover_per_g_m2": "[AS] canopy cover = 1 - exp(-k x biomass): leaf area about 0.015 m2 per g of dry matter (specific leaf area ~25 m2/kg, 60 % leaf) times an extinction coefficient 0.5 gives k = 0.0075 m2/g, i.e. 100 g/m2 of weeds cover 53 % of the soil."
+    }
+  },
+  "source": "F1c weed group: cleavers. Every number is [AS]."
+}

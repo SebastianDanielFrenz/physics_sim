@@ -53,6 +53,10 @@ the end of this file under "Discrepancies found".
 - [`weather_preset.md`](weather_preset.md) — `physics_sim.weather_preset/1`, `data/weather_presets/*.json`. One fixed-value regime: the base in Preset mode or an override target.
 - [`surface_conditions.md`](surface_conditions.md) — `physics_sim.surface_conditions/1`, `data/surface_conditions/*.json`. Per surface class: kind, albedo, emissivity and a two-layer thermal column (W5); the road surface temperature model.
 - [`weather_classes.md`](weather_classes.md) — `physics_sim.weather_classes/1`, `data/weather_classes/*.json`. WMO intensity, DWD Starkregen/gust warning, Beaufort and TORRO thresholds with ge/gt boundary rules.
+- [`soil.md`](soil.md) — `physics_sim.soil/1`, `data/soils/*.json` (farming F1a, loader `ps::io::load_soil_json` in `ps_field_io`). Field capacity, wilting point, depth, surface evaporation layer, curve number, snow melt; every number carries a `[C]/[D]/[M]/[AS]` source tag.
+- [`crop.md`](crop.md) — `physics_sim.crop/1`, `data/crops/*.json`. AquaCrop-style crop: thermal time to BBCH stages, vernalisation, canopy, water stress, biomass, harvest index, roots, frost, ripeness.
+- [`field_material.md`](field_material.md) — `physics_sim.field_material/1`, `physics_sim.field_methods/1`, `data/field_materials/*.json` (farming F1b). Fertiliser, manure and lime composition, ammonia rates, application methods.
+- [`field_scenario.md`](field_scenario.md) — `physics_sim.field_scenario/1`, `data/field_scenarios/*.json`. Headless field run for `ps_field_run`: climate, soils, crops, grid, test-only sow/harvest rules, CSV columns.
 
 ## Format versioning
 

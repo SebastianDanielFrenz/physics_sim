@@ -435,6 +435,7 @@ add_subdirectory(core)
 add_subdirectory(audio)
 add_subdirectory(engine_tools)
 add_subdirectory(tools/ps_run)
+add_subdirectory(tools/ps_field_run)
 add_subdirectory(tools/sweep)
 add_subdirectory(tools/ps_engine_audio)
 

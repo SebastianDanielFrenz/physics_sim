@@ -1,0 +1,341 @@
+{
+  "format": "physics_sim.crop/1",
+  "name": "winter_wheat",
+  "family": "cereal",
+  "thermal": {
+    "t_base_c": 0.0,
+    "t_upper_c": 26.0,
+    "source": {
+      "t_base_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.1: Tbase 0.0 degC.",
+      "t_upper_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.1: Tupper 26.0 degC."
+    }
+  },
+  "phenology": {
+    "stages": [
+      {
+        "name": "sown",
+        "bbch": 0,
+        "gdd": 0
+      },
+      {
+        "name": "emergence",
+        "bbch": 10,
+        "gdd": 155
+      },
+      {
+        "name": "stem_elongation",
+        "bbch": 31,
+        "gdd": 1110
+      },
+      {
+        "name": "heading",
+        "bbch": 51,
+        "gdd": 1620
+      },
+      {
+        "name": "flowering",
+        "bbch": 65,
+        "gdd": 1760
+      },
+      {
+        "name": "senescence",
+        "bbch": 71,
+        "gdd": 1900
+      },
+      {
+        "name": "milk_ripe",
+        "bbch": 75,
+        "gdd": 2160
+      },
+      {
+        "name": "maturity",
+        "bbch": 87,
+        "gdd": 2480
+      },
+      {
+        "name": "overripe",
+        "bbch": 92,
+        "gdd": 2815
+      }
+    ],
+    "vernalisation_until": "stem_elongation",
+    "source": {
+      "stages": "[D] emergence 155, stem_elongation 1110, heading 1620, milk_ripe 2160, maturity 2480, overripe 2815 are the development units (thermal time 0-26 degC scaled by the vernalisation factor after emergence) accumulated by the model's own functions along the Frankfurt/Main daily Tmin/Tmax record (DWD station 01420, 1992-2024) from the sowing date to the date of DWD phase 12 (Auflaufen, BBCH 10), 15 (Schossen Beginn, BBCH 31), 18 (Aehrenschieben, BBCH 51), 19 (Milchreife, BBCH 75), 21 (Gelbreife, BBCH 87) and 24 (Ernte), each phase date the mean of the year's winter-wheat annual reporters within 100 km of Frankfurt (DWD CDC opendata phenology/annual_reporters/crops, phase definitions in PH_Beschreibung_Phasendefinition_Jahresmelder_Landwirtschaft_Kulturpflanze.txt), averaged over 31 seasons. Result 155/1111/1622/2161/2478/2814 (sd 12/81/85/103/100/98 units); rounded. National means 1992-2024: sowing doy 280.1, BBCH 10 294.3, 31 116.3, 51 151.6, 75 183.1, 87 199.8, harvest 216.7. flowering 1760 [AS] (BBCH 65 is not observed by DWD; about 10 days after heading at 14 units/day); senescence 1900 [AS]: start of canopy decline, inside the AquaCrop range emergence+1000..2000 and chosen so that the green canopy is about half gone at maturity with the CDC below. The BBCH 71 code is a label. BBCH codes are the standard scale. The AquaCrop flowering range (emergence + 1000-1300 GDD) applies to spring wheat or winter wheat without a cold period (Annex I.10 note) and is not used for a German winter wheat."
+    }
+  },
+  "vernalisation": {
+    "t_min_c": -1.3,
+    "t_opt_c": 4.9,
+    "t_max_c": 15.7,
+    "days_saturation": 50.0,
+    "min_rate_factor": 0.3,
+    "source": {
+      "t_min_c": "[AS] cardinal temperatures of the Wang & Engel (1998) vernalisation response for wheat as used by Streck et al. (2003, Agron. J. 95), recalled; a search this session could not confirm the three values (-1.3, 4.9, 15.7).",
+      "t_opt_c": "[AS] see t_min_c.",
+      "t_max_c": "[AS] see t_min_c.",
+      "days_saturation": "[AS] effective vernalisation days for the full development rate of a winter wheat; the literature spans roughly 30-60 days. With the DWD-calibrated stage table the vernalisation completes in January in every season of the Frankfurt record, so the value has little effect on the dates.",
+      "min_rate_factor": "[AS] relative development rate of an unvernalised emerged winter wheat before stem elongation (the model slows development only after emergence). F1d part 3: with this floor between 0.02 and 0.3 (and with no vernalisation at all) a 1 March sowing yields 20.6-23.0 % less than the autumn sowing on the home loess (tests VS1/VS2), so the floor is not what limits a March sowing - the cold requirement is met within about 50 cool days; a 10 April sowing is delayed by 49 days to BBCH 31. No trial figure for the loss of a March-sown winter wheat was found (Landwirtschaftskammer NRW late-sowing trials: 7-20 % for a sowing four weeks late; an unverified BayWa statement: 40-60 %); the 20-40 % of the task brief was not confirmed."
+    }
+  },
+  "canopy": {
+    "cc0_cm2_per_plant": 1.5,
+    "plant_density_per_ha": 2500000,
+    "ccx": 0.96,
+    "cgc_per_gdd": 0.0055,
+    "cdc_per_gdd": 0.004,
+    "senescence_acceleration": 0.5,
+    "source": {
+      "cc0_cm2_per_plant": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: soil surface covered by an individual seedling 1.50 cm2/plant.",
+      "plant_density_per_ha": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: 2 000 000 - 7 000 000 plants per hectare (management); 2.5 million is the value for German practice (250-400 seeds/m2 drilled, about 80 % emerging), inside the range.",
+      "ccx": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: maximum canopy cover 80-99 % (management); 0.96 inside the range.",
+      "cgc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: canopy growth coefficient 0.005-0.007 per GDD; 0.0055 inside the range.",
+      "cdc_per_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.2: canopy decline coefficient 0.004 per GDD (was 0.0052 [AS] in F1a).",
+      "senescence_acceleration": "[AS] extra senescence progress per unit of senescence stress (1 - Ks_sen); the model's own device (AquaCrop shifts the senescence start instead)."
+    }
+  },
+  "water": {
+    "kc_tr_x": 1.1,
+    "height_max_m": 1.0,
+    "p_depletion": 0.55,
+    "p_adjust_for_etc": true,
+    "exp_p_upper": 0.2,
+    "exp_p_lower": 0.65,
+    "exp_shape": 5.0,
+    "sen_p_upper": 0.7,
+    "sen_shape": 2.5,
+    "source": {
+      "kc_tr_x": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 2: KcTr,x 1.10.",
+      "height_max_m": "[C] FAO-56 Table 12 (fao.org/4/x0490e/x0490e0b.htm): winter wheat maximum crop height 1 m.",
+      "p_depletion": "[C] FAO-56 Table 22 (Allen et al. 1998, ch. 8): winter wheat p = 0.55 at ETc ~ 5 mm/day, maximum root depth 1.5-1.8 m. This is the FAO-56 linear stomatal stress; AquaCrop's own psto is 0.65 with shape factor 2.5 (Annex I.10 section 4.1), a different curve that this model does not use.",
+      "p_adjust_for_etc": "[C] FAO-56 Table 22 note: p = p_table + 0.04 (5 - ETc), limited to 0.1-0.8 (the limits are in the code as the note's own range).",
+      "exp_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.20 (the annex labels it 'pexp,lower ... Upper threshold').",
+      "exp_p_lower": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy expansion, 0.65.",
+      "exp_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy expansion 5.0.",
+      "sen_p_upper": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: canopy senescence psen 0.70.",
+      "sen_shape": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: shape factor for canopy senescence 2.5."
+    }
+  },
+  "biomass": {
+    "wp_star_g_m2": 15.0,
+    "gdd_full": 14.0,
+    "source": {
+      "wp_star_g_m2": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.1: WP* 15.0 g/m2.",
+      "gdd_full": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum growing degrees required for full biomass production 13.0-15.0 degC day (estimated); 14 is the midpoint.",
+      "rue_g_mj": "[C]+[D] light-limited potential of the daily biomass gain: rue x f_T(Tmean) x Rs x canopy cover, g/m2/day, global radiation Rs. Gallagher and Biscoe 1978 (J. Agric. Sci. 91:47-60, abstract read: crop dry weight tracked the total PAR absorbed at about 2.2 g per MJ) x PAR share of global radiation 0.5 [D] = 1.1 g/MJ. The AquaCrop gain WP* x Tr/ET0 has no light term (the same gain on a 3 MJ and a 25 MJ day); the stresses multiply the smaller of the two. Replaces the F1c cap of 1.4 g/MJ [AS].",
+      "rue_t_low_c": "[M] ramp of the light-use efficiency over the daily mean air temperature: 0 at and below this value, 1 at rue_t_full_c. Form: linear ramp as in the SIMPLE crop model (Zhao et al. 2019, Eur. J. Agron. 104:97-106; read in a code port, not the paper). Both values fitted (F1d part 1) so that the aboveground biomass at BBCH 31 falls from 6.7 t/ha to about 4 t/ha without the harvest falling by more than 15 %; field benchmark: AHDB Wheat growth guide, 'Biomass growth and dry matter accumulation in wheat': 1.9 t/ha at GS31 and 'just 10 % of total growth by GS31' (page read). The model's BBCH 31 (DWD mean 26 April) is later than the AHDB date of 10 April; the fit does not reach 1.9 t/ha, see the F1d report.",
+      "rue_t_full_c": "[M] see rue_t_low_c.",
+      "light_primary": "[M] 1: the daily gain is the light potential x Tr/Tr_potential (the water factor of the AquaCrop gain, Tr = transpiration, Tr_potential = Kcb x ET0), WP* is then not used for the gain. 0: the smaller of the light potential and WP* x Tr/ET0. With 0 and the ramp below the harvest was 14 % under the DESTATIS mean at the same BBCH 31 biomass (F1d part 1); with 1 the same early biomass keeps the yield, because the front-loaded gain of the water law is no longer needed to make up for summer water stress. A modelling choice, not a published coefficient.",
+      "co2_response": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), chapter 3, Table 3.11c/1 (Eq. 3.11c): multiplier of WP* for a C3 crop (f_type = 1) over the atmospheric CO2 concentration, the FACE-based column (fsink 0); WP* is normalised to 369.41 ppm (the year 2000). Applied to WP* and, as photosynthesis, to rue. The crop's f_type = clamp((40 - WP*)/20, 0, 1) (Eq. 3.11d)."
+    },
+    "rue_g_mj": 1.1,
+    "rue_t_low_c": 5.0,
+    "rue_t_full_c": 13.0,
+    "light_primary": 1,
+    "co2_response": [
+      {
+        "ppm": 298.2,
+        "factor": 0.815
+      },
+      {
+        "ppm": 304.5,
+        "factor": 0.832
+      },
+      {
+        "ppm": 311.9,
+        "factor": 0.851
+      },
+      {
+        "ppm": 331.11,
+        "factor": 0.901
+      },
+      {
+        "ppm": 369.41,
+        "factor": 1.0
+      },
+      {
+        "ppm": 400.0,
+        "factor": 1.073
+      },
+      {
+        "ppm": 450.0,
+        "factor": 1.162
+      },
+      {
+        "ppm": 500.0,
+        "factor": 1.214
+      },
+      {
+        "ppm": 550.0,
+        "factor": 1.23
+      }
+    ]
+  },
+  "yield": {
+    "hi0": 0.46,
+    "hi_build_gdd": 720,
+    "source": {
+      "hi0": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2: reference harvest index 45-50 % (cultivar); 0.46 inside the range.",
+      "hi_build_gdd": "[D] development units from the flowering stage to maturity of the stage table (2480 - 1760 = 720); also the length of yield formation over which the stomatal-closure effect is averaged.",
+      "flowering_length_gdd": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.3: length of the flowering stage 150-280 GDD; 200 inside the range.",
+      "excess_fruits_pct": "[AS] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 3.2 lists 'medium' without a number; 50 % is the value of the manual's own worked example (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Fig. 3.12i).",
+      "ppol": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.1: pollination fails above a depletion of 0.85 of TAW (estimate); Ks_pol,w falls linearly to 0 at TAW (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12).",
+      "sto_coefficient_b": "[AS] coefficient b of the negative effect of stomatal closure during yield formation (AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, Eq. 3.12m/n: 1 = strong effect .. 20 = small effect); Annex I.10 section 3.2 gives only 'moderate' for wheat. 7 (recalled default crop file) is inside the range. The functional form (HI factor = mean of 1 - (1 - Ks_sto^(1/10))/b) is [C]; this is the model's drought response of the harvest index and replaces the fitted hi_water_stress_k of F1a.",
+      "cold_t_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: minimum air temperature below which pollination starts to fail 5.0 degC (estimate).",
+      "cold_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: cold pollination coefficient reaches 0 five degrees below the threshold.",
+      "heat_t_c": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 4.2: maximum air temperature above which pollination starts to fail 35.0 degC (estimate); F1a had 32 [AS].",
+      "heat_width_k": "[C] AquaCrop Reference Manual v7.3, chapter 3 (calculation procedures), section 3.12, section 3.12.5: heat pollination coefficient reaches 0 five degrees above the threshold (F1a had a 6 K width).",
+      "logistic_steepness": "[AS] the manual says the temperature Ks curves are logistic (section 3.2.3) but prints no equation; this is the steepness of a logistic rescaled to hit 0 and 1 at the limits.",
+      "straw_harvest_fraction": "[D] share of the non-grain aboveground biomass a harvest can carry off: LfL Bayern Bas22 Tab. 1a gives a straw:grain ratio of 0.8 (both 86 % DM); with the harvest index 0.46 the non-grain biomass is 0.54 per unit biomass, harvestable straw 0.8 x 0.46 = 0.368, 0.368 / 0.54 = 0.68. The rest (cutting height, chaff, leaf litter) stays as stubble."
+    },
+    "flowering_length_gdd": 200,
+    "excess_fruits_pct": 50,
+    "ppol": 0.85,
+    "sto_coefficient_b": 7.0,
+    "cold_t_c": 5.0,
+    "cold_width_k": 5.0,
+    "heat_t_c": 35.0,
+    "heat_width_k": 5.0,
+    "logistic_steepness": 10.0,
+    "straw_harvest_fraction": 0.68
+  },
+  "roots": {
+    "zr_min_m": 0.3,
+    "zr_max_m": 1.5,
+    "gdd_full": 1500,
+    "source": {
+      "zr_min_m": "[C] AquaCrop Reference Manual v7.3 (FAO, July 2026), Annex I.10 Wheat, section 1.4: minimum effective rooting depth 0.30 m.",
+      "zr_max_m": "[C] FAO-56 Table 22: winter wheat maximum rooting depth 1.5-1.8 m (lower end); AquaCrop's own limit is 'up to 2.40 m' (management). The root zone grows linearly in development units; AquaCrop uses a shape factor of 1.5, not modelled.",
+      "gdd_full": "[AS] development units from sowing at which the maximum depth is reached (before flowering)."
+    }
+  },
+  "frost": {
+    "kill_onset_c": -12.0,
+    "kill_full_c": -22.0,
+    "snow_insulation_swe_mm": 10.0,
+    "snow_floor_c": -3.0,
+    "source": {
+      "kill_onset_c": "[AS] daily minimum air temperature at which frost starts to kill an emerged stand; hardened winter wheat survives about -15 to -20 degC (LT50), literature range, not tuned.",
+      "kill_full_c": "[AS] daily minimum at which the whole stand is killed.",
+      "snow_insulation_swe_mm": "[AS] snow water equivalent above which snow shields the stand.",
+      "snow_floor_c": "[AS] lowest temperature the stand sees under that snow."
+    }
+  },
+  "ripeness": {
+    "harvest_window_days": 14,
+    "shed_rate_per_day": 0.004,
+    "source": {
+      "harvest_window_days": "[AS] days after maturity before the grain starts to shed.",
+      "shed_rate_per_day": "[AS] fraction of the remaining grain lost per day afterwards."
+    }
+  },
+  "nutrients": {
+    "nc_a": 5.35,
+    "nc_b": 0.442,
+    "nc_w_min_t_ha": 1.55,
+    "nc_const_pct": 4.4,
+    "n_min_conc_pct": 1.0,
+    "n_stress_start_t_ha": 0.05,
+    "n_uptake_max_kg_ha_day": 6.0,
+    "n_uptake_frac_per_day": 0.15,
+    "n_residual_kg_ha": 5.0,
+    "n_root_fraction": 0.1,
+    "n_grain_share": 0.755,
+    "n_fixation_fraction": 0.0,
+    "p2o5_conc_pct_dm": 0.617,
+    "p2o5_grain_share": 0.694,
+    "k2o_conc_pct_dm": 1.176,
+    "k2o_grain_share": 0.25,
+    "ph_opt_low": 5.4,
+    "ph_opt_high": 8.0,
+    "ph_floor": 4.0,
+    "ph_floor_factor": 0.5,
+    "lodging_nmin_start_kg_ha": 250.0,
+    "lodging_nmin_full_kg_ha": 600.0,
+    "lodging_max_loss": 0.25,
+    "lodging_bbch_from": 31.0,
+    "lodging_bbch_to": 65.0,
+    "source": {
+      "nc_a": "[C] Justes, Mary, Meynard, Machet, Thelier-Huche 1994, Ann. Bot. 74:397-407 (value from a search summary of the abstract, not the paper): Nc = 5.35 W^-0.442 (%), W in t dry matter/ha, fitted for 1.55-12 t/ha.",
+      "nc_b": "[C] Justes, Mary, Meynard, Machet, Thelier-Huche 1994, Ann. Bot. 74:397-407 (value from a search summary of the abstract, not the paper)",
+      "nc_w_min_t_ha": "[C] Justes, Mary, Meynard, Machet, Thelier-Huche 1994, Ann. Bot. 74:397-407 (value from a search summary of the abstract, not the paper): below 1.55 t/ha a constant 4.4 % is suggested.",
+      "nc_const_pct": "[C] Justes, Mary, Meynard, Machet, Thelier-Huche 1994, Ann. Bot. 74:397-407 (value from a search summary of the abstract, not the paper)",
+      "n_min_conc_pct": "[AS] N concentration at which growth stops.",
+      "n_stress_start_t_ha": "[AS] the N factor applies once the aboveground dry matter exceeds this.",
+      "n_uptake_max_kg_ha_day": "[AS] maximum daily N uptake.",
+      "n_uptake_frac_per_day": "[AS] share of the available soil mineral N the roots can take per day.",
+      "n_residual_kg_ha": "[AS] soil mineral N the roots cannot take.",
+      "n_root_fraction": "[AS] root N as a fraction of the aboveground N.",
+      "n_grain_share": "[D] LfL Bayern Bas22 Tab. 1a: N removal 1.81 kg/dt grain, 2.21 with straw (straw 0.40 kg/dt). With the harvestable share 0.68 of the non-grain biomass the grain holds 1.81 / (1.81 + 0.40 / 0.68) = 0.755 of the aboveground N.",
+      "n_fixation_fraction": "[C] cereals do not fix nitrogen.",
+      "p2o5_conc_pct_dm": "[D] LfL Bayern Bas22 Tab. 1a: 1.04 kg P2O5/dt grain with straw (grain 0.80, straw 0.24); total aboveground P2O5 per t grain = 8.0 / 0.694 = 11.53 kg over the aboveground biomass 0.86 / 0.46 = 1.870 t dry matter = 0.617 %.",
+      "p2o5_grain_share": "[D] grain 8.0 kg / (8.0 + 2.4 / 0.68) kg P2O5 per t grain, LfL Bayern Bas22 Tab. 1a with the straw harvest share 0.68.",
+      "k2o_conc_pct_dm": "[D] LfL Bayern Bas22 Tab. 1a: 1.67 kg K2O/dt grain with straw (grain 0.55, straw 1.12); total aboveground K2O per t grain = 5.5 / 0.25 = 22.0 kg over 1.870 t dry matter = 1.176 %.",
+      "k2o_grain_share": "[D] grain 5.5 kg / (5.5 + 11.2 / 0.68) kg K2O per t grain, LfL Bayern Bas22 Tab. 1a with the straw harvest share 0.68.",
+      "ph_opt_low": "[AS] pH (CaCl2) from which wheat is unrestricted; the VDLUFA class C target of BAG III is 5.4-6.3.",
+      "ph_opt_high": "[AS]",
+      "ph_floor": "[AS] pH at which the factor is ph_floor_factor.",
+      "ph_floor_factor": "[AS]",
+      "lodging_nmin_start_kg_ha": "[AS] soil mineral N in the root zone above which lodging starts to cost yield.",
+      "lodging_nmin_full_kg_ha": "[AS] ... and at which the loss is lodging_max_loss.",
+      "lodging_max_loss": "[AS] share of the grain lost at the full lodging risk.",
+      "lodging_bbch_from": "[AS] window of the stem elongation to flowering stages in which surplus N makes the stand lodge.",
+      "lodging_bbch_to": "[AS]"
+    }
+  },
+  "management": {
+    "root_dm_fraction": 0.12,
+    "root_upper_share": 0.45,
+    "seed_mass_g": 0.045,
+    "seed_viability": 0.95,
+    "depth_opt_min_m": 0.02,
+    "depth_opt_max_m": 0.05,
+    "depth_zero_m": 0.1,
+    "depth_surface_factor": 0.5,
+    "seedbed_floor": 0.55,
+    "residue_emergence_penalty": 0.35,
+    "germ_wet_min": 0.15,
+    "germ_wet_full": 0.5,
+    "dry_hazard_per_day": 0.03,
+    "compensation_density_m2": 40.0,
+    "source": {
+      "root_dm_fraction": "[AS] root dry matter as a share of the aboveground dry matter at harvest; cereal root:shoot at maturity is about 0.1-0.2 (recalled).",
+      "root_upper_share": "[AS] share of the root residue in the top 0.10 m of the 0.30 m management layers.",
+      "seed_mass_g": "[D] thousand-kernel weight 45 g, the middle of the 40-50 g of German winter wheat varieties.",
+      "seed_viability": "[AS] germination capacity of drilled seed (the German seed law minimum is 85 %, certified lots are above 92 %).",
+      "depth_opt_min_m": "[AS] the recommended drilling depth of winter wheat is 2-4 cm (extension advice, recalled).",
+      "depth_opt_max_m": "[AS] see depth_opt_min_m.",
+      "depth_zero_m": "[AS] emergence fails from about 10 cm (the coleoptile of modern semi-dwarf wheats is short).",
+      "depth_surface_factor": "[AS] emergence of seed lying on the surface (birds, drying) relative to the optimum depth.",
+      "seedbed_floor": "[AS] emergence factor of the worst seedbed; field emergence of drilled wheat is typically 75-85 % of the seeds, which this reproduces together with seed_viability.",
+      "residue_emergence_penalty": "[AS] emergence lost at full residue cover for a tool with residue_tolerance 0.",
+      "germ_wet_min": "[AS] wetness at sowing depth (1 - De/TEW at the surface, blended to the root zone at the foot of the evaporation layer) below which the seed does not germinate.",
+      "germ_wet_full": "[AS] wetness from which germination runs at full rate.",
+      "dry_hazard_per_day": "[AS] share of the sown seed that dies per day in a seed layer below germ_wet_min.",
+      "compensation_density_m2": "[AS] constant d0 of the yield-density law 1 - exp(-d/d0) (Willey and Heath 1969 form); wheat compensates thin stands by tillering, 100 plants/m2 give about 92 % of the 250 plants/m2 reference."
+    }
+  },
+  "pathogen": {
+    "agent": "take-all (Gaeumannomyces tritici) and other cereal root and foot diseases",
+    "loss_max": 0.66,
+    "build_per_season": 0.7,
+    "season_gdd": 2400.0,
+    "decay_half_life_days": 110.0,
+    "suppression_max": 0.9,
+    "suppression_gain": 0.4,
+    "suppression_half_life_days": 1800.0,
+    "residue_source_per_day": 0.0002,
+    "residue_ref_c_kg_ha": 1500.0,
+    "source": {
+      "loss_max": "[M] fitted with build_per_season, suppression_* and the half-lives to three published margins: second wheat 10-15 % below first wheat and 10-20 % in second and third wheat (AHDB take-all guidance; Farmers Weekly 'How to make second wheat profitable'), the peak of take-all in the 3rd to 5th cropping year and the later decline to 80-90 % of the early yields (Rothamsted take-all decline as summarised on Wikipedia 'Take-all'; not checked against the Rothamsted primary source). Measured in the field model as yield ratios against the same run without pathogens (home loess, 4 wheats / 1 rapeseed / wheat cycle for the break, test P8a): first wheat after a one-year break 0.967, continuous wheat second 0.847 (12.4 % below the break wheat), third 0.823 (15 %), worst year 3, years 11-16 mean 0.872 (10 % below).",
+      "build_per_season": "[M] fitted together with loss_max (see there): 1 - exp(-0.7 X) of the free inoculum gap is closed by a season with X = (gdd of the season)/season_gdd, about 1.2 for autumn-sown wheat.",
+      "season_gdd": "[D] development units (daily gdd, clamped Tmin/Tmax) from emergence to maturity along the same thermal rule as data/crops/winter_wheat.json's stages, rounded; the build per day is proportional to the day's gdd over this number.",
+      "decay_half_life_days": "[AS] half-life of the inoculum without a host, 110 d: a year without a host leaves a tenth of it (AHDB: a break crop cuts take-all risk strongly and two years nearly clear it; no numeric half-life was found).",
+      "suppression_max": "[M] fitted with loss_max: the antagonists of take-all decline remove at most 90 % of the loss (Wikipedia 'Take-all' summary: yields return to 80-90 % of the early level).",
+      "suppression_gain": "[M] fitted with loss_max: S closes 1 - exp(-0.4 P x) of its gap per season, so decline needs several seasons at a high inoculum (peak in year 3-5).",
+      "suppression_half_life_days": "[AS] half-life of the antagonist level, 1800 d: it outlasts the usual one-year break (AHDB: decline is lost only after a long break; no numeric half-life was found).",
+      "residue_source_per_day": "[AS] inoculum built per day, at full residue, from infected stubble and straw lying on the surface; ploughing it under removes the source.",
+      "residue_ref_c_kg_ha": "[AS] surface residue carbon (loose straw + stubble) at which the source is complete: about 3 t/ha of dry matter."
+    }
+  },
+  "source": "F1b winter wheat. Annex I.10 values of the AquaCrop reference manual v7.3 and FAO-56 Table 12/22 are [C] (document, section in each entry); the stage table is [D] from DWD phenology and DWD Frankfurt station data; what remains [AS]: vernalisation cardinals, frost kill, ripeness/shedding, root depth timing, excess of fruits, HI coefficient b, logistic steepness, flowering and senescence stage placement, senescence_acceleration. Nutrient block (F1b): Justes critical N curve and the LfL Bayern removal figures are [C]/[D]; uptake rates, dilution minimum, root N, pH response and lodging are [AS]."
+}
