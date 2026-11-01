@@ -86,7 +86,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const real engine_rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
                 const real out_rpm = std::abs(s.gearbox_out_omega) * kRadPerSecToRpm;
                 if (s.gearbox_current == 0) {
-                    if (shift_req > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
+                    if (shift_req > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = std::clamp(desc_.auto_shift.start_gear, s.min_gear, s.max_gear);
                 } else if (s.gearbox_current >= 1) {
                     // Assists I7 kickdown bypass: a downshift with the throttle command at or above kickdown_throttle
                     // (0 = never) ignores min_time_in_gear_s; upshifts always wait for it. The bypass is a driver action:

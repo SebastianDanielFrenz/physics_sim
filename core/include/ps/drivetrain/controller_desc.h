@@ -120,6 +120,10 @@ struct AutoShiftDesc {
     // above this value ignores min_time_in_gear_s. 0 = no bypass (every car that does not set it is bit-identical).
     // [AS] 0.95 on car_hyper_n2o.
     real kickdown_throttle = 0.0;
+    // The gear auto-shift selects when the driver pulls away from neutral (throttle above the driver threshold, at a standstill). 1 = the first
+    // gear, as before (every vehicle that does not set it is bit-identical). A higher gear is for a gearbox whose first gears are crawler gears;
+    // the shift points still apply afterwards, so a load that holds the engine below the down point is shifted down.
+    int start_gear = 1;
 };
 
 // The loader-facing descriptor for a "manual_tcu" controller (plan section
