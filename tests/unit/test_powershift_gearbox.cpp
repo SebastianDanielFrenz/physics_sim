@@ -31,6 +31,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 
 using namespace ps;
 using namespace ps::drivetrain;
@@ -128,6 +129,29 @@ TEST_CASE("Powershift: a small excess upshifts one gear only", "[powershift][dri
     b.set_input_rpm(2300.0); // gear 7 = 2012 (>= 1775), gear 8 = 1760 (< 1775)
     const auto o = b.step_for(0.002);
     CHECK(o.target == 7);
+}
+
+TEST_CASE("Powershift: min_upshift_pull_fraction limits a skip to the pull it keeps, at least one gear", "[powershift][drivetrain][automatic]") {
+    // 12 % steps: one gear keeps 0.875, two 0.766, three 0.670 of the ratio (the pull).
+    for (const auto& c : {std::pair<real, int>{0.0, 9}, {0.7, 8}, {0.77, 7}, {0.86, 7}, {0.99, 7}}) {
+        AutoTransmission::Desc d = make_desc();
+        d.tcu.powershift->min_upshift_pull_fraction = c.first;
+        Box b(d);
+        b.set_input_rpm(2900.0);
+        CHECK(b.step_for(0.002).target == c.second); // sabotage: the limit ignored -> 9 everywhere
+    }
+}
+
+TEST_CASE("Powershift: upshift_min_time_s holds an upshift, a downshift keeps the plain dwell", "[powershift][drivetrain][automatic]") {
+    AutoTransmission::Desc d = make_desc();
+    d.tcu.powershift->upshift_min_time_s = 2.0;
+    Box b(d); // 1.2 s in the start gear
+    b.set_input_rpm(2900.0);
+    CHECK(b.step_for(0.01).target == 6);
+    CHECK(b.step_for(1.0).target == 9); // past 2 s in the gear
+    Box c(d);
+    c.set_input_rpm(1100.0); // below the down line (1400 at full throttle), dwell 0.5 s met
+    CHECK(c.step_for(0.01).target < 6);
 }
 
 TEST_CASE("Powershift: no upshift inside the band and none before the dwell", "[powershift][drivetrain][automatic]") {
@@ -282,6 +306,9 @@ TEST_CASE("Powershift: loader rejections", "[powershift][drivetrain][io]") {
     CHECK_THROWS_WITH(load_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["start_gear"] = 0; }), ContainsSubstring("start_gear"));
     CHECK_THROWS_WITH(load_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["target_fraction"] = 1.0; }), ContainsSubstring("target_fraction"));
     CHECK_THROWS_WITH(load_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["bogus"] = 1; }), ContainsSubstring("bogus"));
+    CHECK_THROWS_WITH(load_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["min_upshift_pull_fraction"] = 1.0; }), ContainsSubstring("min_upshift_pull_fraction"));
+    CHECK_THROWS_WITH(load_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["upshift_min_time_s"] = -1.0; }), ContainsSubstring("upshift_min_time_s"));
+
     CHECK_THROWS_WITH(build_edited([](nlohmann::json& v) { v["controllers"][0]["powershift"]["start_gear"] = 25; }), ContainsSubstring("start_gear"));
     // forward_range on another gearbox type
     CHECK_THROWS_WITH(load_edited({}, [](nlohmann::json& g) { g["type"] = "dual_clutch"; }), ContainsSubstring("powershift"));

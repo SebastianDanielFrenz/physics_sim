@@ -222,6 +222,13 @@ struct PowershiftTcuDesc {
     // of the torque the rows carried, the engine's demand and this): a governed diesel is lightly loaded at the decision and
     // at full demand a moment later. [AS]
     real shift_pressure_fraction = 0.6; // (0, 1]
+    // Stage 1b (0 = off, the stage 1 law): an upshift may skip gears only while the pull it keeps, the ratio step
+    // |ratio(next)| / |ratio(g)|, stays at or above this (at least one gear up always). Two skipped gears keep ~0.77 on a
+    // 12 % step box, which is what a loaded tractor feels as a hole in the pull. [AS]
+    real min_upshift_pull_fraction = 0.0; // [0, 1)
+    // Stage 1b (0 = off): the least time in a gear before an UPSHIFT (downshifts keep min_time_in_gear_s only), so a heavy
+    // launch cannot chain a shift every 0.3 s through the low gears. [AS]
+    real upshift_min_time_s = 0.0; // >= 0
 };
 
 // Tractor plan stage 2: the driver law of an automatic_tcu driving a HydroCvt gearbox ("hydro" block, required with it).

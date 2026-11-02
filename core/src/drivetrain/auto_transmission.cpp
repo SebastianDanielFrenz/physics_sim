@@ -446,10 +446,11 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
     const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
     const int n = forward_count();
     const int top = std::clamp(selector_ > 0 ? selector_ : n, 1, n);
-    if (dwell && r > up && g < top && in_rpm(g + 1) > dn) {
+    if (dwell && time_in_gear_ >= ps.upshift_min_time_s && r > up && g < top && in_rpm(g + 1) > dn) {
         int best = g + 1;
         for (int k = g + 2; k <= std::min(top, g + ps.max_skip); ++k) {
             if (in_rpm(k) < target) break;
+            if (std::abs(ratio(k)) < ps.min_upshift_pull_fraction * std::abs(ratio(g))) break;
             best = k;
         }
         return best;

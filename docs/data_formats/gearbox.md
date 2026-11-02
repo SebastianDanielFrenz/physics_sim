@@ -238,6 +238,16 @@ governed diesel near its top speed is lightly loaded at the decision and loaded 
 follows the demand (measured: the pre-powershift formula gave 0.6 s shifts). Data `data/gearboxes/tractor_24f24r_powershift.json`
 (24F/24R, 6 ranges of 4, [AS]), fixture `tests/support/fixtures/vehicles/tractor_powershift.json`.
 
+Stage 1b (loaded tractors, farm measurement: a shift every ~0.3 s below 15 km/h, each keeping 0.26-0.57 of the pull):
+`min_upshift_pull_fraction` (default 0 = off, [0,1)) limits a skip to the pull it keeps, `|ratio(next)| / |ratio(g)|` at
+least this (one gear up always; 2 gears keep 0.77 on 14 % steps, which the farm saw as 0.76-0.79); `upshift_min_time_s`
+(default 0 = off) is the least time in a gear before an UPSHIFT (downshifts keep `min_time_in_gear_s`). Both [AS], the shipped
+fixture uses 0.86 and 0.8 s. A longer interval holds a governed engine at its rpm limit while it waits (0.8 s: longest
+no-acceleration spell 0.79 s in 0-30 km/h with 6 t, 1.0 s: 1.02 s). The launch gear is `start_gear` (data; a heavier
+tractor starts in a higher field gear). The shipped box's `shift_clutch.torque_phase_s` is 0.07 s: at 0.15 s an in-range
+shift kept only 0.72-0.80 of the pull, at 0.07 s 0.81-0.95 (heavy launch, 10.5 t trailer; test in test_powershift_tractor.cpp).
+A range change still interrupts the pull for `range_change_time_s` by design (0 = a full powershift box).
+
 ## Hydro-mechanical CVT gearboxes (tractor plan stage 2)
 
 `"type": "hydro_cvt"`: a power-split tractor transmission (Fendt Vario class). One continuous ratio **k = w_out / w_in**

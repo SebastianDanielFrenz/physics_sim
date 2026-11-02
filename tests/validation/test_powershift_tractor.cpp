@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS // the diag trailer mass is read from the environment
 // tests/validation/test_powershift_tractor.cpp - tractor plan stage 1: the 24F/24R powershift box
 // (data/gearboxes/tractor_24f24r_powershift.json, fixture tests/support/fixtures/vehicles/tractor_powershift.json) on
 // data/vehicles/tractor.json's body, driven through World like the game.
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -240,6 +242,7 @@ struct ShiftRecord {
     real duration = 0.0;
     real min_fraction = 1.0;
     bool settled = false;
+    real t = 0.0, kmh = 0.0; // when the shift began and the ground speed then
 };
 
 std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real seconds, real trailer_mass = 0.0, real throttle = 1.0) {
@@ -250,6 +253,7 @@ std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real se
     std::vector<ShiftRecord> out;
     std::vector<real> fx;
     std::vector<int> busy, gear;
+    std::vector<real> vel;
     const int n = static_cast<int>(seconds / r.world->dt());
     for (int i = 0; i < n; ++i) {
         r.step();
@@ -257,6 +261,7 @@ std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real se
         // torque-affecting phases only: the closing ramp of the new clutch (ClutchClosing) carries more than the torque
         busy.push_back((r.pt().shift_phase != drivetrain::ShiftPhase::Idle && r.pt().shift_phase != drivetrain::ShiftPhase::ClutchClosing) ? 1 : 0);
         gear.push_back(r.pt().gear);
+        vel.push_back(r.speed());
     }
     // a shift = a run of busy ticks; the gear before and after
     const int pre_w = 36; // 0.15 s
@@ -267,6 +272,8 @@ std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real se
             if (j >= n || gear[static_cast<std::size_t>(j)] <= 0) break;
             ShiftRecord s;
             s.from = gear[static_cast<std::size_t>(i - 1)];
+            s.t = i * r.world->dt();
+            s.kmh = vel[static_cast<std::size_t>(i)] * 3.6;
             s.to = gear[static_cast<std::size_t>(j)];
             if (i >= pre_w) {
                 real pre = 0.0;
@@ -365,7 +372,7 @@ TEST_CASE("Powershift tractor: 0-30 km/h with a 6 t trailer is faster and smooth
     // 14 clutch shifts. Measured 0.160 vs 0.155 m/s: equal within 10 %, the flat spell and the shift count are what differ.
     CHECK(ps.worst_drop <= 1.1 * mn.worst_drop);
     CHECK(ps.shifts < mn.shifts);
-    CHECK(ps.longest_flat <= mn.longest_flat);
+    CHECK(ps.longest_flat <= mn.longest_flat + 0.4); // stage 1b: upshift_min_time_s 0.8 holds a governed engine at its limit up to that long
     CHECK_FALSE(ps.stalled);
     CHECK(ps.balance <= 5e-8);
 }
@@ -427,4 +434,51 @@ TEST_CASE("Powershift tractor diag: the first shifts under 6 t", "[.][diag][powe
                         static_cast<double>(r.pt().driveline.gearbox_in_omega), static_cast<double>(r.pt().driveline.gearbox_out_omega), static_cast<double>(d.clutch_cap_kinetic));
         }
     }
+}
+
+// Stage 1b: a tractor-heavy trailer (10.5 t on a 6 t tractor) from rest. The farm fork measured a shift every ~0.3 s below 15 km/h,
+// each keeping 0.26-0.57 of the pull. With min_upshift_pull_fraction (single-gear steps) and upshift_min_time_s no two
+// shifts come closer than the data minimum and every in-range shift of the first 30 km/h keeps >= 0.8 of the pull.
+// (A range change interrupts the pull by design for range_change_time_s; it is counted for spacing only.)
+static void check_heavy_launch(const vehicle::VehicleDesc& desc, bool expect_ok) {
+    const auto shifts = record_shifts(desc, 14.0, 10500.0);
+    REQUIRE(shifts.size() >= 4);
+    real min_gap = 1e9, worst_in = 1.0;
+    for (std::size_t i = 0; i < shifts.size(); ++i) {
+        const auto& s = shifts[i];
+        if (s.to > s.from && i > 0 && shifts[i - 1].to > shifts[i - 1].from) min_gap = std::min(min_gap, s.t - shifts[i - 1].t);
+        if (!s.range_change && s.settled) worst_in = std::min(worst_in, s.min_fraction);
+        std::printf("[ps heavy] t %5.2f %5.1f km/h %2d -> %2d %s kept %.2f\n", static_cast<double>(s.t), static_cast<double>(s.kmh), s.from, s.to, s.range_change ? "RANGE " : "inside",
+                    static_cast<double>(s.min_fraction));
+    }
+    std::printf("[ps heavy] min gap between upshifts %.2f s, worst in-range kept %.2f\n", static_cast<double>(min_gap), static_cast<double>(worst_in));
+    if (expect_ok) {
+        CHECK(min_gap >= 0.8);
+        CHECK(worst_in >= 0.8);
+    } else {
+        CHECK((min_gap < 1.0 || worst_in < 0.8));
+    }
+}
+
+TEST_CASE("Powershift tractor: a heavy launch chains no upshifts and every in-range shift keeps >= 0.8 of the pull", "[validation][vehicle][drivetrain][powershift]") {
+    check_heavy_launch(powershift_desc(), true);
+    // Negative control (recorded sabotage): the stage 1 law (no skip limit, no upshift interval) and the old 0.15 s torque phase.
+    vehicle::VehicleDesc old = powershift_desc();
+    for (auto& c : old.powertrain.components) {
+        if (auto* g = std::get_if<drivetrain::GearboxDesc>(&c.params)) g->shift_clutch.torque_phase_s = 0.15;
+    }
+    for (auto& c : old.controllers) {
+        if (auto* t = std::get_if<drivetrain::AutomaticTcuDesc>(&c.params); t && t->powershift) {
+            t->powershift->min_upshift_pull_fraction = 0.0;
+            t->powershift->upshift_min_time_s = 0.0;
+        }
+    }
+    check_heavy_launch(old, false);
+}
+
+TEST_CASE("Powershift tractor diag: launch shifts under a tractor-heavy trailer", "[.][diag][powershift]") {
+    const auto shifts = record_shifts(powershift_desc(), 14.0, std::getenv("PS_TRAILER") ? std::atof(std::getenv("PS_TRAILER")) : 6000.0);
+    for (const auto& s : shifts)
+        std::printf("[ps launch] t %5.2f  %5.1f km/h  %2d -> %2d %s %.3f s  kept %.2f%s\n", static_cast<double>(s.t), static_cast<double>(s.kmh), s.from, s.to, s.range_change ? "RANGE " : "inside",
+                    static_cast<double>(s.duration), static_cast<double>(s.min_fraction), s.settled ? "" : " (unsettled)");
 }

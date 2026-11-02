@@ -2,7 +2,7 @@
  "format": "physics_sim.gearbox/1",
  "name": "tractor_24f24r_powershift",
  "type": "powershift",
- "source": "[AS] stand-in for a 24F/24R full-powershift tractor box of the 75-120 kW class (4 wet-clutch powershift steps x 6 ranges, e.g. the 24/24 AutoQuad/Powershift family of the big manufacturers - brochure class, not a specific product). Forward ratios are the geometric progression of tractor_12f4r.json (21.0 to 1.07) in 24 steps of 1.143 ([AS]: speed steps of 14 % are the powershift step of such boxes), ordered by speed; with the 20.0 rear final drive and 1.025 m tyres that is 2.0-39.7 km/h at 2200 rpm. Reverse: 24 ratios from -23.1 to -2.3 (1.8-18 km/h) [AS]. Ranges: gears 1-4 are range 0, 5-8 range 1, ... (4 per range); a shift between two ranges moves the range selector, both clutches open for range_change_time_s 0.35 [AS: a range change is not powershiftable in most 24-speed boxes; 0 makes the box a full powershift]. Mesh efficiency 0.95 forward, 0.94 reverse (spur train plus an open wet pack, Wong ch. 3 overall tractor transmission efficiencies 0.85-0.92 incl. the final drive - the final drive here has its own 0.94). Shift clutches: 1100 N*m kinetic input-referred ([AS] 1.9 x the 580 N*m peak of diesel_i4_4l5_turbo.json); torque phase 0.15 s, close 0.35 s, inertia phase at most 0.6 s [AS, the values of sedan_7dct.json]. Not synchronised: there is no synchro, the shift machine is the clutch pair.",
+ "source": "[AS] stand-in for a 24F/24R full-powershift tractor box of the 75-120 kW class (4 wet-clutch powershift steps x 6 ranges, e.g. the 24/24 AutoQuad/Powershift family of the big manufacturers - brochure class, not a specific product). Forward ratios are the geometric progression of tractor_12f4r.json (21.0 to 1.07) in 24 steps of 1.143 ([AS]: speed steps of 14 % are the powershift step of such boxes), ordered by speed; with the 20.0 rear final drive and 1.025 m tyres that is 2.0-39.7 km/h at 2200 rpm. Reverse: 24 ratios from -23.1 to -2.3 (1.8-18 km/h) [AS]. Ranges: gears 1-4 are range 0, 5-8 range 1, ... (4 per range); a shift between two ranges moves the range selector, both clutches open for range_change_time_s 0.35 [AS: a range change is not powershiftable in most 24-speed boxes; 0 makes the box a full powershift]. Mesh efficiency 0.95 forward, 0.94 reverse (spur train plus an open wet pack, Wong ch. 3 overall tractor transmission efficiencies 0.85-0.92 incl. the final drive - the final drive here has its own 0.94). Shift clutches: 1100 N*m kinetic input-referred ([AS] 1.9 x the 580 N*m peak of diesel_i4_4l5_turbo.json); torque phase 0.07 s (stage 1b: 0.15 s kept only 0.72-0.80 of the pull in-range, 0.07 keeps 0.86-0.95; a real full-powershift handover takes ~0.1 s) [AS], close 0.35 s, inertia phase at most 0.6 s [AS, the values of sedan_7dct.json]. Not synchronised: there is no synchro, the shift machine is the clutch pair.",
  "forward_ratios": [
   21.0,
   18.451,
@@ -149,7 +149,7 @@
  "shift_clutch": {
   "capacity_nm": 1100.0,
   "static_factor": 1.15,
-  "torque_phase_s": 0.15,
+  "torque_phase_s": 0.07,
   "max_inertia_phase_s": 0.6,
   "sync_slip_rad_s": 3.0,
   "engage_time_s": 0.35

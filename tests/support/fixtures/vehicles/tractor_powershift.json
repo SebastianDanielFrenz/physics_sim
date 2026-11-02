@@ -391,7 +391,9 @@
    "powershift": {
     "start_gear": 11,
     "target_fraction": 0.5,
-    "max_skip": 4
+    "max_skip": 4,
+    "min_upshift_pull_fraction": 0.86,
+    "upshift_min_time_s": 0.8
    }
   }
  ]
