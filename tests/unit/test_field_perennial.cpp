@@ -8,7 +8,7 @@
 //  - PN-c: perennial_cut without the regrowth_gdd reset -> PN2 fails (a cut sward keeps its stage).
 //  - PN-d: perennial_cut also scaling the roots (n_root *= keep) -> PN2 fails (na.n_root == nb.n_root);
 //  - PN-e: do_mow sending the cut into pool 0 (to_hay = false) -> PN2 and PN4 fail (straw pool touched, no hay);
-//  - PN-f: step_hay without the rain re-wetting or without drying -> PN4 fails (moisture bands).
+//  - PN-f: step_hay without the rain re-wetting -> PN4 fails (moisture after rain). All six run 2026-11-02, each fails the named test.
 #include "field_test_support.h"
 #include "ps/field/field_scenario.h"
 
