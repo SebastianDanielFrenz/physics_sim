@@ -37,6 +37,13 @@ struct PerennialDesc {
     real cycle_gdd = 0.0;           // development value at which an uncut sward turns over; above regrowth_gdd
     real stubble_fraction = 0.3;    // share of the standing biomass that stays after a cut or turnover
     real cc_floor = 0.05;           // canopy cover the sward keeps (crowns, tillers); never below this once emerged
+    // The cut grass in the swath (its own surface pool, separate from the loose straw). Moisture is the water share of the fresh mass.
+    real hay_fresh_moisture = 0.78;     // moisture of the grass at the cut
+    real hay_equilibrium_moisture = 0.13;   // what a swath dries toward
+    real hay_dry_per_mm = 0.22;         // drying: the excess over the equilibrium falls by 1 - exp(-this x ET0 mm) per day
+    real hay_rewet_per_mm = 0.03;       // rain: kg water per kg dry matter per mm
+    real hay_max_moisture = 0.70;       // rain wets the swath at most to this (a fresher swath is not wetted further)
+    real hay_rot_after_days = 21.0;     // a swath nobody picked up lies down into the loose litter pool after this many days
 };
 
 struct CropDesc {

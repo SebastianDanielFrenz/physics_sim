@@ -176,6 +176,10 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
         s_.d_evap[c] = f * so.tew_mm();
         s_.initial_storage[c] = storage_mm(static_cast<int>(c));
     }
+    for (const CropDesc& cd : cfg_.crops)
+        if (cd.perennial.active) hay_enabled_ = true;
+    if (hay_enabled_)
+        for (auto* v : {&s_.hay_dm, &s_.hay_w, &s_.hay_n, &s_.hay_p, &s_.hay_k, &s_.hay_age}) fill(*v, 0.0);
     if (cfg_.management_enabled) init_management();   // before the nutrients: their initial N includes the weeds'
     if (cfg_.nutrients_enabled) init_nutrients();
     if (cfg_.pathogens_enabled) init_pathogens();
@@ -237,6 +241,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     }
 
     const bool mgmt = cfg_.management_enabled;
+    if (hay_enabled_) step_hay(c, w);
     if (mgmt) manage_prestep(c, w);
     const bool has_crop = s.crop[c] != 0;
     const CropDesc* cr = has_crop ? &cfg_.crops[static_cast<std::size_t>(s.crop[c] - 1)] : nullptr;
@@ -287,7 +292,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         const int prev = st;
         s.gdd_sow[c] += dev;
         if (cr->perennial.active && s.gdd_sow[c] >= cr->perennial.cycle_gdd && prev >= cr->stage_emergence) {
-            perennial_cut(c, 1.0);   // an uncut sward turns over: the old growth lies down and the sward starts again
+            perennial_cut(c, 1.0, false);   // an uncut sward turns over: the old growth lies down and the sward starts again
         }
         st = stage_of(*cr, s.gdd_sow[c]);
         s.stage[c] = static_cast<std::uint8_t>(st);
@@ -801,7 +806,7 @@ void Field::restore(const FieldCheckpoint& cp) {
     if (cp.nx != nx_ || cp.ny != ny_ || cp.state.d_root.size() != s_.d_root.size() ||
         cp.state.crop.size() != s_.crop.size() || cp.state.no3_1.size() != s_.no3_1.size() ||
         cp.state.res_c[0].size() != s_.res_c[0].size() || cp.state.path_p.size() != s_.path_p.size() ||
-        cp.state.res_crop.size() != s_.res_crop.size() || cp.state.hum_c.size() != s_.hum_c.size())
+        cp.state.res_crop.size() != s_.res_crop.size() || cp.state.hay_dm.size() != s_.hay_dm.size() || cp.state.hum_c.size() != s_.hum_c.size())
         throw std::invalid_argument("Field::restore: checkpoint does not fit this grid");
     s_ = cp.state;
 }
@@ -837,6 +842,8 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
             h = fold_vec(h, *v);
         if (!s_.cum_tr_weed.empty()) h = fold_vec(h, s_.cum_tr_weed);
     }
+    if (hay_enabled_)
+        for (const auto* v : {&s_.hay_dm, &s_.hay_w, &s_.hay_n, &s_.hay_p, &s_.hay_k, &s_.hay_age}) h = fold_vec(h, *v);
     if (cfg_.pathogens_enabled) {
         h = fold_vec(h, s_.path_p);
         h = fold_vec(h, s_.path_s);

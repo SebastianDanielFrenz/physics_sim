@@ -95,6 +95,7 @@ real Field::n_storage(std::size_t c) const {
         for (int p = 0; p < kResPools; ++p) n += s_.res_n[static_cast<std::size_t>(p)][c];
         const std::size_t G = cfg_.weeds.size();
         for (std::size_t g = 0; g < G; ++g) n += s_.w_n[c * G + g];
+        if (hay_enabled_) n += s_.hay_n[c];
     }
     return n;
 }
@@ -378,6 +379,8 @@ HarvestResult Field::apply_all(const OperationEffect& e) {
     for (int c = 0; c < cell_count(); ++c) {
         HarvestResult r;
         apply(c, e, &r);
+        m.hay_dm_t_ha += r.hay_dm_t_ha;
+        m.hay_water_t_ha += r.hay_water_t_ha;
         if (r.crop_id == 0) continue;
         m.crop_id = r.crop_id;
         m.grain_dm_t_ha += r.grain_dm_t_ha;
@@ -399,6 +402,10 @@ HarvestResult Field::apply_all(const OperationEffect& e) {
                         &m.n_root_kg_ha, &m.p2o5_grain_kg_ha, &m.p2o5_straw_kg_ha, &m.k2o_grain_kg_ha, &m.k2o_straw_kg_ha,
                         &m.lodging_loss})
             *x /= n;
+    }
+    if (cell_count() > 0) {   // hay is a field mean over every cell, not over the cells that carried a crop
+        m.hay_dm_t_ha /= cell_count();
+        m.hay_water_t_ha /= cell_count();
     }
     return m;
 }
@@ -477,7 +484,7 @@ real Field::p_balance_residual(int cell) const {
     const NutrientLedger l = nutrient_ledger(cell);
     const std::size_t c = static_cast<std::size_t>(cell);
     real stored = s_.p_av[c] + s_.p_res[c] + s_.p_crop[c];
-    if (cfg_.management_enabled) stored += s_.res_p[0][c] + s_.res_p[1][c];
+    if (cfg_.management_enabled) stored += s_.res_p[0][c] + s_.res_p[1][c] + (hay_enabled_ ? s_.hay_p[c] : 0.0);
     return l.p_initial + l.p_applied - l.p_removed - stored;
 }
 
@@ -485,7 +492,7 @@ real Field::k_balance_residual(int cell) const {
     const NutrientLedger l = nutrient_ledger(cell);
     const std::size_t c = static_cast<std::size_t>(cell);
     real stored = s_.k_av[c] + s_.k_res[c] + s_.k_crop[c];
-    if (cfg_.management_enabled) stored += s_.res_k[0][c] + s_.res_k[1][c];
+    if (cfg_.management_enabled) stored += s_.res_k[0][c] + s_.res_k[1][c] + (hay_enabled_ ? s_.hay_k[c] : 0.0);
     return l.k_initial + l.k_applied - l.k_removed - stored;
 }
 

@@ -240,6 +240,7 @@ std::string operation_validation_error(const std::string& name, const OperationE
     c.frac("harvest.grain_loss", e.harvest.grain_loss);
     c.frac("straw_pickup", e.straw_pickup);
     c.frac("mow", e.mow);
+    c.frac("hay_pickup", e.hay_pickup);
     const SeedPlacement& s = e.seed;
     c.nonneg("seed.seeds_per_m2", s.seeds_per_m2);
     c.nonneg("seed.depth_m", s.depth_m);

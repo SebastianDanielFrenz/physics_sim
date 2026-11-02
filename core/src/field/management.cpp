@@ -319,18 +319,37 @@ void Field::do_harvest_mgmt(std::size_t c, const HarvestEffect& h, real cov, Har
     }
 }
 
-// A perennial sward goes back to its regrowth state with `share` of the standing biomass above the stubble down as litter (the loose pool;
-// roots, nutrients and carbon follow crop_to_residue's ledgers, so every balance closes). Turnover is share 1; a mower takes less or more of it.
-void Field::perennial_cut(std::size_t c, real share) {
+// A perennial sward goes back to its regrowth state with `share` of the standing biomass above the stubble cut. The cut takes the shoot only
+// (biomass, canopy, the nutrients in it); roots and their nitrogen stay, the stand and plant count stay. A mower cut (to_hay) lies in the
+// swath, a turnover lies in the loose litter pool. Either way the carbon and nutrients stay in the field books.
+void Field::perennial_cut(std::size_t c, real share, bool to_hay) {
     FieldState& s = s_;
     if (s.crop[c] == 0) return;
     const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(s.crop[c] - 1)];
     const PerennialDesc& pr = cr.perennial;
     if (!pr.active) return;
-    const real stand0 = s.stand[c], plants0 = s.plants[c];   // the crowns stay: only the shoot (biomass, canopy, nutrients) goes down
-    crop_to_residue(c, std::min(1.0, share) * (1.0 - pr.stubble_fraction), false);
-    s.stand[c] = stand0;
-    s.plants[c] = plants0;
+    const SoilManagementDesc& m = soil_of(c).management;
+    const real f = std::min(1.0, share) * (1.0 - pr.stubble_fraction);
+    const real dm = f * s.biomass[c];                       // g/m2
+    const real n_cut = f * s.n_crop[c], p_cut = f * s.p_crop[c], k_cut = f * s.k_crop[c];
+    const real c_cut = dm * 10.0 * m.res_c_fraction;        // kg C/ha
+    if (to_hay) {
+        s.hay_dm[c] += dm;
+        s.hay_w[c] += dm * pr.hay_fresh_moisture / (1.0 - pr.hay_fresh_moisture);
+        s.hay_n[c] += n_cut;
+        s.hay_p[c] += p_cut;
+        s.hay_k[c] += k_cut;
+        s.hay_age[c] = 0.0;
+    } else {
+        s.res_c[0][c] += c_cut;
+        s.res_n[0][c] += n_cut;
+        s.res_p[0][c] += p_cut;
+        s.res_k[0][c] += k_cut;
+        if (cfg_.pathogens_enabled) s.res_crop[c] = s.crop[c];
+    }
+    s.l_c_crop[c] += c_cut;
+    const real keep = 1.0 - f;
+    for (auto* v : {&s.cc, &s.biomass, &s.n_crop, &s.p_crop, &s.k_crop}) (*v)[c] *= keep;
     s.gdd_sow[c] = pr.regrowth_gdd;
     s.t_sen[c] = s.hi_gdd[c] = s.grain[c] = s.days_ripe[c] = 0.0;
     s.pol_sum[c] = s.pol_n[c] = s.sto_sum[c] = s.sto_n[c] = 0.0;
@@ -344,7 +363,55 @@ void Field::perennial_cut(std::size_t c, real share) {
 
 void Field::do_mow(std::size_t c, real share) {
     if (!(share > 0.0)) return;
-    perennial_cut(c, share);
+    perennial_cut(c, share, true);
+}
+
+// Daily: the swath dries toward its equilibrium moisture with the evaporative demand and is wetted by rain; one nobody picks up rots into
+// the loose litter pool after hay_rot_after_days (its carbon and nutrients move over whole, so the books stay closed).
+void Field::step_hay(std::size_t c, const DailyWeather& w) {
+    FieldState& s = s_;
+    if (!(s.hay_dm[c] > 0.0)) return;
+    const CropDesc* pc = nullptr;
+    for (const CropDesc& cd : cfg_.crops)
+        if (cd.perennial.active) {
+            pc = &cd;
+            break;
+        }
+    const PerennialDesc& pr = pc->perennial;
+    real x = s.hay_w[c] / s.hay_dm[c];                       // kg water per kg dry matter
+    const real x_eq = pr.hay_equilibrium_moisture / (1.0 - pr.hay_equilibrium_moisture);
+    const real x_cap = pr.hay_max_moisture / (1.0 - pr.hay_max_moisture);
+    if (w.rain_mm > 0.0 && x < x_cap) x = std::min(x_cap, x + pr.hay_rewet_per_mm * w.rain_mm);
+    if (x > x_eq) x = x_eq + (x - x_eq) * ps::math::exp(-pr.hay_dry_per_mm * w.et0_mm);
+    s.hay_w[c] = x * s.hay_dm[c];
+    s.hay_age[c] += 1.0;
+    if (s.hay_age[c] >= pr.hay_rot_after_days) {
+        const SoilManagementDesc& m = soil_of(c).management;
+        s.res_c[0][c] += s.hay_dm[c] * 10.0 * m.res_c_fraction;
+        s.res_n[0][c] += s.hay_n[c];
+        s.res_p[0][c] += s.hay_p[c];
+        s.res_k[0][c] += s.hay_k[c];
+        s.hay_dm[c] = s.hay_w[c] = s.hay_n[c] = s.hay_p[c] = s.hay_k[c] = s.hay_age[c] = 0.0;
+    }
+}
+
+// A baler takes the share f of the swath. The hay leaves the field (nutrient and carbon removal ledgers); out gets its mass and water.
+void Field::do_hay_pickup(std::size_t c, real f, HarvestResult* out) {
+    FieldState& s = s_;
+    if (!hay_enabled_ || !(f > 0.0) || !(s.hay_dm[c] > 0.0)) return;
+    const SoilManagementDesc& m = soil_of(c).management;
+    const real dm = s.hay_dm[c] * f, wt = s.hay_w[c] * f;
+    s.l_c_rem[c] += dm * 10.0 * m.res_c_fraction;
+    s.l_n_rem[c] += s.hay_n[c] * f;
+    s.l_p_rem[c] += s.hay_p[c] * f;
+    s.l_k_rem[c] += s.hay_k[c] * f;
+    if (out) {
+        out->hay_dm_t_ha += dm * 0.01;
+        out->hay_water_t_ha += wt * 0.01;
+    }
+    const real keep = 1.0 - f;
+    for (auto* v : {&s.hay_dm, &s.hay_w, &s.hay_n, &s.hay_p, &s.hay_k}) (*v)[c] *= keep;
+    if (s.hay_dm[c] < 1.0e-9) s.hay_dm[c] = s.hay_w[c] = s.hay_n[c] = s.hay_p[c] = s.hay_k[c] = s.hay_age[c] = 0.0;
 }
 
 void Field::do_straw_pickup(std::size_t c, real f) {
@@ -526,6 +593,14 @@ void Field::apply_management(std::size_t c, const OperationEffect& e, int phase,
         }
         if (e.straw_pickup > 0.0) do_straw_pickup(c, eff(e.straw_pickup, cov));
         if (e.mow > 0.0) do_mow(c, eff(e.mow, cov));
+        if (e.hay_pickup > 0.0) {
+            HarvestResult hr;
+            do_hay_pickup(c, eff(e.hay_pickup, cov), &hr);
+            if (harvest_out) {
+                harvest_out->hay_dm_t_ha += hr.hay_dm_t_ha;
+                harvest_out->hay_water_t_ha += hr.hay_water_t_ha;
+            }
+        }
         if (e.tillage.active()) do_tillage(c, e.tillage, cov);
     } else {
         if (e.spray.product != 0) do_spray(c, e.spray, cov);
@@ -651,6 +726,11 @@ ManagementView Field::management_view(int cell) const {
         v.residue_c_kg_ha += s_.res_c[static_cast<std::size_t>(p)][c];
         v.residue_n_kg_ha += s_.res_n[static_cast<std::size_t>(p)][c];
     }
+    if (hay_enabled_) {
+        v.hay_dm_t_ha = s_.hay_dm[c] * 0.01;
+        v.hay_moisture = s_.hay_dm[c] > 0.0 ? s_.hay_w[c] / (s_.hay_dm[c] + s_.hay_w[c]) : 0.0;
+        v.hay_n_kg_ha = s_.hay_n[c];
+    }
     v.cover = residue_cover(c);
     v.loosening = s_.loose[c];
     v.damage = s_.damage[c];
@@ -705,6 +785,7 @@ real Field::c_balance_residual(int cell) const {
     const std::size_t c = static_cast<std::size_t>(cell);
     real stored = 0.0;
     for (int p = 0; p < kResPools; ++p) stored += s_.res_c[static_cast<std::size_t>(p)][c];
+    if (hay_enabled_) stored += s_.hay_dm[c] * 10.0 * soil_of(c).management.res_c_fraction;
     const std::size_t G = cfg_.weeds.size();
     for (std::size_t g = 0; g < G; ++g) stored += s_.w_bio[c * G + g] * 10.0 * cfg_.weeds[g].c_frac;
     if (cfg_.soc_enabled)   // the humus pool is a stock: check its own state, not the cumulative gain

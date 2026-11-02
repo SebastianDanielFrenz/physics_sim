@@ -113,6 +113,10 @@ struct HarvestResult {
     // Straw split (all zero when nothing grew). straw_dm_t_ha is the harvestable straw (CropDesc::straw_harvest_fraction of
     // the non-grain aboveground biomass); stubble_dm_t_ha the rest (stubble, chaff, leaf litter) that stays on the field.
     real stubble_dm_t_ha = 0.0;
+    // Hay taken by a hay_pickup (t/ha as the mean over the covered cells; filled by apply()/apply_all(), zero otherwise): the dry matter and
+    // the water it carried. hay_moisture() = water share of the fresh mass.
+    real hay_dm_t_ha = 0.0, hay_water_t_ha = 0.0;
+    real hay_moisture() const { return hay_dm_t_ha + hay_water_t_ha > 0.0 ? hay_water_t_ha / (hay_dm_t_ha + hay_water_t_ha) : 0.0; }
 };
 
 // Plain-value view of one cell (copy; nothing here points into the field).
@@ -182,6 +186,9 @@ struct ManagementView {
     real soc_gain_c_kg_ha = 0.0;         // carbon built into humus from decomposed residue since construction
     real plants_m2 = 0.0;                // established crop plants
     real sown_seeds_m2 = 0.0;            // seeds sown and not yet emerged (0 once emerged)
+    real hay_dm_t_ha = 0.0;              // cut grass lying in the swath (perennial crops only), dry matter
+    real hay_moisture = 0.0;             // its moisture, water share of the fresh mass (0 when the swath is empty)
+    real hay_n_kg_ha = 0.0;
     real weed_factor = 1.0;              // growth factor from weed competition of the last step
     real weed_transpiration_mm = 0.0;    // cumulative transpiration of the weeds since construction (part of the water ledger's transpiration)
     std::vector<WeedGroupView> weeds;
@@ -265,6 +272,8 @@ struct FieldState {
     std::vector<std::uint8_t> res_crop;                         // crop id whose residue lies on the surface (0 = none)
     // soil organic carbon (empty unless FieldConfig::soc_enabled)
     std::vector<real> hum_c, hum_c0, soc_dfc, l_c_hdec, l_c_amend;
+    // the swath of cut grass (empty unless a perennial crop is in the palette): dry matter and water g/m2, N, P2O5, K2O kg/ha, days since the last cut
+    std::vector<real> hay_dm, hay_w, hay_n, hay_p, hay_k, hay_age;
 };
 
 // What a renderer reads of one cell, as plain values (visual_rows). No vectors: a bulk read of a whole region does not allocate.
@@ -418,7 +427,10 @@ private:
     void do_seeding(std::size_t c, const SeedPlacement& sp, real cov);
     void do_spray(std::size_t c, const Spray& sp, real cov);
     void do_straw_pickup(std::size_t c, real f);
-    void perennial_cut(std::size_t c, real share);   // a perennial sward: `share` of the standing biomass above the stubble lies down as litter, the cell returns to regrowth
+    void do_hay_pickup(std::size_t c, real f, HarvestResult* out);
+    void step_hay(std::size_t c, const DailyWeather& w);
+    bool hay_enabled_ = false;
+    void perennial_cut(std::size_t c, real share, bool to_hay);   // a perennial sward: `share` of the standing biomass above the stubble lies down as litter, the cell returns to regrowth
     void do_mow(std::size_t c, real share);
     void crop_to_residue(std::size_t c, real fraction, bool with_grain);   // kills `fraction` of the standing crop into the residue pools
     void clear_crop(std::size_t c);

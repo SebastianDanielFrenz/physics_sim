@@ -163,7 +163,17 @@ A crop file may carry a `perennial` block (`meadow_grass.json` is the only one s
 | `stubble_fraction` | share of the standing biomass that stays after a cut or turnover, in (0, 1) |
 | `cc_floor` | canopy cover the sward never falls below once emerged, in (0, `ccx`) |
 
-Turnover and a cut do the same thing: the standing biomass above the stubble goes through `crop_to_residue` into the loose surface pool
-(so every N/P/K/C ledger closes), the cell returns to `regrowth_gdd`, grain and senescence state reset, the stand and plant count
-stay. Frost thins the canopy but never the stand. A perennial needs `management_enabled`; it does not vernalise. A crop without the block
-is unchanged and no field hash moves. The `mow` operation key (operation.md) is a cut by a machine. Tests `test_field_perennial.cpp` PN0-PN3.
+| `hay_fresh_moisture` | wet-basis moisture of a fresh swath, default 0.78 |
+| `hay_equilibrium_moisture` | moisture the swath dries toward, default 0.13 |
+| `hay_dry_per_mm` | drying rate per mm of reference evapotranspiration (exponential approach), default 0.22 |
+| `hay_rewet_per_mm` | water taken up per mm of rain, kg water per kg dry matter, default 0.03 |
+| `hay_max_moisture` | rain re-wetting stops here, default 0.70 |
+| `hay_rot_after_days` | an unbaled swath rots into the loose litter pool after this many days, default 21 |
+
+A cut and a turnover both take the shoot only: the standing biomass above the stubble, its canopy and the N/P/K in it. Roots, their
+nitrogen, the stand and the plant count are untouched. The cell returns to `regrowth_gdd`; grain and senescence state reset. A turnover
+(uncut sward at `cycle_gdd`) puts the shoot into the loose litter pool. A mower cut puts it into the separate swath ("hay") pool, which
+is gated: it exists, is hashed and checkpointed only when a perennial crop is in the palette, and pool 0 (loose straw) is never touched
+by a cut. Every N/P/K/C ledger closes with the swath pool counted as stored. `hay_pickup` (operation.md) takes a share of the swath out of
+the field into the removal ledgers. Frost thins the canopy but never the stand. A perennial needs `management_enabled`; it does not vernalise. A crop without the block
+is unchanged and no field hash moves. The `mow` operation key (operation.md) is a cut by a machine. Tests `test_field_perennial.cpp` PN0-PN5.

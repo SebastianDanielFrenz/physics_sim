@@ -346,6 +346,12 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         d.perennial.cycle_gdd = w.number("cycle_gdd", true, 0.0);
         d.perennial.stubble_fraction = w.number("stubble_fraction", true, 0.0);
         d.perennial.cc_floor = w.number("cc_floor", true, 0.0);
+        d.perennial.hay_fresh_moisture = w.number("hay_fresh_moisture", false, d.perennial.hay_fresh_moisture);
+        d.perennial.hay_equilibrium_moisture = w.number("hay_equilibrium_moisture", false, d.perennial.hay_equilibrium_moisture);
+        d.perennial.hay_dry_per_mm = w.number("hay_dry_per_mm", false, d.perennial.hay_dry_per_mm);
+        d.perennial.hay_rewet_per_mm = w.number("hay_rewet_per_mm", false, d.perennial.hay_rewet_per_mm);
+        d.perennial.hay_max_moisture = w.number("hay_max_moisture", false, d.perennial.hay_max_moisture);
+        d.perennial.hay_rot_after_days = w.number("hay_rot_after_days", false, d.perennial.hay_rot_after_days);
         w.skip("source");
         w.finish();
     }
@@ -720,6 +726,7 @@ OperationEffect parse_operation_json(const json& j, const std::string& origin, c
     e.coverage = r.number("coverage", false, 1.0);
     e.straw_pickup = r.number("straw_pickup", false, 0.0);
     e.mow = r.number("mow", false, 0.0);
+    e.hay_pickup = r.number("hay_pickup", false, 0.0);
     if (r.has("tillage")) {
         const json& tb = r.object("tillage");
         const json* src = tb.contains("source") ? &tb["source"] : nullptr;

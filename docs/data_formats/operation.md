@@ -69,4 +69,8 @@ passes from recalled tool behaviour, not measured. Scenario use: `{"op": "operat
 "doy": 255}` with optional overrides `coverage`, `seeds_per_m2`, `depth_m`, `dose`, `straw_carried`, `straw_chopped`.
 
 `mow` - share of a perennial sward's standing biomass above the stubble that is cut and lies in the loose swath pool (mower); the
-cell returns to its regrowth state (crop.md "Perennial sward"). No effect on an annual.
+cell returns to its regrowth state (crop.md "Perennial sward"). No effect on an annual. The cut lies in the swath (hay) pool, not in the
+straw pool.
+
+`hay_pickup` - share of the swath (hay) pool taken by a baler; it leaves the field (nutrient and carbon removal ledgers) and the
+`FieldOpResult` / `HarvestResult` carry its dry mass and water (`hay_dm_t_ha`, `hay_water_t_ha`). Needs a perennial in the palette.

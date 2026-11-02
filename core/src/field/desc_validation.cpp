@@ -102,6 +102,14 @@ std::string crop_validation_error(const CropDesc& d) {
                   "perennial: need emergence gdd <= regrowth_gdd < cycle_gdd");
         c.fail_if(!(fin(pr.stubble_fraction) && pr.stubble_fraction > 0.0 && pr.stubble_fraction < 1.0), "perennial.stubble_fraction must be in (0, 1)");
         c.fail_if(!(fin(pr.cc_floor) && pr.cc_floor > 0.0 && pr.cc_floor < d.ccx), "perennial.cc_floor must be in (0, ccx)");
+        c.fail_if(!(fin(pr.hay_equilibrium_moisture) && pr.hay_equilibrium_moisture > 0.0 && fin(pr.hay_fresh_moisture) &&
+                    pr.hay_fresh_moisture > pr.hay_equilibrium_moisture && pr.hay_fresh_moisture < 1.0),
+                  "perennial: need 0 < hay_equilibrium_moisture < hay_fresh_moisture < 1");
+        c.fail_if(!(fin(pr.hay_max_moisture) && pr.hay_max_moisture > pr.hay_equilibrium_moisture && pr.hay_max_moisture < 1.0),
+                  "perennial.hay_max_moisture must be in (hay_equilibrium_moisture, 1)");
+        c.fail_if(!(fin(pr.hay_dry_per_mm) && pr.hay_dry_per_mm > 0.0 && fin(pr.hay_rewet_per_mm) && pr.hay_rewet_per_mm >= 0.0 &&
+                    fin(pr.hay_rot_after_days) && pr.hay_rot_after_days > 0.0),
+                  "perennial: hay_dry_per_mm and hay_rot_after_days must be > 0, hay_rewet_per_mm >= 0");
     }
     if (d.vernalises) {
         c.fail_if(d.stage_vernalisation_end < 1 || d.stage_vernalisation_end >= n, "vernalisation needs a valid until_stage");
