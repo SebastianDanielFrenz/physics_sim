@@ -784,6 +784,7 @@ private:
     real b_regen_cap_w_=0,b_drive_cap_w_=0,b_power_cmd_w_=0,b_zero_pedal_=0; // last substep (never hashed)
     bool b_feed_on_=false;                    // the motors currently carry a B feed (cleared once when B ends)
     std::vector<real> b_env_w_,b_regen_w_,b_regen_nm_,b_scale_d_,b_scale_r_; // prepare_b scratch (sized at build)
+    std::vector<real> b_regen_w0_,b_scale_r0_; // the same without the low-speed fade (B's pedal map)
     std::vector<std::size_t> b_battery_idx_;  // per regen map: index of its battery in batteries_
     void b_update_selector(const ComponentSubstepCtx& ctx_in,bool allowed);
     void prepare_b(const ComponentSubstepCtx& ctx,real pedal);

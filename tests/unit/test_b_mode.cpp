@@ -397,3 +397,88 @@ TEST_CASE("BP1: the B law is a straight line through the zero-power point", "[el
     CHECK(b_system_power(100e3, 300e3, 0.5) == Catch::Approx(100e3));
     CHECK(b_zero_power_pedal(0, 0) == 0);
 }
+
+// Owner report 2026-11-02: in B at 4-5 km/h on a slight down slope with a steady pedal the car dips about every 0.8 s.
+// Cause: the zero-power pedal was R/(R+P_max) with the FADED regeneration R, so it fell as the car slowed through the fade
+// band (2.5 -> 0.8 m/s); a steady pedal near it crossed it, the auto hold switched the pads to (1 - fade) x 0.25 at once,
+// the car slowed, the zero point fell below the pedal, the pads released, the slope sped the car up again.
+// Pre-fix, car_electric at 4.2 % from 1.3 m/s: pedal 0.05 -> 18 hold edges in 9 s, period 1.04 s, 0.98..1.34 m/s, front
+// axle load 8605..10337 N; pedal 0.10 -> 14 edges. That is the recorded sabotage of BM10 (the pre-fix law fails it).
+namespace {
+struct HoldRun {
+    int edges = 0;          // hold level on/off changes after the first second
+    real v_end = 0, v_max_late = 0;
+    real fz_min = 1e9, fz_max = 0; // front axle load over the last 5 s
+    real hold_end = 0, zero_pedal = 0;
+};
+
+HoldRun run_hold_on_slope(real pedal, bool print) {
+    Rig r;
+    r.rig = ps_test::build_vehicle_rig_from_desc(ev(), kMass, {2, .4, .15}, .6, 0.042, 4);
+    r.w().set_control("gear_request", 1);
+    r.w().set_control("assist.traction_control", 0);
+    ps_test::settle(r.w(), 0.5);
+    roll(r, 1.3, VehicleResetOptions::kKeepGear);
+    r.w().set_control("gear_request", kGearRequestB);
+    r.w().set_control("throttle", pedal);
+    HoldRun out;
+    bool prev_on = false;
+    for (int i = 0; i < 240 * 10; ++i) {
+        r.w().step();
+        const PowertrainSnapshot& s = r.pt();
+        const bool on = s.b_hold_level > 0.0;
+        if (i > 240 && on != prev_on) ++out.edges;
+        prev_on = on;
+        real fz_front = 0;
+        for (int k = 0; k < 2; ++k) fz_front += r.w().wheel_telemetry(r.rig.vehicle, k).fz;
+        if (i >= 240 * 5) {
+            out.v_max_late = std::max(out.v_max_late, r.speed());
+            out.fz_min = std::min(out.fz_min, fz_front);
+            out.fz_max = std::max(out.fz_max, fz_front);
+        }
+        if (print && i % 5 == 0 && i >= 480 && i < 480 + 240 * 3)
+            std::printf("  t %.3f v %.3f hold %.3f zero %.3f cmd %8.0f regen %8.0f drive %8.0f fzF %7.0f\n", i / 240.0,
+                        r.speed(), s.b_hold_level, s.b_zero_power_pedal, s.b_power_command_w, s.b_regen_capacity_w,
+                        s.b_drive_capacity_w, fz_front);
+    }
+    out.v_end = r.speed();
+    out.hold_end = r.pt().b_hold_level;
+    out.zero_pedal = r.pt().b_zero_power_pedal;
+    return out;
+}
+} // namespace
+
+TEST_CASE("BM10: a steady pedal on a down slope in the fade band does not switch the pads", "[electric][b_mode][vehicle]") {
+    // car_electric, 4.2 % down slope, B, constant pedal, start 1.3 m/s (inside the 2.5 -> 0.8 m/s fade band), 10 s.
+    // Bands [AS]: at most one hold on/off change after the first second; front axle load over the last 5 s within 50 N for
+    // every pedal (the dip was 1732 N peak to peak); pedal 0.05/0.10, well below the zero-power pedal (0.1429 for this car):
+    // the car stops and the pads hold it (v < 0.05 m/s, hold 1 at the end); at or above it the pads end released. Just
+    // below the zero point the B braking is weaker than the slope and the car settles or rolls on (measured 0.13: steady
+    // 1.83 m/s with pads at 0.009; 0.14: 3.3 m/s), which is the law, not a band.
+    // Measured with the fix: edges 0/0/0/1/0/0, front Fz spread 2-9 N.
+    for (const real pedal : {0.05, 0.10, 0.13, 0.14, 0.15, 0.20}) {
+        const HoldRun h = run_hold_on_slope(pedal, false);
+        INFO("pedal " << pedal << ": edges " << h.edges << ", v_end " << h.v_end << ", hold_end " << h.hold_end << ", zero "
+                      << h.zero_pedal << ", front Fz " << h.fz_min << ".." << h.fz_max);
+        std::printf("BM10 pedal %.2f: edges %d, v_end %.3f m/s, hold_end %.3f, zero %.4f, front Fz %.0f..%.0f N\n", pedal,
+                    h.edges, h.v_end, h.hold_end, h.zero_pedal, h.fz_min, h.fz_max);
+        CHECK(h.edges <= 1);
+        CHECK(h.fz_max - h.fz_min < 50.0);
+        if (pedal <= 0.10) {
+            CHECK(h.v_end < 0.05);
+            CHECK(h.hold_end == 1.0);
+        } else if (pedal >= h.zero_pedal) {
+            CHECK(h.hold_end == 0.0);
+        }
+    }
+}
+
+// Hidden diag: the BM10 run with a 20 ms trace for the first 3 s after B engages.
+TEST_CASE("B hold limit cycle diag", "[.][diag][b_mode][b_hold]") {
+    for (const real pedal : {0.05, 0.10, 0.13, 0.14, 0.15, 0.20}) {
+        std::printf("pedal %.2f\n", pedal);
+        const HoldRun h = run_hold_on_slope(pedal, true);
+        std::printf("pedal %.2f: hold edges %d, v_end %.3f, v_max(last 5 s) %.3f m/s, front Fz %.0f..%.0f N\n", pedal, h.edges,
+                    h.v_end, h.v_max_late, h.fz_min, h.fz_max);
+    }
+}
