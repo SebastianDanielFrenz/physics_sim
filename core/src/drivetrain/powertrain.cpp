@@ -2179,6 +2179,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         b_regen_nm_.assign(nmap, real(0.0));
         b_scale_d_.assign(batteries_.size(), real(1.0));
         b_scale_r_.assign(batteries_.size(), real(1.0));
+        b_regen_w0_.assign(nmap, real(0.0));
+        b_scale_r0_.assign(batteries_.size(), real(1.0));
         b_battery_idx_.assign(nmap, 0);
         for (std::size_t k = 0; k < nmap; ++k)
             for (std::size_t bi = 0; bi < batteries_.size(); ++bi)
@@ -2276,15 +2278,17 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
         const real tr = part ? mo->b_regen_capacity_nm(om) : real(0.0);
         b_regen_nm_[k] = tr; // capacity torque before the pack's scale
         b_regen_w_[k] = tr * om;
+        b_regen_w0_[k] = part ? mo->b_regen_capacity_nm(om, false) * std::max(om, real(1.0)) : real(0.0);
     }
     for (std::size_t bi = 0; bi < batteries_.size(); ++bi) {
         const Battery& bat = *batteries_[bi];
-        real sum_e = real(0.0), sum_r = real(0.0), eff = real(1.0);
+        real sum_e = real(0.0), sum_r = real(0.0), sum_r0 = real(0.0), eff = real(1.0);
         bool first = true;
         for (std::size_t k = 0; k < n; ++k)
             if (b_battery_idx_[k] == bi) {
                 sum_e += b_env_w_[k];
                 sum_r += b_regen_w_[k];
+                sum_r0 += b_regen_w0_[k];
                 if (first) { eff = regen_maps_[k].motor->regen_efficiency(); first = false; }
             }
         real supply_w = battery_discharge_budget_w(bat.desc, bat.soc(), ctx.h);
@@ -2293,15 +2297,23 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
         b_scale_d_[bi] = sum_e > real(0.0) ? std::min(real(1.0), supply_w * eff / sum_e) : real(1.0);
         const real accept_w = std::max(real(0.0), battery_charge_budget_j(bat.desc, bat.content(), ctx.h)) / ctx.h;
         b_scale_r_[bi] = sum_r > real(0.0) ? std::min(real(1.0), accept_w / eff / sum_r) : real(1.0);
+        b_scale_r0_[bi] = sum_r0 > real(0.0) ? std::min(real(1.0), accept_w / eff / sum_r0) : real(1.0);
     }
-    real p_max = real(0.0), regen_w = real(0.0);
+    real p_max = real(0.0), regen_w = real(0.0), regen_w0 = real(0.0);
     for (std::size_t k = 0; k < n; ++k) {
         p_max += b_env_w_[k] * b_scale_d_[b_battery_idx_[k]];
         regen_w += b_regen_w_[k] * b_scale_r_[b_battery_idx_[k]];
+        regen_w0 += b_regen_w0_[k] * b_scale_r0_[b_battery_idx_[k]];
     }
+    // The pedal map runs on the regeneration WITHOUT the low-speed fade (R0): a zero-power point that moved with the fade made a
+    // steady pedal cross it as the car slowed, and the hold switched on and off every ~1 s on a down slope. Above the fade
+    // start speed R0 == R, so the law is unchanged there.
     const real p = std::clamp(pedal, real(0.0), real(1.0));
-    const real p_cmd = b_system_power(regen_w, p_max, p);
-    const real zero_pedal = ps::drivetrain::b_zero_power_pedal(regen_w, p_max);
+    const real p_cmd = b_system_power(regen_w0, p_max, p);
+    const real zero_pedal = ps::drivetrain::b_zero_power_pedal(regen_w0, p_max);
+    // The braking share the pedal asks for, 0..1 of the unfaded regeneration; the motors deliver it on their faded capacity
+    // and the pads fill in the faded part (below).
+    const real brake_share = (p_cmd < real(0.0) && regen_w0 > real(0.0)) ? std::min(real(1.0), -p_cmd / regen_w0) : real(0.0);
     const real ceiling = std::clamp(ctx.traction_throttle_ceiling, real(0.0), real(1.0));
     const real tc_scale = (p > real(0.0) && ceiling < p) ? ceiling / p : real(1.0);
     for (std::size_t k = 0; k < n; ++k) {
@@ -2313,7 +2325,7 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
             // TC ceiling (PR #37): a fraction of the torque available now, so it scales the drive; B regeneration below is not.
             m.motor->set_b_feed(true, c, real(0.0), tc_scale);
         } else {
-            const real f = regen_w > real(0.0) ? std::min(real(1.0), -p_cmd / regen_w) : real(0.0);
+            const real f = brake_share;
             // Wheel-slip guard (the TC regulator's structure, braking direction): the worst slip of the wheels this motor
             // reaches, from the contact-patch sensors; the regeneration is withdrawn above the target and ramps back.
             if (ctx.traction_wheels != nullptr) {
@@ -2332,14 +2344,16 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
         }
         b_fraction_[k] = b_slip_fraction_step(bd, b_fraction_[k], slip, ctx.h);
     }
-    // Auto hold: below the regeneration fade the motors cannot hold the car, so with the pedal at or below the zero-power
-    // point the pads do, until the pedal rises above it by the margin; they release over hold_release_s.
+    // Auto hold. While the regeneration fades the pads take over the faded part of the braking the pedal asks for
+    // (hold_blend_level x (1 - fade) x brake_share): continuous in pedal and speed, so a steady pedal on a slope settles
+    // instead of switching the pads. Once the regeneration is gone (the car is about to stop) with the pedal at or below the
+    // zero-power point, the stop latch raises them to the full hold until the pedal rises above that point by the margin;
+    // they release over hold_release_s.
     if (!bd.auto_hold || p > zero_pedal + (b_hold_active_ ? bd.hold_pedal_margin : real(0.0))) b_hold_active_ = false;
-    else if (regen_fade_min_ < real(1.0)) b_hold_active_ = true;
-    // While the regeneration fades the pads take over its share (hold_blend_level x the fade, no jerk); once it is gone (the car
-    // is about to stop) they rise to the full hold.
-    const real target = !b_hold_active_ ? real(0.0)
-                        : regen_fade_min_ > real(0.0) ? (real(1.0) - regen_fade_min_) * bd.hold_blend_level : real(1.0);
+    else if (regen_fade_min_ <= real(0.0)) b_hold_active_ = true;
+    const real target = !bd.auto_hold ? real(0.0)
+                        : b_hold_active_ ? real(1.0)
+                        : (real(1.0) - regen_fade_min_) * bd.hold_blend_level * brake_share;
     if (target > b_hold_level_) b_hold_level_ = std::min(target, b_hold_level_ + bd.hold_rise_per_s * ctx.h);
     else b_hold_level_ = bd.hold_release_s > real(0.0) ? std::max(target, b_hold_level_ - ctx.h / bd.hold_release_s) : target;
     brakes_->set_hold_level(b_hold_level_);

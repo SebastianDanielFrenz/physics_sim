@@ -106,7 +106,7 @@ traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid wh
   (the brake-blend factors, below) x the path ramp, summed, and scaled per battery group when the group's budget is the limit.
   P_max = the car's peak drive power now: `min(sum of the motors' envelope power at the current speed, the packs' discharge budget)`.
   Pedal 0 is full regeneration at every speed down to the fade; pedal 1 is the full drive power D gives; the zero-power (coasting)
-  point is at pedal `R / (R + P_max)` (`b_zero_power_pedal`, published as `b_zero_power_pedal` in the snapshot).
+  point is at pedal `R0 / (R0 + P_max)` (`b_zero_power_pedal`, published as `b_zero_power_pedal` in the snapshot; R0 below).
 - Torque domain: with a common pedal the system law is exact per speed, so each motor gets its share by capacity: a positive command
   `c = P / P_max` of every motor's envelope torque (inside every existing torque limit, the pack's grant included), a negative one
   `|P| / R` of every motor's regeneration capacity. A speed floor of 1 rad/s keeps the law finite at standstill.
@@ -117,11 +117,18 @@ traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid wh
   peripheral speed from `TractionWheelState`, the TC's structure in braking direction, `b_mode.slip_target` 0.08 [AS]) scales a motor's B
   regeneration down while one of the wheels it drives slips more than the target and ramps it back when grip returns
   (`b_slip_fraction_step`). Snapshot `b_slip_fraction` (1 = no intervention).
-- Stop: below the regeneration fade the motors cannot hold the car. With B selected and the pedal at or below the zero-power point the
-  pads hold it (`b_mode.auto_hold`, default true): the hold takes over from the fading regeneration (`hold_blend_level` x the fade),
-  then rises to the full hold at `hold_rise_per_s` once the regeneration is gone, until the pedal rises above the zero-power point by
-  `hold_pedal_margin`; the pads release over `hold_release_s`. It acts through the pad hold level of `DirectTorqueBrakes`
-  (`set_hold_level`), not through the brake channel (a brake request above 0.05 would inhibit motor driving).
+- Pedal map below the fade: the zero-power point and the braking share use R WITHOUT the low-speed fade (`R0`, with the drive side's
+  1 rad/s speed floor), so the pedal map does not move as the car slows; the motors deliver the braking share of their faded capacity.
+  Above `fade_start_speed_mps` R0 == R and nothing changes. (Before 2026-11-02 the zero point used the faded R and fell from about
+  0.14 to 0.02 between 2.5 and 0.8 m/s on car_electric: a steady pedal on a down slope crossed it, the pads switched on and off and
+  the car dipped about once a second - test BM10.)
+- Stop: below the regeneration fade the motors cannot hold the car (`b_mode.auto_hold`, default true). While the regeneration fades
+  the pads take over its faded part, `hold_blend_level` x (1 - fade) x the braking share the pedal asks for - continuous in pedal and
+  speed. Once the regeneration is gone with the pedal at or below the zero-power point, the pads rise to the full hold at
+  `hold_rise_per_s` and stay until the pedal rises above that point by `hold_pedal_margin`; they release over `hold_release_s`. Just
+  below the zero point the B braking can be weaker than a slope; the car then settles at a speed or rolls on instead of stopping. It
+  acts through the pad hold level of `DirectTorqueBrakes` (`set_hold_level`), not through the brake channel (a brake request above
+  0.05 would inhibit motor driving).
 - TC ceiling (PR claude/ev-tc-ceiling, `motor_drive_request(..., ceiling_scale)`): the ceiling is the fraction of the torque available
   now, applied after the power corner, to B's DRIVE only; B's regeneration is never scaled by it (traction control limits drive).
 - Selector (no gearbox): the EV's D/N/R latch gains B above D. Shift up from D goes to B, shift down from B goes to D (then N and R as

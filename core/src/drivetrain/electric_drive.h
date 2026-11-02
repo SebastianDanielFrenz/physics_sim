@@ -153,11 +153,14 @@ public:
     void set_b_feed(bool active,real drive_cmd,real regen_nm,real drive_scale=real(1)) {b_active_=active;b_drive_cmd_=active?drive_cmd:real(0);b_regen_nm_=active?regen_nm:real(0);b_scale_=active?drive_scale:real(1);}
     // The regeneration torque the motor can take at |omega| right now, before the pack's per-substep acceptance: torque and
     // power limits x the SOC taper x the low-speed fade x the path ramp; 0 under ABS or in the hold after it.
-    [[nodiscard]] real b_regen_capacity_nm(real abs_omega) const {
-        if(!blend_||!(abs_omega>1))return 0;
+    // with_fade false: the same without the low-speed fade and with the drive side's 1 rad/s speed floor instead of 0 at
+    // standstill (B mode's pedal map, which must not move as the car slows).
+    [[nodiscard]] real b_regen_capacity_nm(real abs_omega,bool with_fade=true) const {
+        if(!blend_||(with_fade&&!(abs_omega>1)))return 0;
+        abs_omega=std::max(abs_omega,real(1));
         const real power=desc_.regen_power_w>0?desc_.regen_power_w:desc_.max_power_w;
         const real accept=(abs_now_||abs_hold_left_>0)?real(0):
-            std::clamp((cfg_.full_soc-battery_.soc())/(cfg_.full_soc-cfg_.taper_start_soc),real(0),real(1))*fade_*ramp_;
+            std::clamp((cfg_.full_soc-battery_.soc())/(cfg_.full_soc-cfg_.taper_start_soc),real(0),real(1))*(with_fade?fade_:real(1))*ramp_;
         return std::min(desc_.regen_torque_nm,power/abs_omega)*accept;
     }
     // The drive torque envelope at |omega|: the torque rating, then the power corner; zero at or above max_rpm.
