@@ -2031,18 +2031,20 @@ fails configure on purpose (top-level `CMakeLists.txt`; fix with
 
 **Test selection** (2026-09-27 cut, owner request "cut down stronger on the
 amount of tests run frequently"). Default FAST: `release` runs every test
-except `[long]`; `msvc-release` is BUILT only (compiler coverage, no ctest,
+except `[long]` and `[niche]`; `msvc-release` is BUILT only (compiler coverage, no ctest,
 no phase-B walltime); `linux-release` runs `ps_unit_tests` +
-`ps_determinism_tests` only (`-LE "validation|long"`; what Linux adds is
+`ps_determinism_tests` only (`-LE "validation|long|niche"`; what Linux adds is
 the compiler/libstdc++ and the hash compare, the physics is the same code);
 the `debug`, `asan`, `linux-asan-ubsan` and `linux-tsan` legs do not run
 (`-Sanitizers` adds them; `-Only <leg>` naming one runs it too). When they
 run they take only `ps_unit_tests` + `ps_determinism_tests` +
-`[sanitizer]`-tagged tests (`-LE "validation|long"` - the whole
+`[sanitizer]`-tagged tests (`-LE "validation|long|niche"` - the whole
 `ps_validation_tests` suite is `[validation]`-tagged, and the `[sanitizer]`
 short variants deliberately omit that tag so this one exclusion routes them
 back in). `-Affected`/`-Topic`: the topics' unit + determinism tests only
-(`-WithValidation` adds validation). `-Full`: no long/validation filter,
+(`-WithValidation` adds validation); `[long]` and `[niche]` are excluded
+everywhere (per change, default fast, sanitizer legs). `-Full`: no
+long/niche/validation filter,
 every test on every leg (mandatory before a phase counts done per PLAN.md
 section 7). `walltime` is excluded from phase A in all modes and run in
 phase B.
@@ -2072,6 +2074,13 @@ selectable via `ctest -L`/`-LE`; repeated `-L` are ANDed):
   braking open and the hub-torque cross-check, the tractor MFWD drawbar pull,
   the PTO governor load sweep) - they set the release ctest's wall time;
   they run under `-Full` only.
+- `[niche]` (2026-11-02 test-cost audit): a test that is cheap enough but a
+  narrow edge case, one-off regression or calibration pin that does not need
+  to run per change (a dyno remedy-solver edge, a calibration-constant pin, a
+  cache-damage error path, a feature with no shipped car). Excluded from
+  exactly the runs `[long]` is excluded from and included under `-Full` only;
+  `tests/determinism` tests and worker-count determinism checks are never
+  `[niche]`. A [niche] test keeps its topic tags, so `-Topic` still names it.
 - `[sanitizer]`: a short (1-3 s simulated) hand-written variant of a
   `[long]` Jolt/job-system-backed test (`test_joint_chain_energy.cpp`,
   `test_mass_ratio.cpp`, `test_resting_contact.cpp`), reusing the same

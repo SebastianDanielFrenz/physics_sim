@@ -77,9 +77,9 @@ target_compile_definitions(ps_validation_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SO
 # ADD_TAGS_AS_LABELS: every Catch2 tag (e.g. [long], [sanitizer]) becomes a
 # CTest LABEL. tools/ci.ps1's default (fast) run selects tests via ctest -L/
 # -LE against these labels:
-#   - release legs (release, msvc-release, linux-release): "-LE long"
-#     (everything except [long]).
-#   - debug/asan/linux-asan-ubsan/linux-tsan legs: "-LE validation|long"
+#   - release legs (release, msvc-release, linux-release): "-LE long|niche"
+#     (everything except [long] and [niche]).
+#   - debug/asan/linux-asan-ubsan/linux-tsan legs: "-LE validation|long|niche"
 #     (skips the whole validation suite except the short [sanitizer]
 #     variants, which are new test cases that deliberately do NOT carry the
 #     [validation] tag so this one exclusion regex routes them correctly -

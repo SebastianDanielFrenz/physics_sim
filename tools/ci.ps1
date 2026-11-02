@@ -28,12 +28,12 @@
           still falls back like any other CMakeLists.txt edit. Doc-only
           changes run the greps only. Prints every decision and why.
           Runs only the topics' UNIT + DETERMINISM tests (validation and
-          [long] excluded); -WithValidation adds the topics' non-[long]
+          [long] and [niche] excluded); -WithValidation adds the topics' non-[long]
           validation tests. Target: about 1 min for a single-topic change.
       tools\ci.ps1 -Topic terrain,vehicle     same as -Affected, topics by hand.
       tools\ci.ps1                            DEFAULT FAST run, at batch
           boundaries and before reporting work as done: release (every
-          non-[long] test), msvc-release BUILD ONLY, linux-release unit +
+          non-[long], non-[niche] test), msvc-release BUILD ONLY, linux-release unit +
           determinism only, the greps, walltime and the full hash compare.
           No sanitizer/debug legs (-Sanitizers adds them). Target < 3 min.
       tools\ci.ps1 -Sanitizers                default run plus debug, asan,
@@ -41,7 +41,7 @@
           Once per merge batch that touched threading, memory ownership or
           allocation, and before -Full.
       tools\ci.ps1 -Full                      every test on every leg (all
-          seven legs, [long] and validation included). Only before a phase
+          seven legs, [long], [niche] and validation included). Only before a phase
           counts done, or after a foundational change (core
           math/jobs/world/backend, CMake, presets, ci.ps1, test support).
 
@@ -62,8 +62,8 @@
 
 .PARAMETER Full
     Run every test in every leg, all seven legs. Default is FAST: release
-    runs every test except [long]; msvc-release is built but not tested;
-    linux-release runs unit + determinism only (no validation, no [long]);
+    runs every test except [long] and [niche]; msvc-release is built but not tested;
+    linux-release runs unit + determinism only (no validation, no [long], no [niche]);
     debug/asan/linux-asan-ubsan/linux-tsan are not run at all unless
     -Sanitizers (then: unit + determinism + the short [sanitizer] variants).
     See CLAUDE.md "CI" for the tag/label wiring (tests/*/CMakeLists.txt,
@@ -216,7 +216,7 @@ $script:WslParallel = 24
 
 # CTest label selection for phase A. "walltime" is ALWAYS excluded here:
 # those tests run in phase B, alone on the machine (see .NOTES above and
-# tests/bench/CMakeLists.txt). FAST mode additionally excludes [long] (and,
+# tests/bench/CMakeLists.txt). FAST mode additionally excludes [long] and [niche] (and,
 # on 'sanitizer' and 'unit' legs, the whole [validation] suite - 'unit' is
 # linux-release in the default run and every per-change leg without
 # -WithValidation).
@@ -224,7 +224,7 @@ function Get-CtestLabelArgs {
     param([string]$LegKind) # 'release', 'unit' or 'sanitizer'
     $excluded = @()
     if (-not $Full) {
-        if ($LegKind -in @('sanitizer', 'unit')) { $excluded += @('validation', 'long') } else { $excluded += 'long' }
+        if ($LegKind -in @('sanitizer', 'unit')) { $excluded += @('validation', 'long', 'niche') } else { $excluded += @('long', 'niche') }
     }
     $excluded += 'walltime'
     # ($args is a PowerShell automatic variable - never assign to it.)
@@ -657,7 +657,7 @@ function Invoke-FieldHashCheck {
 # ===========================================================================
 $script:WallStart = Get-Date
 
-# release-kind legs run everything except [long]; sanitizer-kind legs run
+# release-kind legs run everything except [long]/[niche]; sanitizer-kind legs run
 # only unit+determinism+[sanitizer], and only with -Sanitizers/-Full
 # (see Get-CtestLabelArgs / Should-RunSanitizerLeg).
 $releaseLegs = @('release')
@@ -1058,6 +1058,7 @@ function Invoke-AffectedRun {
     }
     if ($PlanOnly) {
         Write-Host ("  => mode={0} topics=[{1}] tests={5} scenarios=[{2}] linux={3} tsan={4}" -f $Plan.Mode, ($Plan.Topics -join ','), ($Plan.Scenarios -join ','), $Plan.Linux, $Plan.Tsan, $(if ($WithValidation) { 'unit+determinism+validation' } else { 'unit+determinism' })) -ForegroundColor Yellow
+        Write-Host ("  => ctest label filter: " + ((Get-CtestLabelArgs -LegKind $(if ($WithValidation) { 'release' } else { 'unit' })) -join ' ') + "  (topic -L added per run)") -ForegroundColor Yellow
         exit 0
     }
     $script:RunMode = "AFFECTED: $(if ($Plan.Topics.Count) { $Plan.Topics -join ',' } else { $Plan.Mode })"
@@ -1078,7 +1079,7 @@ function Invoke-AffectedRun {
         Write-Host "  => Linux legs: $(if ($Plan.Linux) { 'linux-release' + $(if ($Plan.Tsan) { ' + linux-tsan' } else { '' }) } else { 'no (not determinism/platform-sensitive; -Linux forces linux-release)' })" -ForegroundColor Yellow
 
         $topicKind = if ($WithValidation) { 'release' } else { 'unit' }
-        Write-Host "  => tests: $(if ($WithValidation) { 'unit + determinism + validation (non-[long])' } else { 'unit + determinism only (-WithValidation adds validation)' })" -ForegroundColor Yellow
+        Write-Host "  => tests: $(if ($WithValidation) { 'unit + determinism + validation (non-[long], non-[niche])' } else { 'unit + determinism only (-WithValidation adds validation)' })" -ForegroundColor Yellow
         if ($Plan.Topics.Count -gt 0) {
             Invoke-WindowsLeg -Preset 'release' -LegKind $topicKind
         } else {
