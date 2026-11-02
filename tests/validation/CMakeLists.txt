@@ -45,6 +45,7 @@ add_executable(ps_validation_tests
   test_automatic_gearbox.cpp
   test_cvt_gearbox.cpp
   test_powershift_tractor.cpp
+  test_hydro_cvt_tractor.cpp
   test_car_sedan_pipes.cpp
   test_car_sedan_gen_n2o.cpp
   test_car_hyper_n2o.cpp

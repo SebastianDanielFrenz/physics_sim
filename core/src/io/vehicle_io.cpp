@@ -3219,8 +3219,9 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     else if (type == "dual_clutch") g.type = ps::drivetrain::GearboxType::DualClutch;
     else if (type == "cvt") g.type = ps::drivetrain::GearboxType::Cvt;
     else if (type == "powershift") g.type = ps::drivetrain::GearboxType::Powershift;
+    else if (type == "hydro_cvt") g.type = ps::drivetrain::GearboxType::HydroCvt;
     else {
-        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\", \"cvt\" or \"powershift\", got \"" +
+        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\", \"cvt\", \"powershift\" or \"hydro_cvt\", got \"" +
                                  type + "\"");
     }
 
@@ -3239,26 +3240,67 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
         throw std::runtime_error(ctx + ": 'cvt' is for \"cvt\" gearboxes only");
     }
 
-    if (g.type != ps::drivetrain::GearboxType::Cvt && !j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
-    if (g.type != ps::drivetrain::GearboxType::Cvt) for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
+    // Tractor plan stage 2: a hydro CVT has one continuous ratio; D and R are its two positions (placeholder ratios, never read).
+    if (g.type == ps::drivetrain::GearboxType::HydroCvt) {
+        for (const char* k : {"forward_ratios", "forward_efficiency", "reverse_ratios", "reverse_efficiency", "synchro"}) {
+            if (j.contains(k)) throw std::runtime_error(ctx + ": a hydro_cvt gearbox has no '" + k + "' (its 'hydro' block replaces it)");
+        }
+        if (!j.contains("hydro") || !j.at("hydro").is_object()) throw std::runtime_error(ctx + ": 'hydro' (an object) is required for a hydro_cvt gearbox");
+        const json& o = j.at("hydro");
+        const std::string w = ctx + ".hydro";
+        static const char* const kKeys[] = {"ratio_forward_max", "ratio_reverse_max", "ratio_rate_per_s", "mechanical_point_ratio",
+                                           "hydrostatic_efficiency", "mechanical_efficiency", "pump_drag_nm"};
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            if (std::find_if(std::begin(kKeys), std::end(kKeys), [&](const char* k) { return it.key() == k; }) == std::end(kKeys)) {
+                throw std::runtime_error(w + ": unknown key '" + it.key() + "'");
+            }
+            if (!it.value().is_number() || !std::isfinite(it.value().get<real>())) throw std::runtime_error(w + ": '" + it.key() + "' must be a finite number");
+        }
+        ps::drivetrain::HydroCvtDesc h;
+        h.ratio_forward_max = o.value("ratio_forward_max", h.ratio_forward_max);
+        h.ratio_reverse_max = o.value("ratio_reverse_max", h.ratio_reverse_max);
+        h.ratio_rate_per_s = o.value("ratio_rate_per_s", h.ratio_rate_per_s);
+        h.mechanical_point_ratio = o.value("mechanical_point_ratio", h.mechanical_point_ratio);
+        h.hydrostatic_efficiency = o.value("hydrostatic_efficiency", h.hydrostatic_efficiency);
+        h.mechanical_efficiency = o.value("mechanical_efficiency", h.mechanical_efficiency);
+        h.pump_drag_nm = o.value("pump_drag_nm", h.pump_drag_nm);
+        if (!(h.ratio_forward_max > real(0.0)) || !(h.ratio_reverse_max > real(0.0)) || !(h.ratio_rate_per_s > real(0.0)) ||
+            !(h.mechanical_point_ratio > real(0.0)) || h.pump_drag_nm < real(0.0)) {
+            throw std::runtime_error(w + ": ratio_forward_max, ratio_reverse_max, ratio_rate_per_s and mechanical_point_ratio must be > 0, pump_drag_nm >= 0");
+        }
+        if (!(h.hydrostatic_efficiency > real(0.0)) || h.hydrostatic_efficiency > real(1.0) || !(h.mechanical_efficiency > real(0.0)) ||
+            h.mechanical_efficiency > real(1.0)) {
+            throw std::runtime_error(w + ": hydrostatic_efficiency and mechanical_efficiency must be in (0, 1]");
+        }
+        g.hydro = h;
+        g.forward_ratios = {real(1.0)};
+        g.forward_efficiency = {real(1.0)};
+        g.reverse_ratios = {real(-1.0)};
+        g.reverse_efficiency = {real(1.0)};
+    } else if (j.contains("hydro")) {
+        throw std::runtime_error(ctx + ": 'hydro' is for \"hydro_cvt\" gearboxes only");
+    }
+
+    if (g.type != ps::drivetrain::GearboxType::Cvt && g.type != ps::drivetrain::GearboxType::HydroCvt && !j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
+    if (g.type != ps::drivetrain::GearboxType::Cvt && g.type != ps::drivetrain::GearboxType::HydroCvt) for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
     for (std::size_t i = 0; i < g.forward_ratios.size(); ++i) {
         if (g.forward_ratios[i] <= real(0.0)) throw std::runtime_error(ctx + ".forward_ratios: every ratio must be > 0");
         if (i > 0 && !(g.forward_ratios[i] < g.forward_ratios[i - 1])) {
             throw std::runtime_error(ctx + ".forward_ratios: must be strictly decreasing (1st first)");
         }
     }
-    if (j.contains("reverse_ratios")) {
+    if (g.type != ps::drivetrain::GearboxType::HydroCvt && j.contains("reverse_ratios")) {
         for (const auto& v : j.at("reverse_ratios")) g.reverse_ratios.push_back(v.get<real>());
     }
     for (real r : g.reverse_ratios) {
         if (r >= real(0.0)) throw std::runtime_error(ctx + ".reverse_ratios: every ratio must be < 0");
     }
 
-    if (g.type != ps::drivetrain::GearboxType::Cvt) {
+    if (g.type != ps::drivetrain::GearboxType::Cvt && g.type != ps::drivetrain::GearboxType::HydroCvt) {
         if (!j.contains("forward_efficiency")) throw std::runtime_error(ctx + ": 'forward_efficiency' is required");
         for (const auto& v : j.at("forward_efficiency")) g.forward_efficiency.push_back(v.get<real>());
     }
-    if (j.contains("reverse_efficiency")) {
+    if (g.type != ps::drivetrain::GearboxType::HydroCvt && j.contains("reverse_efficiency")) {
         for (const auto& v : j.at("reverse_efficiency")) g.reverse_efficiency.push_back(v.get<real>());
     }
     if (g.forward_efficiency.size() != g.forward_ratios.size()) {
@@ -3384,6 +3426,12 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
             if (sc.preselect_time_s < real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s must be >= 0");
             if (g.type == ps::drivetrain::GearboxType::DualClutch && j.contains("converter")) {
                 throw std::runtime_error(ctx + ": a dual_clutch gearbox has no 'converter'");
+            }
+            if (g.type == ps::drivetrain::GearboxType::HydroCvt) {
+                // shift_clutch.capacity_nm = the hydrostatic pressure limit (torque at gearbox.out), static_factor its breakaway
+                // factor, engage_time_s the direction clutch filling; the other keys are unused but must stay valid.
+                if (j.contains("converter")) throw std::runtime_error(ctx + ": a hydro_cvt gearbox has no 'converter'");
+                if (sc.preselect_time_s != real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s is for dual_clutch gearboxes only");
             }
             if (g.type == ps::drivetrain::GearboxType::Powershift) {
                 if (j.contains("converter")) throw std::runtime_error(ctx + ": a powershift gearbox has no 'converter'");
@@ -3614,7 +3662,7 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
 ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::string& ctx, const std::vector<std::string>& component_ids) {
     static const char* const kKeys[] = {"id",          "type",           "gearbox",  "engine",         "schedule",       "sport_schedule",
                                         "min_time_in_gear_s", "kickdown_throttle", "kickdown_max_rpm", "manual_timeout_s", "manual_up_rpm",
-                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm", "cvt", "powershift"};
+                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm", "cvt", "powershift", "hydro"};
     for (auto it = cj.begin(); it != cj.end(); ++it) {
         if (std::find_if(std::begin(kKeys), std::end(kKeys), [&](const char* k) { return it.key() == k; }) == std::end(kKeys)) {
             throw std::runtime_error(ctx + ": unknown key '" + it.key() + "'");
@@ -3739,6 +3787,61 @@ ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::s
             c.stepped_sport = o.at("stepped_sport").get<bool>();
         }
         d.cvt = std::move(c);
+    }
+    if (cj.contains("hydro")) {
+        // Tractor plan stage 2: the driver law of a hydro_cvt gearbox (HydroTcuDesc). Whether the gearbox IS a hydro_cvt is
+        // checked when the hydro CVT is built.
+        const json& o = cj.at("hydro");
+        const std::string w = ctx + ".hydro";
+        check_keys(o, {"speed_rpm_vs_command", "engine_rpm_vs_power", "reference_power_w", "speed_ramp_rpm_per_s", "speed_jerk_rpm_per_s2", "speed_deficit_rpm",
+                       "reverse_speed_fraction", "idle_rpm", "high_idle_rpm", "engine_rpm_tau_s", "lever_ki_per_rpm_s", "stall_rpm_min",
+                       "stall_rpm_ok", "max_lead_rpm", "lug_fraction", "deficit_power_max"},
+               w);
+        ps::drivetrain::HydroTcuDesc hd;
+        for (const char* k : {"speed_rpm_vs_command", "engine_rpm_vs_power"}) {
+            if (!o.contains(k)) throw std::runtime_error(w + ": '" + k + "' is required");
+        }
+        hd.speed_rpm_vs_command = read_curve(o.at("speed_rpm_vs_command"));
+        hd.engine_rpm_vs_power = read_curve(o.at("engine_rpm_vs_power"));
+        for (int ci = 0; ci < 2; ++ci) {
+            ps::vehicle::Curve1D& c = ci == 0 ? hd.speed_rpm_vs_command : hd.engine_rpm_vs_power;
+            const std::string name = ci == 0 ? "speed_rpm_vs_command" : "engine_rpm_vs_power";
+            if (c.x.size() < 2) throw std::runtime_error(w + "." + name + ": needs at least two points");
+            require_ascending(c, w + "." + name);
+            if (c.x.front() != real(0.0) || c.x.back() != real(1.0)) throw std::runtime_error(w + "." + name + ": x must span 0..1 exactly");
+        }
+        for (real y : hd.speed_rpm_vs_command.y) {
+            if (y < real(0.0)) throw std::runtime_error(w + ".speed_rpm_vs_command: y must be >= 0");
+        }
+        for (real y : hd.engine_rpm_vs_power.y) {
+            if (!(y > real(0.0))) throw std::runtime_error(w + ".engine_rpm_vs_power: y must be > 0");
+        }
+        hd.reference_power_w = num(o, "reference_power_w", hd.reference_power_w, w);
+        hd.speed_ramp_rpm_per_s = num(o, "speed_ramp_rpm_per_s", hd.speed_ramp_rpm_per_s, w);
+        hd.speed_jerk_rpm_per_s2 = num(o, "speed_jerk_rpm_per_s2", hd.speed_jerk_rpm_per_s2, w);
+        hd.speed_deficit_rpm = num(o, "speed_deficit_rpm", hd.speed_deficit_rpm, w);
+        hd.reverse_speed_fraction = num(o, "reverse_speed_fraction", hd.reverse_speed_fraction, w);
+        hd.idle_rpm = num(o, "idle_rpm", hd.idle_rpm, w);
+        hd.high_idle_rpm = num(o, "high_idle_rpm", hd.high_idle_rpm, w);
+        hd.engine_rpm_tau_s = num(o, "engine_rpm_tau_s", hd.engine_rpm_tau_s, w);
+        hd.lever_ki_per_rpm_s = num(o, "lever_ki_per_rpm_s", hd.lever_ki_per_rpm_s, w);
+        hd.stall_rpm_min = num(o, "stall_rpm_min", hd.stall_rpm_min, w);
+        hd.stall_rpm_ok = num(o, "stall_rpm_ok", hd.stall_rpm_ok, w);
+        hd.max_lead_rpm = num(o, "max_lead_rpm", hd.max_lead_rpm, w);
+        hd.lug_fraction = num(o, "lug_fraction", hd.lug_fraction, w);
+        hd.deficit_power_max = num(o, "deficit_power_max", hd.deficit_power_max, w);
+        if (!(hd.lug_fraction > real(0.0)) || hd.lug_fraction > real(1.0) || !(hd.deficit_power_max > real(0.0)) || hd.deficit_power_max > real(1.0)) {
+            throw std::runtime_error(w + ": lug_fraction and deficit_power_max must be in (0, 1]");
+        }
+        if (!(hd.reference_power_w > real(0.0)) || !(hd.speed_ramp_rpm_per_s > real(0.0)) || !(hd.speed_deficit_rpm > real(0.0)) || !(hd.speed_jerk_rpm_per_s2 > real(0.0)) ||
+            !(hd.engine_rpm_tau_s > real(0.0)) || hd.lever_ki_per_rpm_s < real(0.0) || !(hd.max_lead_rpm > real(0.0))) {
+            throw std::runtime_error(w + ": reference_power_w, speed_ramp_rpm_per_s, speed_jerk_rpm_per_s2, speed_deficit_rpm, engine_rpm_tau_s and max_lead_rpm must be > 0, lever_ki_per_rpm_s >= 0");
+        }
+        if (!(hd.reverse_speed_fraction > real(0.0)) || hd.reverse_speed_fraction > real(1.0) || !(hd.idle_rpm > real(0.0)) ||
+            !(hd.high_idle_rpm > hd.idle_rpm) || !(hd.stall_rpm_ok > hd.stall_rpm_min) || !(hd.stall_rpm_min > real(0.0))) {
+            throw std::runtime_error(w + ": reverse_speed_fraction in (0, 1], 0 < idle_rpm < high_idle_rpm and 0 < stall_rpm_min < stall_rpm_ok required");
+        }
+        d.hydro = std::move(hd);
     }
     if (cj.contains("powershift")) {
         // Tractor plan stage 1: the shift law of a powershift gearbox (PowershiftTcuDesc). Whether the gearbox IS a

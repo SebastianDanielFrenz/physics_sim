@@ -224,6 +224,30 @@ struct PowershiftTcuDesc {
     real shift_pressure_fraction = 0.6; // (0, 1]
 };
 
+// Tractor plan stage 2: the driver law of an automatic_tcu driving a HydroCvt gearbox ("hydro" block, required with it).
+// The driver command c (pedal / hand throttle) sets a target gearbox-output speed speed_rpm_vs_command(c) (negative in R,
+// scaled by reverse_speed_fraction); the output speed reference ramps toward it at speed_ramp_rpm_per_s. The engine rpm
+// target follows the power demanded, p = max(transmitted power / reference_power_w, output speed deficit / speed_deficit_rpm),
+// along engine_rpm_vs_power (the least-fuel line [AS]); it is realised as the governor lever (a PI trim on the engine rpm).
+// The ratio k = reference / engine speed, faded to 0 between stall_rpm_min and max(stall_rpm_ok, lug_fraction x the target) so an
+// overloaded engine unloads.
+struct HydroTcuDesc {
+    vehicle::Curve1D speed_rpm_vs_command; // x in [0, 1], y >= 0 (output rpm)
+    vehicle::Curve1D engine_rpm_vs_power;  // x in [0, 1], y > 0
+    real reference_power_w = 150000.0;
+    real speed_ramp_rpm_per_s = 300.0;   // the largest acceleration of the output speed reference
+    real speed_jerk_rpm_per_s2 = 400.0;  // > 0: how fast that acceleration may build up (an S-curve, no step in the acceleration)
+    real speed_deficit_rpm = 400.0;
+    real reverse_speed_fraction = 0.35;
+    real idle_rpm = 800.0, high_idle_rpm = 2400.0; // lever 0 -> idle, lever 1 -> high idle (the governor's no-load line)
+    real engine_rpm_tau_s = 0.25;
+    real lever_ki_per_rpm_s = 0.0004;
+    real stall_rpm_min = 1000.0, stall_rpm_ok = 1300.0;
+    real lug_fraction = 0.85;       // (0, 1]: below this fraction of the engine rpm target the ratio is pulled back (the engine is lugging)
+    real deficit_power_max = 1.0;   // (0, 1]: the most power fraction a speed deficit alone asks for (the load adds the rest)
+    real max_lead_rpm = 150.0;      // the reference never runs further than this ahead of the measured output speed
+};
+
 struct AutomaticTcuDesc {
     std::string gearbox, engine;
     ShiftScheduleDesc schedule;       // D
@@ -254,6 +278,7 @@ struct AutomaticTcuDesc {
     std::optional<CvtTcuDesc> cvt;
     // Tractor plan stage 1: Powershift only (see PowershiftTcuDesc).
     std::optional<PowershiftTcuDesc> powershift;
+    std::optional<HydroTcuDesc> hydro;
 };
 
 // Closed, visited exhaustively - at most one transmission controller (manual_tcu or automatic_tcu) and at most one

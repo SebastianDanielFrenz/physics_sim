@@ -1,0 +1,432 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "tractor_powershift",
+  "source": "Test fixture (tractor plan stage 2): data/vehicles/tractor.json with the hydro-mechanical CVT (data/gearboxes/tractor_hydro_cvt.json) instead of the 12F/4R sequential box + manual clutch. Gear-set input = the crank (no clutch component), direction engaged by the box's own clutch. Driver law (automatic_tcu 'hydro' block, all [AS]): pedal/hand throttle = target output speed up to 2970 rpm (about 50 km/h), S-curve ramped at 200 rpm/s (about 0.95 m/s2) with a build-up of 300 rpm/s2 (1.4 m/s3); engine rpm target 1000-2150 along a least-fuel line over the demanded power fraction of 120 kW, realised as the governor lever.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [
+        1.82,
+        0.95,
+        -0.5
+      ],
+      "wheel_radius": 0.8,
+      "wheel_width": 0.48,
+      "wheel_mass": 80.0,
+      "wheel_inertia": 25.6,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.04,
+        "spring_rate": 515025.0,
+        "damper_bump_rate": 18600.0,
+        "damper_rebound_rate": 24000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../../../../data/tyres/tractor_front.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [
+        1.82,
+        -0.95,
+        -0.5
+      ],
+      "wheel_radius": 0.8,
+      "wheel_width": 0.48,
+      "wheel_mass": 80.0,
+      "wheel_inertia": 25.6,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.04,
+        "spring_rate": 515025.0,
+        "damper_bump_rate": 18600.0,
+        "damper_rebound_rate": 24000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../../../../data/tyres/tractor_front.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [
+        -0.98,
+        0.95,
+        -0.275
+      ],
+      "wheel_radius": 1.025,
+      "wheel_width": 0.62,
+      "wheel_mass": 150.0,
+      "wheel_inertia": 78.8,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.04,
+        "spring_rate": 956475.0,
+        "damper_bump_rate": 34500.0,
+        "damper_rebound_rate": 45000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../../../../data/tyres/tractor_rear.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [
+        -0.98,
+        -0.95,
+        -0.275
+      ],
+      "wheel_radius": 1.025,
+      "wheel_width": 0.62,
+      "wheel_mass": 150.0,
+      "wheel_inertia": 78.8,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.04,
+        "spring_rate": 956475.0,
+        "damper_bump_rate": 34500.0,
+        "damper_rebound_rate": 45000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../../../../data/tyres/tractor_rear.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.6,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 3000.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 3000.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 8000.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 8000.0
+      }
+    ],
+    "handbrake": {
+      "wheels": [
+        "RL",
+        "RR"
+      ],
+      "max_torque_nm": 8000.0
+    }
+  },
+  "hitch_points": [
+    {
+      "name": "socket_hitch",
+      "class": "../../../../data/hitch_classes/drawbar_pin.json",
+      "role": "towing",
+      "position": [
+        -2.03,
+        0.0,
+        -0.78
+      ],
+      "max_towed_mass_kg": 14000.0,
+      "max_tongue_load_n": 20000.0
+    },
+    {
+      "name": "socket_3pt",
+      "class": "../../../../data/hitch_classes/three_point_locked.json",
+      "role": "towing",
+      "sockets": {
+        "socket_3pt_top": [
+          -2.12,
+          0.0,
+          -0.04
+        ],
+        "socket_3pt_L": [
+          -2.04,
+          0.5,
+          -0.68
+        ],
+        "socket_3pt_R": [
+          -2.04,
+          -0.5,
+          -0.68
+        ]
+      },
+      "max_tongue_load_n": 30000.0,
+      "linkage": {
+        "source": "[D] pivots and stops from data/models/tractor/tractor.rig.json: lower_link pivot rig [-1.58, 0, 0.52], top_link pivot rig [-1.99, 0, 1.2], rig to chassis x + 0.42, z - 1.28; lower_link limits -0.349..0.436 rad, -20 and +25 deg here. [AS] lift force, stroke and draft control: nothing cited; 40 kN at the lower pins is about 4 t lifted, a usual figure for a 6 t tractor, and an SAE J283 measurement of this tractor does not exist.",
+        "lower_pivot": [
+          -1.16,
+          0.0,
+          -0.76
+        ],
+        "top_pivot": [
+          -1.57,
+          0.0,
+          -0.08
+        ],
+        "min_deg": -20.0,
+        "max_deg": 25.0,
+        "lift": {
+          "max_force_n": 40000.0,
+          "full_stroke_s": 3.0,
+          "follow_slack_deg": 2.0
+        },
+        "draft": {
+          "gain_per_s": 1.0,
+          "filter_s": 0.3,
+          "band": 0.05
+        }
+      }
+    }
+  ],
+  "aero": {
+    "drag_area_m2": 4.0
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "engine",
+        "type": "engine",
+        "ref": "../../../../data/engines/diesel_i4_4l5_turbo.json"
+      },
+      {
+        "id": "gearbox",
+        "type": "gearbox",
+        "ref": "../../../../data/gearboxes/tractor_hydro_cvt.json"
+      },
+      {
+        "id": "transfer",
+        "type": "transfer_case",
+        "rear_ratio": 1.0,
+        "front_ratio": 1.0,
+        "clutch": {
+          "capacity_nm": 2500.0,
+          "static_factor": 1.2,
+          "engage_time_s": 0.3
+        },
+        "channel": "awd",
+        "in_inertia_kgm2": 0.02,
+        "front_inertia_kgm2": 0.05,
+        "axis_local": [
+          -1,
+          0,
+          0
+        ]
+      },
+      {
+        "id": "diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 20.0,
+        "efficiency": 0.94,
+        "carrier_inertia_kgm2": 0.5,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ],
+        "lockable": true,
+        "lock": {
+          "max_engage_mismatch_rad_s": 2.0,
+          "channel": "diff_lock"
+        }
+      },
+      {
+        "id": "front_diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 15.3,
+        "efficiency": 0.94,
+        "carrier_inertia_kgm2": 0.2,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "park",
+        "type": "park_lock",
+        "capacity_nm": 30000.0,
+        "static_factor": 1.0,
+        "max_engage_speed_rad_s": 5.0,
+        "channel": "park_lock"
+      },
+      {
+        "id": "pto",
+        "type": "pto",
+        "ratios": {
+          "540": 3.61,
+          "1000": 1.95
+        },
+        "capacity_nm": 700.0,
+        "static_factor": 1.2,
+        "engage_time_s": 1.5,
+        "efficiency": 0.96,
+        "out_inertia_kgm2": 0.05,
+        "disengaged_brake_time_s": 1.0,
+        "channel": "pto",
+        "speed_channel": "pto_speed",
+        "stall_guard": {
+          "source": "[AS] at idle (850 rpm) the shaft has all of it, at 600 rpm, where the engine still gives 340 N*m, none",
+          "full_rpm": 850,
+          "zero_rpm": 600
+        }
+      }
+    ],
+    "shafts": [
+      {
+        "ports": [
+          "engine.crank",
+          "gearbox.in",
+          "pto.in"
+        ]
+      },
+      {
+        "ports": [
+          "gearbox.out",
+          "transfer.in",
+          "park.shaft"
+        ]
+      },
+      {
+        "ports": [
+          "transfer.rear",
+          "diff.carrier"
+        ]
+      },
+      {
+        "ports": [
+          "diff.left",
+          "wheel:RL"
+        ]
+      },
+      {
+        "ports": [
+          "diff.right",
+          "wheel:RR"
+        ]
+      },
+      {
+        "ports": [
+          "transfer.front",
+          "front_diff.carrier"
+        ]
+      },
+      {
+        "ports": [
+          "front_diff.left",
+          "wheel:FL"
+        ]
+      },
+      {
+        "ports": [
+          "front_diff.right",
+          "wheel:FR"
+        ]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true
+  },
+  "controllers": [
+    {
+      "id": "tcu",
+      "type": "automatic_tcu",
+      "gearbox": "gearbox",
+      "engine": "engine",
+      "schedule": {
+        "up_rpm_at_zero_throttle": 1600,
+        "up_rpm_at_full_throttle": 2150,
+        "down_rpm_at_zero_throttle": 1000,
+        "down_rpm_at_full_throttle": 1400
+      },
+      "min_time_in_gear_s": 0.3,
+      "upshift_torque_fraction": 0.7,
+      "launch": {
+        "bite_rpm": 1000,
+        "full_rpm_min": 1200,
+        "full_rpm_max": 1700,
+        "lock_slip_rpm": 60,
+        "anti_stall_rpm": 800
+      },
+      "creep_torque_nm": 0,
+      "hydro": {
+        "speed_rpm_vs_command": {
+          "x": [
+            0.0,
+            0.05,
+            1.0
+          ],
+          "y": [
+            0.0,
+            0.0,
+            2970.0
+          ]
+        },
+        "engine_rpm_vs_power": {
+          "x": [
+            0.0,
+            0.3,
+            0.7,
+            1.0
+          ],
+          "y": [
+            1000.0,
+            1500.0,
+            1900.0,
+            2150.0
+          ]
+        },
+        "reference_power_w": 120000.0,
+        "speed_ramp_rpm_per_s": 200.0,
+        "speed_deficit_rpm": 1500.0,
+        "reverse_speed_fraction": 0.35,
+        "idle_rpm": 850.0,
+        "high_idle_rpm": 2400.0,
+        "stall_rpm_min": 900.0,
+        "stall_rpm_ok": 1100.0,
+        "lug_fraction": 0.85,
+        "deficit_power_max": 0.5,
+        "speed_jerk_rpm_per_s2": 300.0
+      }
+    }
+  ]
+}

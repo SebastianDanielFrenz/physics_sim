@@ -44,6 +44,13 @@ AutoTransmission::AutoTransmission(Desc desc) : desc_(std::move(desc)) {
         if (desc_.dual_clutch) throw std::runtime_error("AutoTransmission: a cvt is not a dual-clutch box");
         cos_beta_ = ps::math::cos(desc_.cvt_desc.belt.sheave_half_angle_deg * real(3.14159265358979323846) / real(180.0));
     }
+    if (desc_.hydro) {
+        if (!desc_.tcu.hydro) throw std::runtime_error("AutoTransmission: a hydro_cvt gearbox needs the automatic_tcu's hydro block");
+        if (desc_.dual_clutch || desc_.cvt || desc_.powershift || desc_.has_lockup) throw std::runtime_error("AutoTransmission: a hydro_cvt is its own kind");
+        if (n != 1 || m != 1) throw std::runtime_error("AutoTransmission: a hydro_cvt has one forward and one reverse position (D and R)");
+    } else if (desc_.tcu.hydro) {
+        throw std::runtime_error("AutoTransmission: the automatic_tcu's hydro block is for a hydro_cvt gearbox only");
+    }
     if (desc_.powershift) {
         if (!desc_.tcu.powershift) throw std::runtime_error("AutoTransmission: a powershift gearbox needs the automatic_tcu's powershift block");
         if (desc_.dual_clutch || desc_.cvt) throw std::runtime_error("AutoTransmission: a powershift box is neither a dual-clutch nor a cvt box");
@@ -67,6 +74,7 @@ int AutoTransmission::range_of(int gear) const {
 }
 
 real AutoTransmission::ratio(int gear) const {
+    if (gear != 0 && desc_.hydro) return ratio_; // tractor plan stage 2: k = w_out / w_in, signed
     if (gear > 0 && desc_.cvt) return ratio_; // CVT plan C1: D is the variator
     if (gear > 0) return desc_.forward_ratios[static_cast<std::size_t>(gear - 1)];
     if (gear < 0) return desc_.reverse_ratios[static_cast<std::size_t>(-gear - 1)];
@@ -101,6 +109,14 @@ void AutoTransmission::reset(int gear, bool clutch_locked) {
     launch_locked_ = clutch_locked && gear != 0;
     rev_held_ = false;
     e_launch_ = launch_locked_ ? real(1.0) : real(0.0);
+    if (desc_.hydro) {
+        ratio_ = real(0.0);
+        v_ref_ = real(0.0);
+        n_target_ = desc_.tcu.hydro->idle_rpm;
+        lever_i_ = real(0.0);
+        a_ref_ = real(0.0);
+        engine_cmd_ = real(-1.0);
+    }
     if (desc_.cvt) {
         ratio_ = hold_ratio_ > real(0.0) ? hold_ratio_ : desc_.cvt_desc.ratio_low;
         step_ = 0;
@@ -219,6 +235,54 @@ void AutoTransmission::update_cvt(const Sensors& s, real th) {
 }
 
 // Clamping force: lag toward the force that carries max(|input torque|, |engine demand|) x the safety factor.
+// Tractor plan stage 2 (HydroTcuDesc): the output speed reference, the engine rpm target (least fuel at the demanded power),
+// the governor lever that realises it, and the ratio k = reference / engine speed.
+void AutoTransmission::update_hydro(const Sensors& s, real th) {
+    const HydroCvtDesc& hd = desc_.hydro_desc;
+    const HydroTcuDesc& law = *desc_.tcu.hydro;
+    constexpr real kRpmToRad = real(1.0) / kRadPerSecToRpm;
+    const real w_den = std::max(std::abs(s.input_omega), real(0.5) * law.idle_rpm * kRpmToRad);
+    engine_cmd_ = real(-1.0);
+    if (cur_ == 0 || phase_ == Phase::Engage) { // N, or the direction clutch filling: follow the measured ratio
+        ratio_ = std::clamp(s.output_omega / w_den, -hd.ratio_reverse_max, hd.ratio_forward_max);
+        v_ref_ = s.output_omega;
+        a_ref_ = real(0.0);
+        lever_i_ = real(0.0);
+        n_target_ = std::abs(s.engine_omega) * kRadPerSecToRpm;
+        return;
+    }
+    const real dir = cur_ > 0 ? real(1.0) : real(-1.0);
+    const real w_t = dir * (cur_ > 0 ? real(1.0) : law.reverse_speed_fraction) * law.speed_rpm_vs_command.evaluate(th) * kRpmToRad;
+    // S-curve: the acceleration follows a proportional approach to the target, limited in size and in build-up rate.
+    const real a_max = law.speed_ramp_rpm_per_s * kRpmToRad;
+    const real a_tgt = std::clamp((w_t - v_ref_) * real(2.0), -a_max, a_max);
+    const real da = law.speed_jerk_rpm_per_s2 * kRpmToRad * s.h;
+    a_ref_ += std::clamp(a_tgt - a_ref_, -da, da);
+    v_ref_ += a_ref_ * s.h;
+    const real lead = law.max_lead_rpm * kRpmToRad;
+    v_ref_ = std::clamp(v_ref_, s.output_omega - lead, s.output_omega + lead);
+    // Demanded power: what flows, or what the speed deficit asks for.
+    const real deficit = std::clamp((std::abs(w_t) - dir * s.output_omega) / (law.speed_deficit_rpm * kRpmToRad), real(0.0), real(1.0));
+    const real p_load = std::abs(s.input_torque_prev) * std::abs(s.input_omega) / law.reference_power_w;
+    const real p = std::clamp(std::max(p_load, std::min(deficit, law.deficit_power_max)), real(0.0), real(1.0));
+    const real n_raw = law.engine_rpm_vs_power.evaluate(p);
+    n_target_ += (n_raw - n_target_) * std::min(real(1.0), s.h / law.engine_rpm_tau_s);
+    const real n_e = std::abs(s.engine_omega) * kRadPerSecToRpm;
+    const real u0 = (n_target_ - law.idle_rpm) / (law.high_idle_rpm - law.idle_rpm);
+    const real u_unsat = u0 + lever_i_;
+    if ((u_unsat < real(1.0) || n_target_ - n_e < real(0.0)) && (u_unsat > real(0.0) || n_target_ - n_e > real(0.0))) {
+        lever_i_ = std::clamp(lever_i_ + law.lever_ki_per_rpm_s * (n_target_ - n_e) * s.h, real(-0.3), real(0.4));
+    }
+    engine_cmd_ = std::clamp(u0 + lever_i_, real(0.0), real(1.0));
+    // Ratio: the reference over the engine speed, unloading the engine below its stall band.
+    const real n_ok = std::max(law.stall_rpm_ok, law.lug_fraction * n_target_);
+    const real f = std::clamp((n_e - law.stall_rpm_min) / std::max(n_ok - law.stall_rpm_min, real(1.0)), real(0.0), real(1.0));
+    real k_cmd = v_ref_ * f / w_den;
+    k_cmd = cur_ > 0 ? std::clamp(k_cmd, real(0.0), hd.ratio_forward_max) : std::clamp(k_cmd, -hd.ratio_reverse_max, real(0.0));
+    const real dk = hd.ratio_rate_per_s * s.h;
+    ratio_ += std::clamp(k_cmd - ratio_, -dk, dk);
+}
+
 void AutoTransmission::update_cvt_clamp(const Sensors& s) {
     const real th = std::clamp(s.throttle, real(0.0), real(1.0));
     const CvtDesc& c = desc_.cvt_desc;
@@ -239,7 +303,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     if (hold_) { // powertrain dyno: the requested gear, no selector, schedule, kickdown or dwell
         if (s.gear_request > kGearRequestNone + real(0.5)) {
             const int req = static_cast<int>(std::floor(s.gear_request + real(0.5)));
-            tgt_ = req == 0 ? 0 : (req < 0 ? -std::min(-req, m) : (desc_.cvt ? 1 : std::min(req, n)));
+            tgt_ = req == 0 ? 0 : (req < 0 ? -std::min(-req, m) : ((desc_.cvt || desc_.hydro) ? 1 : std::min(req, n)));
         }
         return;
     }
@@ -284,7 +348,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
 
     const real w_out = s.output_omega;
     auto in_rpm = [&](int g) { return std::abs(ratio(g) * w_out) * kRadPerSecToRpm; };
-    const real fwd_rpm = ratio(1) * w_out * kRadPerSecToRpm; // signed: > 0 rolling forward
+    const real fwd_rpm = (desc_.hydro ? w_out : ratio(1) * w_out) * kRadPerSecToRpm; // signed: > 0 rolling forward
 
     if (selector_ == 0) {
         tgt_ = 0;
@@ -308,7 +372,11 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
         }
         // D from N: the gear the schedule fits at the present speed (1 at standstill). Engaging 1st while rolling fast made
         // the box shift up through every gear (or over-rev the engine) after a hybrid's ICE connected at speed.
-        tgt_ = (cur_ < 0) ? 0 : ((manual_ && !desc_.cvt) ? manual_gear_ : (desc_.cvt ? 1 : fit_gear(s, th)));
+        tgt_ = (cur_ < 0) ? 0 : ((manual_ && !desc_.cvt && !desc_.hydro) ? manual_gear_ : ((desc_.cvt || desc_.hydro) ? 1 : fit_gear(s, th)));
+        return;
+    }
+    if (desc_.hydro) { // tractor plan stage 2: D is one position; the ratio law runs in update_hydro
+        tgt_ = 1;
         return;
     }
     if (desc_.cvt) { // CVT plan C1: D is one gear; the variator law runs in update_cvt
@@ -662,6 +730,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     update_lockup(s, th);
     if (!hold_) update_preselect(s, th);
     if (desc_.cvt) update_cvt(s, th);
+    if (desc_.hydro) update_hydro(s, th);
 
     // --- row commands ---
     Outputs o;
@@ -729,6 +798,14 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
         o.belt_capacity_nm = belt;
         o.clamp_force_n = clamp_;
     }
+    if (desc_.hydro) {
+        // The one row (output = node a) carries k; the other holds the same ratio at no capacity.
+        onc.ratio = act.ratio;
+        onc.cap_static = onc.cap_kinetic = real(0.0);
+        o.cvt_ratio = ratio_;
+        o.engine_command = engine_cmd_;
+        o.engine_target_rpm = n_target_;
+    }
     if (desc_.has_lockup) {
         o.lockup_cap_kinetic = e_lock_ * desc_.lockup_capacity_nm;
         o.lockup_cap_static = desc_.lockup_static_factor * o.lockup_cap_kinetic;
@@ -781,6 +858,13 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
         h = fnv1a(h, step_);
         h = fnv1a(h, t_step_);
         h = fnv1a(h, clamp_);
+    }
+    if (desc_.hydro) { // tractor plan stage 2
+        h = fnv1a(h, ratio_);
+        h = fnv1a(h, v_ref_);
+        h = fnv1a(h, n_target_);
+        h = fnv1a(h, lever_i_);
+        h = fnv1a(h, a_ref_);
     }
     return h;
 }

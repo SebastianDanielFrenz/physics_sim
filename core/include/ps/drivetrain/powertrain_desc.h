@@ -24,6 +24,7 @@
 #include "ps/vehicle/curve1d.h" // Curve1D (NOT vehicle_desc.h: VehicleDesc::powertrain
                                  // is a PowertrainDesc, so that include would be circular)
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -584,7 +585,7 @@ struct ClutchDesc {
 // CVT plan C1: Cvt = a push-belt (or chain) continuously variable transmission: a forward/reverse clutch set and
 // optionally a torque converter ahead of a variator whose ratio is a state (GearboxDesc::cvt); one friction row carries
 // the variator ratio, its capacity is the belt's clamping-force limit (and the launch clutch's while it slips).
-enum class GearboxType { Manual, Sequential, Automatic, DualClutch, Cvt, Powershift };
+enum class GearboxType { Manual, Sequential, Automatic, DualClutch, Cvt, Powershift, HydroCvt };
 
 // Automatic gearbox plan A1: the hydrodynamic torque converter of an Automatic gearbox (physics_sim.gearbox/1
 // "converter" block). Bolted to the box's input: port `in` of the gearbox is the pump (impeller, on the engine side),
@@ -646,6 +647,29 @@ struct CvtBeltDesc {
 // pump_drag_nm + pump_drag_nm_per_kn * F/1000 on the input. Launch: through `converter` when the box has one (a
 // converter CVT), else on the shift_clutch (the forward clutch slips like a dual-clutch box's launch clutch).
 // The reverse gear is reverse_ratios[0] (exactly one; the variator is held at ratio_low in R and the value includes it).
+// Tractor plan stage 2: the hydro-mechanical (power-split) CVT of a HydroCvt gearbox. ONE continuous ratio k = w_out / w_in
+// through zero (active standstill: the output is held rigid at k = 0) into reverse (k < 0); no belt, no slip in normal
+// running. The friction row between gearbox.out and gearbox.in carries k; its capacity is the hydrostatic pressure limit
+// (the gearbox's shift_clutch.capacity_nm, torque at gearbox.out). Efficiency from the hydrostatic share of the power flow,
+//   phi(k) = min(1, |k - mechanical_point_ratio| / mechanical_point_ratio)   (0 at the mechanical point, 1 at k = 0 and beyond twice it)
+//   1 / eta(k) = (1 - phi) / mechanical_efficiency + phi / hydrostatic_efficiency.
+struct HydroCvtDesc {
+    real ratio_forward_max = 1.0;  // > 0: largest k in D
+    real ratio_reverse_max = 0.5;  // > 0: largest |k| in R
+    real ratio_rate_per_s = 1.0;   // > 0: |dk/dt| limit
+    real mechanical_point_ratio = 0.9; // > 0: k at which the hydrostatic path carries no power
+    real hydrostatic_efficiency = 0.85;  // (0, 1] pump + motor
+    real mechanical_efficiency = 0.97;   // (0, 1] gears of the mechanical path
+    real pump_drag_nm = 8.0;       // >= 0: the hydrostatic unit's drag on the input while a direction is engaged, faded in over 10 rad/s
+};
+
+// Efficiency of a hydro CVT at ratio k (see HydroCvtDesc).
+[[nodiscard]] inline real hydro_cvt_efficiency(const HydroCvtDesc& d, real k) {
+    const real dev = k - d.mechanical_point_ratio;
+    const real phi = std::min(real(1.0), (dev < real(0.0) ? -dev : dev) / d.mechanical_point_ratio);
+    return real(1.0) / ((real(1.0) - phi) / d.mechanical_efficiency + phi / d.hydrostatic_efficiency);
+}
+
 struct CvtDesc {
     real ratio_low = 2.5, ratio_high = 0.4;
     real ratio_rate_per_s = 1.0, step_rate_per_s = 4.0;
@@ -703,12 +727,13 @@ struct GearboxDesc {
     std::optional<TorqueConverterDesc> converter;
     // CVT plan C1: Cvt only (required there, rejected elsewhere). `converter` is allowed on a Cvt too.
     std::optional<CvtDesc> cvt;
+    std::optional<HydroCvtDesc> hydro; // HydroCvt only (tractor plan stage 2)
 };
 
 // Automatic gearbox plan A1: true for the clutch-to-clutch kinds (no dog, no synchro, no driver clutch, an
 // automatic_tcu, the gear set as friction rows). CVT plan C1: a Cvt counts too (its variator is such a row).
 [[nodiscard]] constexpr bool is_clutch_to_clutch(GearboxType t) {
-    return t == GearboxType::Automatic || t == GearboxType::DualClutch || t == GearboxType::Cvt || t == GearboxType::Powershift;
+    return t == GearboxType::Automatic || t == GearboxType::DualClutch || t == GearboxType::Cvt || t == GearboxType::Powershift || t == GearboxType::HydroCvt;
 }
 
 struct GearPairDesc {

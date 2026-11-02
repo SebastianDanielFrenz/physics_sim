@@ -1,0 +1,36 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "tractor_hydro_cvt",
+  "source": "Tractor plan stage 2 [AS]: a single-range hydro-mechanical (power-split) CVT in the class of a Fendt Vario / Deutz-Fahr / Case IH CVXDrive tractor transmission, all numbers assumed. Continuous ratio k = w_out/w_in from 0 (active standstill) through reverse; k_max 1.35 puts the output at 2970 rpm at 2200 engine rpm (about 50 km/h on the data/vehicles/tractor.json driveline), reverse -0.5. Single mechanical point at k = 0.9 (real boxes have 2-4 ranges with a mechanical point each). hydrostatic_efficiency 0.85 (pump + motor, an axial-piston pair at rated pressure is 0.85-0.90 overall, Rexroth/Danfoss catalogue class) and mechanical_efficiency 0.97 (gear meshes). shift_clutch.capacity_nm is the hydrostatic pressure limit (relief valve) as torque at gearbox.out, 4500 N*m, about 5 x the 15 % slope holding need of a 6 t tractor+trailer. pump_drag_nm 10 [AS]. Inertias as the powershift box.",
+  "type": "hydro_cvt",
+  "hydro": {
+    "ratio_forward_max": 1.35,
+    "ratio_reverse_max": 0.5,
+    "ratio_rate_per_s": 0.8,
+    "mechanical_point_ratio": 0.9,
+    "hydrostatic_efficiency": 0.85,
+    "mechanical_efficiency": 0.97,
+    "pump_drag_nm": 10.0
+  },
+  "input_inertia_kgm2": 0.08,
+  "output_inertia_kgm2": 0.25,
+  "input_axis_local": [
+    -1,
+    0,
+    0
+  ],
+  "output_axis_local": [
+    -1,
+    0,
+    0
+  ],
+  "shift_clutch": {
+    "capacity_nm": 4500.0,
+    "static_factor": 1.15,
+    "torque_phase_s": 0.15,
+    "max_inertia_phase_s": 0.6,
+    "sync_slip_rad_s": 3.0,
+    "engage_time_s": 0.5
+  },
+  "initial_gear": 0
+}

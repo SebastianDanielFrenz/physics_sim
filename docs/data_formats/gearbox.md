@@ -238,6 +238,43 @@ governed diesel near its top speed is lightly loaded at the decision and loaded 
 follows the demand (measured: the pre-powershift formula gave 0.6 s shifts). Data `data/gearboxes/tractor_24f24r_powershift.json`
 (24F/24R, 6 ranges of 4, [AS]), fixture `tests/support/fixtures/vehicles/tractor_powershift.json`.
 
+## Hydro-mechanical CVT gearboxes (tractor plan stage 2)
+
+`"type": "hydro_cvt"`: a power-split tractor transmission (Fendt Vario class). One continuous ratio **k = w_out / w_in**
+through zero into reverse: at k = 0 the output is held rigid by the friction row (active standstill, no brake needed on a
+slope), k < 0 drives backwards. No belt, no slip in normal running. The one friction row (gearbox.out is its node a) carries
+k; its capacity is the hydrostatic pressure limit, so an overload slips like a relief valve (booked as `clutch_loss`).
+D and R are the two selector positions (`gear_request` 1.. = D, < 0 = R, 0 = N; a direction change goes through N and R is
+refused while rolling forward); the shift paddles do nothing. No `forward_ratios`, `forward_efficiency`, `reverse_*` or
+`synchro` (rejected); needs `shift_clutch` (below) and the `automatic_tcu` block `hydro` ([vehicle.md](vehicle.md)); no
+converter. The gear-set input shares a shaft with `engine.crank` like a powershift box (no clutch component).
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `hydro.ratio_forward_max` | > 0 | 1.0 | largest k in D (k_max x engine speed = top output speed) |
+| `hydro.ratio_reverse_max` | > 0 | 0.5 | largest \|k\| in R |
+| `hydro.ratio_rate_per_s` | > 0 | 1.0 | \|dk/dt\| limit |
+| `hydro.mechanical_point_ratio` | > 0 | 0.9 | k at which the hydrostatic path carries no power |
+| `hydro.hydrostatic_efficiency` | (0, 1] | 0.85 | pump + motor |
+| `hydro.mechanical_efficiency` | (0, 1] | 0.97 | gears of the mechanical path |
+| `hydro.pump_drag_nm` | >= 0 | 8 | drag on the input while a direction is engaged, faded in over 10 rad/s |
+| `shift_clutch.capacity_nm` | > 0, required | | the hydrostatic pressure limit as torque at gearbox.out; `static_factor` its breakaway, `engage_time_s` the direction clutch filling (the other keys are unused but must stay valid) |
+
+Efficiency from the hydrostatic share of the power flow: `phi(k) = min(1, |k - k_m| / k_m)` (0 at the mechanical point,
+1 at k = 0 and from 2 k_m up), `1 / eta(k) = (1 - phi) / eta_mech + phi / eta_hydro`; the loss appears as a torque on the
+input node `(1/eta - 1) |T_in|` (booked in `gear_loss`) plus the pump drag.
+
+Driver law (the tcu's `hydro` block, all [AS]): the driver command c (pedal / hand throttle, no drive-mode bend) sets a target
+output speed `speed_rpm_vs_command(c)` (negative in R, x `reverse_speed_fraction`); the reference ramps toward it as an S-curve
+(`speed_ramp_rpm_per_s` largest acceleration, `speed_jerk_rpm_per_s2` build-up). The engine rpm target follows the demanded power
+`p = max(transmitted power / reference_power_w, min(speed deficit / speed_deficit_rpm, deficit_power_max))` along
+`engine_rpm_vs_power` (the least-fuel line), filtered with `engine_rpm_tau_s`, and is realised as the governor lever
+(`idle_rpm`..`high_idle_rpm` -> lever 0..1 plus an integral trim `lever_ki_per_rpm_s`; **needs a governed engine** so the lever sets
+the rpm line, droop respected). The ratio is `k = reference x f / engine speed`, with `f` fading to 0 between `stall_rpm_min` and
+`max(stall_rpm_ok, lug_fraction x target)`, so a lugging engine unloads its way back. Neutral and the direction clutch filling
+follow the measured k and leave the engine to the driver. Data `data/gearboxes/tractor_hydro_cvt.json`, fixture
+`tests/support/fixtures/vehicles/tractor_hydro.json`. Snapshot `transmission_kind` 6, `cvt_ratio` = k.
+
 ## Ports
 
 Fixed names, same for every gearbox: `<id>.in`, `<id>.out`.

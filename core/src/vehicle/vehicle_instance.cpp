@@ -929,7 +929,8 @@ void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
         if (powertrain_.has_auto()) {
             const auto& at = powertrain_.auto_trans();
             snap.clutch_engagement = at.launch_engagement();
-            snap.transmission_kind = at.desc().cvt ? 3 : (at.desc().powershift ? 5 : (at.desc().dual_clutch ? 2 : 1));
+            snap.transmission_kind = at.desc().cvt ? 3 : (at.desc().powershift ? 5 : (at.desc().hydro ? 6 : (at.desc().dual_clutch ? 2 : 1)));
+            if (at.desc().hydro) snap.cvt_ratio = powertrain_.last_auto_outputs().cvt_ratio; // tractor plan stage 2: k = w_out / w_in
             if (at.desc().cvt) { // CVT plan C1
                 const auto& ao = powertrain_.last_auto_outputs();
                 snap.cvt_ratio = ao.cvt_ratio;

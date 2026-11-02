@@ -58,6 +58,10 @@ public:
         bool powershift = false;
         std::vector<int> forward_range;
         real range_change_time_s = 0.0;
+        // Tractor plan stage 2: a hydro-mechanical CVT. D / R are single "gears" (+1 / -1), the ratio k = w_out / w_in is
+        // continuous (ratio_), the one row carries it with its output as node a. clutch = the hydrostatic pressure limit.
+        bool hydro = false;
+        HydroCvtDesc hydro_desc;
         bool cvt = false; // CVT plan C1: forward_ratios = the virtual steps, cvt_desc the variator, tcu.cvt the ratio law
         CvtDesc cvt_desc;
     };
@@ -108,6 +112,8 @@ public:
         real throttle_ceiling = 1.0;
         int current = 0, target = 0;
         Phase phase = Phase::Idle;
+        real engine_command = -1.0;   // Hydro: the governor lever the driver law asks for (< 0 = none: neutral)
+        real engine_target_rpm = 0.0; // Hydro: for diagnostics
         real launch_engagement = 1.0; // DualClutch: the active clutch's engagement e; Automatic: 1
         // CVT plan C1 (0 on other boxes): variator ratio, virtual step (0 = continuous), belt capacity, clamping force.
         real cvt_ratio = 0.0;
@@ -157,6 +163,7 @@ private:
     void update_preselect(const Sensors& s, real th);
     void update_cvt(const Sensors& s, real th);
     void update_cvt_clamp(const Sensors& s);
+    void update_hydro(const Sensors& s, real th);
     [[nodiscard]] int nearest_step() const;
     [[nodiscard]] real belt_capacity() const;
 
@@ -196,6 +203,12 @@ private:
     real t_step_ = 0.0; // time on the current step (stepped S dwell)
     real clamp_ = 0.0;  // belt clamping force [N]
     real cos_beta_ = 1.0; // unhashed constant
+    // Hydro (hashed only with Desc::hydro; ratio_ is k).
+    real v_ref_ = 0.0;      // output speed reference [rad/s]
+    real n_target_ = 0.0;   // filtered engine rpm target [rpm]
+    real lever_i_ = 0.0;    // integral trim of the governor lever
+    real a_ref_ = 0.0;      // acceleration of the output speed reference [rad/s^2]
+    real engine_cmd_ = -1.0;
     // Powertrain dyno only (set_dyno_hold); unhashed, survive reset().
     bool hold_ = false;
     real hold_ratio_ = 0.0; // CVT: the held variator ratio (0 = none)

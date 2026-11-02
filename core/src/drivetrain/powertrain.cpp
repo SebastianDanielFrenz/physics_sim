@@ -998,12 +998,14 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     if (gearbox_desc) {
         gearbox_in_ = gearbox_in_n;
         gearbox_out_ = gearbox_out_n;
-        synchro_row = builder.add_friction_row(gearbox_in_, gearbox_out_);
+        // Tractor plan stage 2: the hydro CVT's row carries k = w_out / w_in, so its output is node a (a ratio of 0 holds it).
+        const bool hydro_rows = gearbox_desc->type == GearboxType::HydroCvt;
+        synchro_row = hydro_rows ? builder.add_friction_row(gearbox_out_, gearbox_in_) : builder.add_friction_row(gearbox_in_, gearbox_out_);
         if (c2c_gearbox) {
             // Automatic gearbox plan A1: the second shift clutch (row B; row A is the synchro slot above), then the
             // torque converter's lock-up clutch (pump -> turbine) and its implicit slip coupling. Only a clutch-to-
             // clutch box adds these, so every Manual/Sequential vehicle's row ids are unchanged.
-            shift_row_b_ = builder.add_friction_row(gearbox_in_, gearbox_out_);
+            shift_row_b_ = hydro_rows ? builder.add_friction_row(gearbox_out_, gearbox_in_) : builder.add_friction_row(gearbox_in_, gearbox_out_);
             if (!turbine_port_key.empty()) {
                 converter_pump_ = node_for_key(component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "in"));
                 lockup_row_ = builder.add_friction_row(converter_pump_, gearbox_in_);
@@ -1787,6 +1789,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id +
                                           (ad.powershift ? "': a powershift gearbox needs the automatic_tcu's 'powershift' block (its shift law)"
                                                          : "': the automatic_tcu's 'powershift' block is for a powershift gearbox only"));
+            }
+            // Tractor plan stage 2: a hydro_cvt gearbox and the automatic_tcu's hydro block come together.
+            ad.hydro = gearbox_desc->type == GearboxType::HydroCvt;
+            if (ad.hydro != at->hydro.has_value()) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id +
+                                          (ad.hydro ? "': a hydro_cvt gearbox needs the automatic_tcu's 'hydro' block (its driver law)"
+                                                    : "': the automatic_tcu's 'hydro' block is for a hydro_cvt gearbox only"));
+            }
+            if (ad.hydro) {
+                if (!gearbox_desc->hydro) throw std::runtime_error("vehicle '" + vehicle_name + "': a hydro_cvt gearbox needs its 'hydro' block");
+                ad.hydro_desc = *gearbox_desc->hydro;
             }
             ad.forward_range = gearbox_desc->forward_range;
             ad.range_change_time_s = gearbox_desc->range_change_time_s;
@@ -2797,7 +2810,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
                                   ? ctx.channels[mode_channel_slot_]
                                   : real(0.0);
             last_mode_channel_ = as.mode_channel;
-            as.input_torque_prev = std::abs(network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_));
+            as.input_torque_prev = auto_->desc().hydro
+                                       ? std::abs(last_auto_out_.row[0].ratio * network_.row_lambda(gearbox_synchro_row_) + last_auto_out_.row[1].ratio * network_.row_lambda(shift_row_b_))
+                                       : std::abs(network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_));
             if (engine_) as.engine_torque_demand = last_engine_result_.torque_demand;
             // DCT launch control (the assist unit's launch_control, VehicleInstance arms it only on a DualClutch): Armed
             // holds the launch clutch open; Launch gives it the manual TCU's torque-following cap,
@@ -2805,7 +2820,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // so the clutch carries what the held-rpm engine makes plus a bounded synchronising torque.
             as.launch_hold_open = ctx.launch_hold_clutch;
             as.rev_match_hold = hybrid_connect_s_ > real(0.0);
-            if (ctx.launch_clutch_ramp >= real(0.0) && engine_) {
+            if (ctx.launch_clutch_ramp >= real(0.0) && engine_ && !auto_->desc().hydro) {
                 constexpr real kLcSyncNmPerRadS = real(0.5), kLcSyncFraction = real(0.2); // [AS]
                 const real slip = as.input_omega - auto_->ratio(auto_->current()) * as.output_omega;
                 const real dir = slip >= real(0.0) ? real(1.0) : real(-1.0);
@@ -2817,6 +2832,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             as.first_substep = ctx.first_substep_of_tick;
             as.h = ctx.h;
             last_auto_out_ = auto_->step(as);
+            // Tractor plan stage 2: the hydro CVT's driver law sets the engine (the governor lever) itself.
+            if (engine_ && last_auto_out_.engine_command >= real(0.0)) last_throttle_command_.command = last_auto_out_.engine_command;
             gearbox_->reset_to(last_auto_out_.current); // ratio/efficiency lookups and current_position() for readers
             tcu_prev_request_.throttle_floor = real(0.0);
             tcu_prev_request_.ignition_cut = false;
@@ -2966,7 +2983,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         real eff = cur == 0 ? real(1.0) : gearbox_->efficiency_for_position(cur);
         const CvtDesc* cvt = (auto_ && auto_->desc().cvt) ? &auto_->desc().cvt_desc : nullptr;
         if (cvt && cur > 0) eff = cvt->efficiency_vs_ratio.evaluate(last_auto_out_.cvt_ratio); // CVT plan C1
-        if (cur != 0 && eff < real(1.0)) {
+        const bool hydro = auto_ && auto_->desc().hydro;
+        if (hydro && cur != 0) {
+            // Tractor plan stage 2: the loss of the hydrostatic share, as an input-side torque on the power flowing through.
+            const real eta = hydro_cvt_efficiency(auto_->desc().hydro_desc, last_auto_out_.cvt_ratio);
+            gearbox_own_loss_tau_ = -(real(1.0) / eta - real(1.0)) * std::abs(gearbox_lambda_mesh_prev_) * sign(gearbox_omega_old_in_);
+            gearbox_own_loss_tau_ -= auto_->desc().hydro_desc.pump_drag_nm * std::clamp(gearbox_omega_old_in_ / real(10.0), real(-1.0), real(1.0));
+        } else if (cur != 0 && eff < real(1.0)) {
             gearbox_own_loss_tau_ = -(real(1.0) - eff) * std::abs(gearbox_lambda_mesh_prev_) * sign(gearbox_omega_old_in_);
         } else {
             gearbox_own_loss_tau_ = real(0.0);
@@ -3273,6 +3296,10 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
             ledger_.clutch_loss += -ctx.h * network_.row_velocity(shift_row_b_) * lb;
             gearbox_lambda_mesh_prev_ = cur == 0 ? real(0.0) : la + lb;
             gearbox_mesh_load_nm_ = std::abs(la + lb);
+            if (auto_->desc().hydro) { // the torque on the input node is -k * (the row's output torque)
+                gearbox_lambda_mesh_prev_ = cur == 0 ? real(0.0) : -(last_auto_out_.row[0].ratio * la + last_auto_out_.row[1].ratio * lb);
+                gearbox_mesh_load_nm_ = std::abs(la + lb);
+            }
             if (converter_) {
                 const real wp = network_.omega(converter_pump_);
                 const real wt = network_.omega(gearbox_in_);
@@ -3680,6 +3707,7 @@ real Powertrain::transmission_input_power_w() const {
                        - conv_d_pump_ * (wp - conv_wp_old_) + network_.row_lambda(lockup_row_);
         } else {
             reaction = network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_);
+            if (auto_->desc().hydro) reaction = -(last_auto_out_.row[0].ratio * network_.row_lambda(gearbox_synchro_row_) + last_auto_out_.row[1].ratio * network_.row_lambda(shift_row_b_));
         }
     }
     return -reaction * engine_omega();

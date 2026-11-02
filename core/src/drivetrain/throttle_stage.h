@@ -129,6 +129,7 @@ private:
     switch (type) {
         case GearboxType::Manual:
         case GearboxType::Sequential:
+        case GearboxType::HydroCvt:   // tractor plan stage 2: the pedal is a speed command, no torque bend
         case GearboxType::Powershift: // tractor plan stage 1: the driver's pedal / hand lever stays a torque request
             return false;
         case GearboxType::Automatic:
