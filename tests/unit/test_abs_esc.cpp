@@ -130,6 +130,7 @@
 #include "ps/vehicle/abs_esc_desc.h"
 #include "ps/vehicle/drive_modes_desc.h"
 #include "ps/vehicle/vehicle_reset.h"
+#include "engine_map_test_cache.h"
 #include "vehicle_test_helpers.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -886,8 +887,14 @@ LaunchBrakeRun launch_then_brake(const VehicleDesc& d0, bool abs_on, real thrott
     return out;
 }
 
+// car_hyper and car_hyper_n2o generate their Full engine maps at load (33 s on one thread); these tests only drive the car,
+// so the maps come from the shared pooled cache (tests/support/engine_map_test_cache.h).
 const VehicleDesc& hyper_unit() {
-    static const VehicleDesc d = io::load_vehicle_json(kHyper, with_unit());
+    static const VehicleDesc d = [] {
+        io::VehicleLoadOptions o = with_unit();
+        o.maps = ps_test::shared_map_options();
+        return io::load_vehicle_json(kHyper, o);
+    }();
     return d;
 }
 
@@ -938,7 +945,11 @@ TEST_CASE("L4c: and with every wheel driven (car_sedan_awd): no undriven wheel t
 // took 5.2 s at 3-5 m/s^2 (aero drag only). Evidence: out/owner_brake_300kmh.json.)
 // ---------------------------------------------------------------------------------------------------------------
 const VehicleDesc& hyper_n2o_unit() {
-    static const VehicleDesc d = io::load_vehicle_json(kData + "/vehicles/car_hyper_n2o.json", with_unit());
+    static const VehicleDesc d = [] {
+        io::VehicleLoadOptions o = with_unit();
+        o.maps = ps_test::shared_map_options();
+        return io::load_vehicle_json(kData + "/vehicles/car_hyper_n2o.json", o);
+    }();
     return d;
 }
 

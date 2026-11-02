@@ -214,6 +214,10 @@ target_include_directories(ps_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src ${
 # can work on every preset.
 target_compile_definitions(ps_unit_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# tests/support/engine_map_test_cache.h: the shared .psmaps cache of the tests that only use a generated-map engine,
+# per build tree (never shared between presets or compilers).
+target_compile_definitions(ps_unit_tests PRIVATE PS_TEST_MAP_CACHE_DIR="${CMAKE_BINARY_DIR}/test_map_cache")
+
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 

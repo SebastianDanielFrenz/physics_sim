@@ -26,6 +26,7 @@
 #include "ps/io/fuel_io.h"
 #include "ps/io/vehicle_io.h"
 
+#include "engine_map_test_cache.h"
 #include "mvem_fixtures.h"
 
 #include "ps/jobs/debug_alloc.h"
@@ -910,10 +911,9 @@ TEST_CASE("C11 hashed state layout, content hash, reset, zero allocation", "[dri
 
 TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy", "[turbo][sim_engine]") {
     // The shipped engine has no maps block: loading generates them from its
-    // cycle block (10 x 6 grid, boosted nodes), on a pool to keep this test short.
-    ps::jobs::JobSystem pool(10);
-    ps::io::EngineMapOptions map_options;
-    map_options.pool=&pool;
+    // cycle block (10 x 6 grid, boosted nodes); generation itself is not under test here, so the maps come from the
+    // shared pooled cache (tests/support/engine_map_test_cache.h) and the load time below is a cache hit after the first run.
+    const ps::io::EngineMapOptions map_options=ps_test::shared_map_options();
     const auto t_load=std::chrono::steady_clock::now();
     const auto loaded=ps::io::load_engine_json(std::string(PS_SOURCE_DIR)+"/data/engines/hyper_v8_one1_audio.json",map_options);
     std::printf("[turbo dyno] load incl. map generation: %.2f s\n",std::chrono::duration<double>(std::chrono::steady_clock::now()-t_load).count());

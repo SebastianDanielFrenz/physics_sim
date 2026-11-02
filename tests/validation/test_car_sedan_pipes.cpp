@@ -43,6 +43,7 @@
 // Run for car_sedan_pipes.json (FWD 60/40) and car_sedan_pipes_rwd.json
 // (owner 2026-09-29, "give me RWD": car_sedan_rwd.json, same engine) - idle
 // and free rev are identical (neutral), launch speed@3s 12.21 / 13.28 m/s.
+#include "engine_map_test_cache.h"
 #include "vehicle_test_helpers.h"
 
 #include "ps/drivetrain/powertrain_desc.h"
@@ -66,9 +67,9 @@ constexpr real kMass = 1500.0;
 const Vec3 kHalfExtents{2.0, 0.4, 0.15};
 constexpr real kOriginHeight = 0.6;
 
-ps_test::VehicleTestRig build_rig(const std::string& path) {
-    return ps_test::build_vehicle_rig(path, kMass,
-                                       kHalfExtents, kOriginHeight, /*slope_grade=*/0.0, /*job_workers=*/4);
+ps_test::VehicleTestRig build_rig(const vehicle::VehicleDesc& desc) {
+    return ps_test::build_vehicle_rig_from_desc(desc, kMass,
+                                                 kHalfExtents, kOriginHeight, /*slope_grade=*/0.0, /*job_workers=*/4);
 }
 
 } // namespace
@@ -79,7 +80,11 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     const std::string name = GENERATE(std::string("car_sedan_pipes"), std::string("car_sedan_pipes_rwd"));
     CAPTURE(name);
     const std::string path = std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/" + name + ".json";
-    const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
+    // Loaded once (the rig is built from this desc, not from a second load of the file) with the Full pipe-engine maps
+    // from the shared pooled cache (tests/support/engine_map_test_cache.h): generation was ~25 s of this test's ~45 s.
+    io::VehicleLoadOptions load_options;
+    load_options.maps = ps_test::shared_map_options();
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(path, load_options);
     real idle_rpm_desc = -1.0, limiter_rpm_desc = -1.0, hysteresis_rpm_desc = -1.0;
     for (const auto& c : desc.powertrain.components) {
         if (const auto* s = std::get_if<SimulatedEngineDesc>(&c.params)) {
@@ -91,7 +96,7 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     REQUIRE(idle_rpm_desc > 0.0);   // confirms the engine component IS a simulated (pipe) one
     REQUIRE(limiter_rpm_desc > 0.0);
 
-    ps_test::VehicleTestRig rig = build_rig(path);
+    ps_test::VehicleTestRig rig = build_rig(desc);
     World& w = *rig.world;
     bool stalled = false;
     auto check = [&]() {

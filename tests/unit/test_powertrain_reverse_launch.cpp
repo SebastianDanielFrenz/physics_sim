@@ -31,6 +31,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "engine_map_test_cache.h"
 #include "vehicle_test_helpers.h"
 
 #include <algorithm>
@@ -57,13 +58,9 @@ const CarSpec kHyper{"car_hyper", "/data/vehicles/car_hyper.json", 850.0, 0.5};
 const CarSpec kSedan{"car_sedan", "/data/vehicles/car_sedan.json", 750.0, 0.6};
 
 const vehicle::VehicleDesc& desc_of(const CarSpec& car) {
-    // Loaded once per car: car_hyper generates its engine maps at load.
-    static jobs::JobSystem pool(10);
-    static io::EngineMapOptions opt = [] {
-        io::EngineMapOptions o;
-        o.pool = &pool;
-        return o;
-    }();
+    // Loaded once per car: car_hyper generates its engine maps at load - from the shared pooled cache
+    // (tests/support/engine_map_test_cache.h), this test does not assert anything about generation.
+    static const io::EngineMapOptions opt = ps_test::shared_map_options();
     static const vehicle::VehicleDesc hyper = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + kHyper.json, opt);
     static const vehicle::VehicleDesc sedan = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + kSedan.json, opt);
     return &car == &kHyper ? hyper : sedan;

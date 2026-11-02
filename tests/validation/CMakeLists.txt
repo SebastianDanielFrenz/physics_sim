@@ -73,6 +73,8 @@ target_include_directories(ps_validation_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/
 # (same reasoning as tests/unit/test_scenario_articulation.cpp's identical
 # PS_SOURCE_DIR use - the WSL/Linux presets build outside the source tree).
 target_compile_definitions(ps_validation_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# tests/support/engine_map_test_cache.h: shared .psmaps cache of the tests that only use a generated-map engine.
+target_compile_definitions(ps_validation_tests PRIVATE PS_TEST_MAP_CACHE_DIR="${CMAKE_BINARY_DIR}/test_map_cache")
 
 # ADD_TAGS_AS_LABELS: every Catch2 tag (e.g. [long], [sanitizer]) becomes a
 # CTest LABEL. tools/ci.ps1's default (fast) run selects tests via ctest -L/

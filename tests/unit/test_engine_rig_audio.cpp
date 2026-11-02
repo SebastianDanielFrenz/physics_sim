@@ -15,6 +15,8 @@
 #include "ps_audio/engine_input.h"
 #include "ps_audio/voice.h"
 
+#include "engine_map_test_cache.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
@@ -58,10 +60,7 @@ EngineInput make_engine_input(const EngineRig& rig) {
 
 const drivetrain::CycleModelDesc& demo_cycle_desc() {
     static const drivetrain::CycleModelDesc d = [] {
-        io::EngineMapOptions opts;
-        opts.quality = drivetrain::MapQuality::Preview;  // A8b: only the desc is read; Preview maps are cheaper to generate
-        jobs::JobSystem pool(10);
-        opts.pool = &pool;
+        const io::EngineMapOptions opts = ps_test::shared_map_options(drivetrain::MapQuality::Preview);  // A8b: only the desc is read; Preview maps are cheaper to generate
         const drivetrain::ComponentParams params = io::load_engine_json(demo_engine_path(), opts, nullptr);
         const auto* sim = std::get_if<drivetrain::SimulatedEngineDesc>(&params);
         REQUIRE(sim != nullptr);
@@ -73,10 +72,7 @@ const drivetrain::CycleModelDesc& demo_cycle_desc() {
 
 const drivetrain::FuelDesc& demo_fuel_desc() {
     static const drivetrain::FuelDesc f = [] {
-        io::EngineMapOptions opts;
-        opts.quality = drivetrain::MapQuality::Preview;  // A8b: only the desc is read; Preview maps are cheaper to generate
-        jobs::JobSystem pool(10);
-        opts.pool = &pool;
+        const io::EngineMapOptions opts = ps_test::shared_map_options(drivetrain::MapQuality::Preview);  // A8b: only the desc is read; Preview maps are cheaper to generate
         const drivetrain::ComponentParams params = io::load_engine_json(demo_engine_path(), opts, nullptr);
         const auto* sim = std::get_if<drivetrain::SimulatedEngineDesc>(&params);
         REQUIRE(sim != nullptr);
@@ -89,7 +85,7 @@ const drivetrain::FuelDesc& demo_fuel_desc() {
 } // namespace
 
 TEST_CASE("A10 R1: demo engine free revs from idle toward the limiter and back", "[audio][drivetrain][long]") {
-    EngineRig rig(demo_engine_path());
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
     real peak_rpm = 0.0;
@@ -131,7 +127,7 @@ TEST_CASE("A10 R1: demo engine free revs from idle toward the limiter and back",
 }
 
 TEST_CASE("A10 R2: the starter takes the demo engine Off -> Cranking -> Running", "[audio][drivetrain][long]") {
-    EngineRig rig(demo_engine_path());
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     REQUIRE(rig.engine_state() == drivetrain::EngineState::Off);
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
@@ -154,7 +150,7 @@ TEST_CASE("A10 R2: the starter takes the demo engine Off -> Cranking -> Running"
 }
 
 TEST_CASE("A10 R3: cutting ignition stalls a running demo engine", "[audio][drivetrain][long]") {
-    EngineRig rig(demo_engine_path());
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
     for (int tick = 0; tick < 240; ++tick) rig.step();
@@ -197,7 +193,7 @@ TEST_CASE("A10 R3: cutting ignition stalls a running demo engine", "[audio][driv
 
 TEST_CASE("A10 R4: EngineRig -> Voice render is deterministic and seed-sensitive", "[audio][drivetrain][long]") {
     auto render = [](std::uint64_t seed, int seconds) {
-        EngineRig rig(demo_engine_path());
+        EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
         rig.set_ignition(1.0);
         rig.set_starter(1.0);
         VoiceSettings vs;
@@ -234,7 +230,7 @@ TEST_CASE("A10 R4: EngineRig -> Voice render is deterministic and seed-sensitive
 }
 
 TEST_CASE("A10 R5: the demo engine's ledger closes from tick 1 (F-T0)", "[audio][drivetrain][long]") {
-    EngineRig rig(demo_engine_path());
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
     real worst_balance = 0.0, scale = 1.0;
@@ -256,7 +252,7 @@ TEST_CASE("A10 R5: the demo engine's ledger closes from tick 1 (F-T0)", "[audio]
 }
 
 TEST_CASE("A10 R6: EngineRig::step is allocation-free once built", "[audio][drivetrain][long]") {
-    EngineRig rig(demo_engine_path());
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
     for (int tick = 0; tick < 60; ++tick) rig.step(); // warm up (starter transition etc.)
@@ -287,10 +283,8 @@ std::vector<EngineInput> record_free_rev_inputs(real seconds) {
     };
     const Ev evs[] = {{0.0, 0, 1.0}, {0.8, 0, 0.0}, {1.2, 1, 0.05}, {3.0, 1, 0.9},
                       {3.8, 1, 0.05}, {5.5, 1, 1.0}, {6.6, 1, 0.05}};
-    jobs::JobSystem pool(10);  // Full maps as the tool uses them, generated on 10 workers (A8b: cost)
-    io::EngineMapOptions opts;
-    opts.pool = &pool;
-    EngineRig rig(demo_engine_path(), opts);
+    // Full maps as the tool uses them, from the shared pooled cache (A8b: cost; engine_map_test_cache.h)
+    EngineRig rig(demo_engine_path(), ps_test::shared_map_options());
     std::vector<EngineInput> in;
     std::size_t next = 0;
     const int ticks = static_cast<int>(seconds * 240.0);

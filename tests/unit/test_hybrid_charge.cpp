@@ -1,6 +1,7 @@
 #include "drivetrain/hybrid_charge.h"
 #include "drivetrain/powertrain.h"
 #include "drivetrain/engine_simulated.h"
+#include "engine_map_test_cache.h"
 #include "vehicle_test_helpers.h"
 #include "ps/io/vehicle_io.h"
 #include <catch2/catch_test_macros.hpp>
@@ -86,7 +87,10 @@ TEST_CASE("Simulated engine charging fuel estimate agrees with a naturally aspir
 
 TEST_CASE("Turbo hybrid tracks charging power with efficiency optimization enabled", "[hybrid_charge][turbo]") {
     auto d=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hybrid.json");
-    const auto turbo=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json");
+    // Only the hyper's engine desc (with its generated Full maps) is borrowed: the maps come from the shared pooled cache.
+    io::VehicleLoadOptions hyper_options;
+    hyper_options.maps=ps_test::shared_map_options();
+    const auto turbo=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",hyper_options);
     for(auto& c:d.powertrain.components) {
         if(auto* b=std::get_if<BatteryDesc>(&c.params))b->initial_soc=.19;
         if(c.id=="engine")for(const auto& donor:turbo.powertrain.components)
