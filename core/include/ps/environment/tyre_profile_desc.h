@@ -39,6 +39,7 @@ struct TyreConditionFactors {
     real damp = 1.0;
     real wet = 1.0;
     real wet_grass = 1.0;
+    real snow_packed = 1.0;   // on a surface condition's snow cover
 };
 
 // Tread-depth exponents of the tread factor (plan 5.2 step 4; W7 reads them).

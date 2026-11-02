@@ -46,7 +46,7 @@ object by name until then.
 | `groove_void_ratio` | real, required | groove void fraction, in [0, 1] (inclusive) |
 | `siping` | string, optional | `none` (default), `low` or `high` |
 | `inflation_pressure_kpa` | real, required | reference pressure, > 0 |
-| `condition_factors` | object, required | `dry`, `damp`, `wet`, `wet_grass`, each > 0 and finite, default 1.0; relative to the reference summer tyre. The W8/W9 keys (`slush`, `snow_loose`, `snow_packed`, `ice`, `wet_ice`, `frost`, `black_ice`, `mud`) are reserved |
+| `condition_factors` | object, required | `dry`, `damp`, `wet`, `wet_grass`, `snow_packed` (on a surface's snow cover), each > 0 and finite, default 1.0; relative to the reference summer tyre. Shipped `snow_packed` [AS]: winter 1.6, all_season 1.3, offroad_at/agricultural_lug 1.2, slick 0.5, summer 1.0. The other W8/W9 keys (`slush`, `snow_loose`, `ice`, `wet_ice`, `frost`, `black_ice`, `mud`) are reserved |
 | `tread_exponents` | object, optional | `wet` (default 0.5), `snow_packed` (default 1.0), each > 0; W7 reads them |
 | `thermal` | `null`, optional | reserved for W9; an object is rejected |
 | `wear` | `null`, optional | reserved for W10; an object is rejected |

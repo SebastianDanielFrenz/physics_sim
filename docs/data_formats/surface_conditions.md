@@ -68,7 +68,7 @@ Class object:
 | `drainage` | object, required for `sealed` | `path_m` > 0 (drainage path length), `slope` > 0 (m/m); feeds the Gallaway steady film |
 | `soil` | object, required for `soil`/`vegetated` | `ksat_mm_h` > 0 (saturated conductivity), `theta_fc` and `theta_sat` volumetric, `0 < theta_fc < theta_sat <= 1` |
 | `canopy` | object, required for `vegetated` | `capacity_mm` > 0 (interception store) |
-| `friction` | object, optional for non-static | `damp`/`wet`/`wet_grass` in (0, 2], relative to the class's own dry level (defaults 0.85 / 0.71 / 0.67); the W8/W9 condition keys stay reserved |
+| `friction` | object, optional for non-static | `damp`/`wet`/`wet_grass`/`snow_packed`, relative to the class's own dry level (defaults 0.85 / 0.71 / 0.67 / 0.35); the other W8/W9 condition keys stay reserved |
 | `source` | string or object | provenance |
 
 A static class takes none of the fields above.
@@ -124,8 +124,8 @@ One step updates the mass after the thermal solve, in this order: rain input ->
 canopy interception (vegetated) -> soil infiltration (soil/vegetated) -> the rest
 is added to the film `W` -> evaporation or dew -> drainage.
 
-- **Rain**: `precip_mm_h / 3600 * dt` of liquid water (snow is W8; the
-  environment passes 0 for a snow sample).
+- **Rain**: `precip_mm_h / 3600 * dt` of liquid water (a snow sample goes to the
+  snow pack below; sleet counts as liquid).
 - **Canopy** (vegetated): fills up to `canopy.capacity_mm` first.
 - **Infiltration** (soil/vegetated): at most `ksat_mm_h / 3600 * dt` and at most
   the pore space `(theta_sat - theta) * layer.depth_m * 1000` mm (theta is volumetric, so
@@ -154,6 +154,26 @@ is added to the film `W` -> evaporation or dew -> drainage.
   (`tau = 0`: down to `W_tex` in one step).
 - **Drainage** (soil/vegetated): gravity water above `theta_fc` relaxes with a
   3-day [AS] time constant and any ponded `W` with a 1 h [AS] constant.
+
+### Snow pack (a W8 subset)
+
+Every stateful class carries a snow pack `snow_mm` (water equivalent) and its
+density. Snowfall (`snow_mm_h`, the weather's precipitation while its type is
+snow) adds to it. The pack sits at 0 C and melts from two sides:
+
+- from below: while the surface node is above 0 C, `q = 30 W/(m2 K) [AS] * (T_s - 0 C)`,
+  limited to the pack, leaves the surface energy balance (lagged like the latent
+  flux) and melts `q dt / 3.34e5` mm;
+- from above: a degree-day melt `4 mm/(K day) [C Hock 2003: 2.5-6] * max(0, T_air)`.
+
+Melt water joins the liquid input (under the canopy). Density: fresh snow
+100 kg/m3, settling toward 300 kg/m3 with a 2-day time constant [D/AS]. No frost,
+ice, refreeze, sublimation, drifting or clearing. Because each class has its own
+surface temperature, a warm road loses its snow before the grass next to it; the
+grid steps on environment time, so the time scale speeds accumulation and melt
+alike.
+
+The snapshot's `condition` is 3 while the class has any snow cover.
 
 The published wet weight of a class (the condition grip and the snapshot's
 `condition`): sealed `W / W_tex`; soil/vegetated
@@ -200,7 +220,9 @@ linearly between the 33 samples and evaluated at the contact-patch speed; non-ve
 `f = (1 - w) dry_tyre + w table(v) wet_tyre`, vegetated
 `f = (1 - g) dry_tyre + g wet_grass * wet_grass_tyre`; `w`/`g` are the wet/grass
 weights above and `*_tyre` the tyre profile's per-condition factors
-([`tyre_profile.md`](tyre_profile.md)). A static class, an out-of-range id or no
+([`tyre_profile.md`](tyre_profile.md)). Snow cover blends on top:
+`f = (1 - s) f + s snow_packed * snow_packed_tyre`, `s = min(snow_mm / 1 mm [AS], 1)`,
+`snow_packed` the class's friction level (default 0.35 [D]). A static class, an out-of-range id or no
 environment gives exactly 1. W7 adds the tread-depth factor, W8 aquaplaning.
 
 ## Validation (measured, `tests/unit/test_environment_surface.cpp`)

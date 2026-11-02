@@ -47,6 +47,9 @@ public:
     // Wet weight of one class [0, 1] from the last update_state (diagnostic and
     // the snapshot's condition label).
     real water_weight(int surface_id) const;
+    // Snow-cover weight [0, 1]: the pack's water equivalent over kSnowFullMm.
+    real snow_weight(int surface_id) const;
+    static constexpr real kSnowFullMm = 1.0;   // [AS] ~7-10 mm of snow covers the contact completely
     // The friction factor of one wheel contact. 1.0 when the object is invalid,
     // the id is out of range, or the class is static (no state). The speed is
     // the contact slip speed (m/s), clamped to [0, kSpeedMaxMps].
@@ -57,6 +60,7 @@ private:
     real table_[kMaxSurfaceClasses][kSpeedSamples]{};   // wet mu_rel vs speed
     real w_wet_[kMaxSurfaceClasses]{};                  // water/soil/canopy weight
     real w_grass_[kMaxSurfaceClasses]{};                // vegetated canopy weight
+    real w_snow_[kMaxSurfaceClasses]{};                 // snow-cover weight
     SurfaceFrictionDesc friction_[kMaxSurfaceClasses]{};
     bool stateful_[kMaxSurfaceClasses]{};
     bool vegetated_[kMaxSurfaceClasses]{};

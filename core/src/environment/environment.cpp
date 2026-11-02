@@ -221,9 +221,9 @@ SurfaceForcing Environment::surface_forcing(real t_env) const {
         f.wind_m_s = w.wind_mean_m_s;
         f.vapour_pressure_hpa = w.vapour_pressure_hpa;
         f.cloud_cover = w.cloud_cover;
-        // W6 models liquid water only: snow precipitation is W8 (its melt and
-        // pack), so it contributes no liquid input yet.
-        if (w.precip_type != PrecipType::Snow) f.precip_mm_h = w.precip_mm_h;
+        // Snow builds the pack (water equivalent); every other type is liquid input (sleet included).
+        if (w.precip_type == PrecipType::Snow) f.snow_mm_h = w.precip_mm_h;
+        else f.precip_mm_h = w.precip_mm_h;
     }
     f.ghi_w_m2 = ghi_w_m2(ss.elevation_rad, f.cloud_cover);
     f.bottom_temp_k = (day.has_climate ? day.climate.ground_temp_c : 10.0) + kCelsiusToKelvin;
@@ -267,7 +267,7 @@ void Environment::fill_surfaces(real t_env) {
         const real above = col.kind == SurfaceKind::Sealed ? std::max(s.water_mm - col.w_tex_mm, 0.0) : s.water_mm;
         s.water_above_texture_mm = above;
         const real ww = grip_.water_weight(i);
-        s.condition = ww <= 0.0 ? 0 : (ww < 1.0 ? 1 : 2);
+        s.condition = grip_.snow_weight(i) > 0.0 ? 3 : (ww <= 0.0 ? 0 : (ww < 1.0 ? 1 : 2));
         s.condition_factor = grip_.factor(i, 0.0);
     }
 }
