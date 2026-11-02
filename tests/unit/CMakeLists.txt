@@ -376,6 +376,7 @@ add_executable(ps_field_tests
   test_field_nutrient_processes.cpp
   test_field_reference.cpp
   test_field_crops.cpp
+  test_field_perennial.cpp
   test_field_pathogens.cpp
   test_field_soc.cpp
   test_field_scenarios_30y.cpp

@@ -127,6 +127,8 @@ Field::Field(const FieldConfig& config) : cfg_(config), nx_(config.nx), ny_(conf
     if (cfg_.management_enabled && !cfg_.nutrients_enabled) throw std::invalid_argument("Field: management_enabled needs nutrients_enabled");
     if (cfg_.pathogens_enabled && !cfg_.management_enabled) throw std::invalid_argument("Field: pathogens_enabled needs management_enabled");
     if (cfg_.soc_enabled && !cfg_.management_enabled) throw std::invalid_argument("Field: soc_enabled needs management_enabled");
+    for (const CropDesc& cd : cfg_.crops)
+        if (cd.perennial.active && !cfg_.management_enabled) throw std::invalid_argument("Field: perennial crop " + cd.name + " needs management_enabled");
     if (cfg_.nutrients_enabled) {
         for (const SoilDesc& so : cfg_.soils)
             if (!so.has_nutrients) throw std::invalid_argument("Field: soil " + so.name + " has no nutrient block");
@@ -254,7 +256,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             const real kill = clamp01((cr->frost_kill_onset_c - tmin_eff) / (cr->frost_kill_onset_c - cr->frost_kill_full_c));
             if (kill > 0.0) {
                 s.cc[c] *= (1.0 - kill);
-                s.stand[c] *= (1.0 - kill);
+                if (!cr->perennial.active) s.stand[c] *= (1.0 - kill);   // a sward's crowns survive; its canopy regrows from the floor
                 s.cc_peak[c] = std::min(s.cc_peak[c], cr->ccx * s.stand[c]);
             }
         }
@@ -284,6 +286,9 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         }
         const int prev = st;
         s.gdd_sow[c] += dev;
+        if (cr->perennial.active && s.gdd_sow[c] >= cr->perennial.cycle_gdd && prev >= cr->stage_emergence) {
+            perennial_cut(c, 1.0);   // an uncut sward turns over: the old growth lies down and the sward starts again
+        }
         st = stage_of(*cr, s.gdd_sow[c]);
         s.stage[c] = static_cast<std::uint8_t>(st);
         emerged = st >= cr->stage_emergence;
@@ -329,6 +334,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             }
         }
     }
+    if (emerged && cr->perennial.active && s.cc[c] < cr->perennial.cc_floor) s.cc[c] = cr->perennial.cc_floor;
     const real cc = emerged ? s.cc[c] : 0.0;
 
     // --- snow, runoff ----------------------------------------------------------------

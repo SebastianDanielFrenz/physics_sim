@@ -339,6 +339,16 @@ CropDesc parse_crop_json(const json& j, const std::string& origin) {
         w.skip("source");
         w.finish();
     }
+    if (r.has("perennial")) {
+        ObjectReader w(block_of(r, "perennial", origin), "perennial", origin);
+        d.perennial.active = true;
+        d.perennial.regrowth_gdd = w.number("regrowth_gdd", true, 0.0);
+        d.perennial.cycle_gdd = w.number("cycle_gdd", true, 0.0);
+        d.perennial.stubble_fraction = w.number("stubble_fraction", true, 0.0);
+        d.perennial.cc_floor = w.number("cc_floor", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
     {
         ObjectReader w(block_of(r, "ripeness", origin), "ripeness", origin);
         d.harvest_window_days = w.number("harvest_window_days", true, 0.0);
@@ -709,6 +719,7 @@ OperationEffect parse_operation_json(const json& j, const std::string& origin, c
     const std::string name = r.string("name", true, "");
     e.coverage = r.number("coverage", false, 1.0);
     e.straw_pickup = r.number("straw_pickup", false, 0.0);
+    e.mow = r.number("mow", false, 0.0);
     if (r.has("tillage")) {
         const json& tb = r.object("tillage");
         const json* src = tb.contains("source") ? &tb["source"] : nullptr;

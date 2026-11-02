@@ -80,6 +80,7 @@ struct OperationEffect {
     TillageEffect tillage;              // F1c
     HarvestEffect harvest;
     real straw_pickup = 0.0;            // share of the loose surface straw taken off (baler, rake)
+    real mow = 0.0;                     // share of a perennial sward's standing biomass above the stubble that is cut and lies in the swath (mower)
     SeedPlacement seed;
     Spray spray;
 
@@ -88,7 +89,7 @@ struct OperationEffect {
 
     // True when the record needs the management layer (anything beyond a deposit).
     bool needs_management() const {
-        return tillage.active() || harvest.harvest || straw_pickup > 0.0 || seed.crop != 0 || spray.product != 0;
+        return tillage.active() || harvest.harvest || straw_pickup > 0.0 || mow > 0.0 || seed.crop != 0 || spray.product != 0;
     }
 };
 

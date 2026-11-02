@@ -319,6 +319,34 @@ void Field::do_harvest_mgmt(std::size_t c, const HarvestEffect& h, real cov, Har
     }
 }
 
+// A perennial sward goes back to its regrowth state with `share` of the standing biomass above the stubble down as litter (the loose pool;
+// roots, nutrients and carbon follow crop_to_residue's ledgers, so every balance closes). Turnover is share 1; a mower takes less or more of it.
+void Field::perennial_cut(std::size_t c, real share) {
+    FieldState& s = s_;
+    if (s.crop[c] == 0) return;
+    const CropDesc& cr = cfg_.crops[static_cast<std::size_t>(s.crop[c] - 1)];
+    const PerennialDesc& pr = cr.perennial;
+    if (!pr.active) return;
+    const real stand0 = s.stand[c], plants0 = s.plants[c];   // the crowns stay: only the shoot (biomass, canopy, nutrients) goes down
+    crop_to_residue(c, std::min(1.0, share) * (1.0 - pr.stubble_fraction), false);
+    s.stand[c] = stand0;
+    s.plants[c] = plants0;
+    s.gdd_sow[c] = pr.regrowth_gdd;
+    s.t_sen[c] = s.hi_gdd[c] = s.grain[c] = s.days_ripe[c] = 0.0;
+    s.pol_sum[c] = s.pol_n[c] = s.sto_sum[c] = s.sto_n[c] = 0.0;
+    s.cc[c] = std::max(s.cc[c], pr.cc_floor);
+    s.cc_peak[c] = s.cc[c];
+    int st = 0;
+    for (int i = 1; i < cr.stage_count(); ++i)
+        if (s.gdd_sow[c] >= cr.stages[static_cast<std::size_t>(i)].gdd) st = i;
+    s.stage[c] = static_cast<std::uint8_t>(st);
+}
+
+void Field::do_mow(std::size_t c, real share) {
+    if (!(share > 0.0)) return;
+    perennial_cut(c, share);
+}
+
 void Field::do_straw_pickup(std::size_t c, real f) {
     if (!(f > 0.0)) return;
     FieldState& s = s_;
@@ -497,6 +525,7 @@ void Field::apply_management(std::size_t c, const OperationEffect& e, int phase,
             if (harvest_out && r.crop_id != 0) *harvest_out = r;
         }
         if (e.straw_pickup > 0.0) do_straw_pickup(c, eff(e.straw_pickup, cov));
+        if (e.mow > 0.0) do_mow(c, eff(e.mow, cov));
         if (e.tillage.active()) do_tillage(c, e.tillage, cov);
     } else {
         if (e.spray.product != 0) do_spray(c, e.spray, cov);

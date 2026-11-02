@@ -94,6 +94,15 @@ std::string crop_validation_error(const CropDesc& d) {
     c.fail_if(!(d.stage_emergence >= 1 && d.stage_emergence < d.stage_flowering && d.stage_flowering <= d.stage_senescence &&
                 d.stage_senescence <= d.stage_maturity),
               "stages must be ordered emergence < flowering <= senescence <= maturity (emergence after the first)");
+    if (d.perennial.active && c.err.empty()) {
+        const PerennialDesc& pr = d.perennial;
+        c.fail_if(d.vernalises, "a perennial sward does not vernalise");
+        c.fail_if(!(fin(pr.regrowth_gdd) && fin(pr.cycle_gdd) && pr.regrowth_gdd >= d.stages[static_cast<std::size_t>(d.stage_emergence)].gdd &&
+                    pr.cycle_gdd > pr.regrowth_gdd),
+                  "perennial: need emergence gdd <= regrowth_gdd < cycle_gdd");
+        c.fail_if(!(fin(pr.stubble_fraction) && pr.stubble_fraction > 0.0 && pr.stubble_fraction < 1.0), "perennial.stubble_fraction must be in (0, 1)");
+        c.fail_if(!(fin(pr.cc_floor) && pr.cc_floor > 0.0 && pr.cc_floor < d.ccx), "perennial.cc_floor must be in (0, ccx)");
+    }
     if (d.vernalises) {
         c.fail_if(d.stage_vernalisation_end < 1 || d.stage_vernalisation_end >= n, "vernalisation needs a valid until_stage");
         c.fail_if(!(d.vern_t_min_c < d.vern_t_opt_c && d.vern_t_opt_c < d.vern_t_max_c), "vernalisation needs t_min < t_opt < t_max");

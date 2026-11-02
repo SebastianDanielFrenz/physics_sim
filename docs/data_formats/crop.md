@@ -151,3 +151,19 @@ Shipped values (data/crops/*.json, generator `tools/fielddata/f1d_path_gen.py`, 
 Measured in the field model (test P8, home loess, yield ratios against the same run without pathogens): first wheat after a
 one-year break 0.967, continuous wheat second 0.847, third 0.823 (worst), years 11-16 mean 0.872; rapeseed every 3rd year 0.804,
 every 5th year 0.913 (+13 %).
+
+## Perennial sward (optional `perennial` block)
+
+A crop file may carry a `perennial` block (`meadow_grass.json` is the only one so far). The sward is sown once and then stays:
+
+| key | meaning |
+|---|---|
+| `regrowth_gdd` | development value (from sowing) a cell returns to after a cut or a turnover; at or above the emergence stage |
+| `cycle_gdd` | development value at which an uncut sward turns over; above `regrowth_gdd` (the maturity stage in `meadow_grass`) |
+| `stubble_fraction` | share of the standing biomass that stays after a cut or turnover, in (0, 1) |
+| `cc_floor` | canopy cover the sward never falls below once emerged, in (0, `ccx`) |
+
+Turnover and a cut do the same thing: the standing biomass above the stubble goes through `crop_to_residue` into the loose surface pool
+(so every N/P/K/C ledger closes), the cell returns to `regrowth_gdd`, grain and senescence state reset, the stand and plant count
+stay. Frost thins the canopy but never the stand. A perennial needs `management_enabled`; it does not vernalise. A crop without the block
+is unchanged and no field hash moves. The `mow` operation key (operation.md) is a cut by a machine. Tests `test_field_perennial.cpp` PN0-PN3.

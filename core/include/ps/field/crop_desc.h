@@ -27,6 +27,18 @@ struct Co2Point {
     real factor = 1.0;
 };
 
+// A perennial sward (opt-in "perennial" block of a crop file): it is sown once and then stays. It never matures: when its development
+// reaches cycle_gdd without a cut it turns over - the standing biomass above the stubble lies down as litter - and a cut (a mow
+// operation) does the same for the share it takes. Either way the cell goes back to development value regrowth_gdd with a canopy of
+// at least cc_floor, so regrowth cannot stall at zero. Frost thins the canopy, never the stand. Needs the management layer.
+struct PerennialDesc {
+    bool active = false;
+    real regrowth_gdd = 0.0;        // development value (from sowing) a cell returns to after a cut or turnover; between emergence and flowering
+    real cycle_gdd = 0.0;           // development value at which an uncut sward turns over; above regrowth_gdd
+    real stubble_fraction = 0.3;    // share of the standing biomass that stays after a cut or turnover
+    real cc_floor = 0.05;           // canopy cover the sward keeps (crowns, tillers); never below this once emerged
+};
+
 struct CropDesc {
     std::string name;
     std::string family;          // crop family; the pathogen pressure of F1d is per family
@@ -110,6 +122,8 @@ struct CropDesc {
     // After maturity: grain stays on the plant for a while, then sheds.
     real harvest_window_days = 0.0;      // days after maturity before shedding starts
     real shed_rate_per_day = 0.0;        // fraction of the remaining grain lost per day afterwards
+
+    PerennialDesc perennial;             // opt-in; inactive = an annual, every field hash as before
 
     // Optional nutrient block (F1b); required when the field runs with nutrients.
     bool has_nutrients = false;

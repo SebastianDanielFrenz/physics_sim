@@ -418,6 +418,8 @@ private:
     void do_seeding(std::size_t c, const SeedPlacement& sp, real cov);
     void do_spray(std::size_t c, const Spray& sp, real cov);
     void do_straw_pickup(std::size_t c, real f);
+    void perennial_cut(std::size_t c, real share);   // a perennial sward: `share` of the standing biomass above the stubble lies down as litter, the cell returns to regrowth
+    void do_mow(std::size_t c, real share);
     void crop_to_residue(std::size_t c, real fraction, bool with_grain);   // kills `fraction` of the standing crop into the residue pools
     void clear_crop(std::size_t c);
     void step_weeds(std::size_t c, const DailyWeather& w);

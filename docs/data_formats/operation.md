@@ -67,3 +67,6 @@ plough, cultivator, stubble_cultivator, seedbed_harrow, drill, direct_drill, wee
 combine_straw_off, spray_grass_herbicide, spray_broadleaf_herbicide, spray_total_herbicide. All [AS]: parameter sets of tool
 passes from recalled tool behaviour, not measured. Scenario use: `{"op": "operation", "file": "../operations/plough.json",
 "doy": 255}` with optional overrides `coverage`, `seeds_per_m2`, `depth_m`, `dose`, `straw_carried`, `straw_chopped`.
+
+`mow` - share of a perennial sward's standing biomass above the stubble that is cut and lies in the loose swath pool (mower); the
+cell returns to its regrowth state (crop.md "Perennial sward"). No effect on an annual.
