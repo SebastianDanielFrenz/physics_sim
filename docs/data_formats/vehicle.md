@@ -1023,6 +1023,7 @@ one gear (manual mode, paddles); manual mode ends after `manual_timeout_s` witho
 | `launch` | object `{bite_rpm, full_rpm_min, full_rpm_max, lock_slip_rpm, anti_stall_rpm}` | 1000, 1500, 3500, 100, 600 | `anti_stall_rpm > 0`, `0 < bite_rpm < full_rpm_min <= full_rpm_max`, `lock_slip_rpm > 0` | dual_clutch only: launch on clutch slip - engagement 0 at `bite_rpm` -> 1 at `lerp(full_rpm_min, full_rpm_max, throttle)` of engine rpm; locks once `|slip| < lock_slip_rpm` until the engine falls below `anti_stall_rpm` |
 | `creep_torque_nm` | real (N·m) | `40` | `>= 0` | dual_clutch: clutch capacity kept at idle in D/R without throttle (creep); an automatic creeps through its converter |
 | `cvt` | object, see below | **required** on a cvt gearbox | rejected on any other (`"... the automatic_tcu's 'cvt' block is for a cvt gearbox only"`); a cvt without it: `"... a cvt gearbox needs the automatic_tcu's 'cvt' block (its ratio law)"` | the variator's ratio law |
+| `powershift` | object: `start_gear` (1), `target_fraction` (0.5, in [0,1]), `max_skip` (4), `shift_pressure_fraction` (0.6) | **required** on a powershift gearbox | rejected on any other | tractor shift law, see [gearbox.md](gearbox.md#powershift-gearboxes-tractor-plan-stage-1) |
 
 **`cvt` ratio law** (CVT plan C1, `CvtTcuDesc`; unknown keys rejected): `target_rpm_vs_throttle` (Curve1D, **required**,
 throttle x within [0, 1], every rpm `> 0`), `sport_target_rpm_vs_throttle` (optional, same rules; empty = the D curve),
@@ -1035,7 +1036,7 @@ clamped to `[ratio_high, ratio_low]` (`ratio_low` at a standstill), moved at mos
 `step_rate_per_s`; without it the S target curve. `shift_up_count` / `shift_down_count` always select the steps
 (manual mode with its timeout and forced up/down shifts, as for a stepped box).
 
-Snapshot (never hashed): `PowertrainSnapshot::transmission_kind` (0 manual/sequential, 1 automatic, 2 dual_clutch, 3 cvt;
+Snapshot (never hashed): `PowertrainSnapshot::transmission_kind` (0 manual/sequential, 1 automatic, 2 dual_clutch, 3 cvt, 5 powershift (6 = hydro_cvt, reserved);
 cvt also `cvt_ratio`, `cvt_step` (0 = continuous), `cvt_belt_capacity_nm`, `cvt_clamp_force_n`, `cvt_belt_slip_rad_s`),
 `transmission_selector` (-1 R, 0 N/P, k > 0 D limited to gear k), `transmission_manual_mode`, `transmission_sport_mode`,
 `converter_speed_ratio`, `lockup_engagement`; `gear` is the gear held. TCU state (phase, timers, preselect candidate) is hashed only for a vehicle with an automatic_tcu,

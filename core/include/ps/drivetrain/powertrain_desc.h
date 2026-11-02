@@ -584,7 +584,7 @@ struct ClutchDesc {
 // CVT plan C1: Cvt = a push-belt (or chain) continuously variable transmission: a forward/reverse clutch set and
 // optionally a torque converter ahead of a variator whose ratio is a state (GearboxDesc::cvt); one friction row carries
 // the variator ratio, its capacity is the belt's clamping-force limit (and the launch clutch's while it slips).
-enum class GearboxType { Manual, Sequential, Automatic, DualClutch, Cvt };
+enum class GearboxType { Manual, Sequential, Automatic, DualClutch, Cvt, Powershift };
 
 // Automatic gearbox plan A1: the hydrodynamic torque converter of an Automatic gearbox (physics_sim.gearbox/1
 // "converter" block). Bolted to the box's input: port `in` of the gearbox is the pump (impeller, on the engine side),
@@ -683,6 +683,11 @@ struct GearboxDesc {
     real mesh_order = 0.0;
     std::vector<real> forward_ratios;    // > 0, strictly decreasing (1st first). w_in = ratio * w_out
     std::vector<real> reverse_ratios;    // < 0, R1 first (the slowest reverse)
+    // Powershift only (tractor plan stage 1): range index of each forward gear (same length as forward_ratios, any integers;
+    // empty = every gear in one range). A shift inside a range is clutch-to-clutch with no torque interruption; a shift
+    // between two ranges first opens both clutches for range_change_time_s (the unsynchronised range selector), 0 = seamless.
+    std::vector<int> forward_range;
+    real range_change_time_s = 0.0;
     std::vector<real> forward_efficiency, reverse_efficiency; // (0, 1], same lengths as the ratios above
     real input_inertia_kgm2 = 0.0, output_inertia_kgm2 = 0.0;
     Vec3 input_axis_local = Vec3::zero(), output_axis_local = Vec3::zero();
@@ -703,7 +708,7 @@ struct GearboxDesc {
 // Automatic gearbox plan A1: true for the clutch-to-clutch kinds (no dog, no synchro, no driver clutch, an
 // automatic_tcu, the gear set as friction rows). CVT plan C1: a Cvt counts too (its variator is such a row).
 [[nodiscard]] constexpr bool is_clutch_to_clutch(GearboxType t) {
-    return t == GearboxType::Automatic || t == GearboxType::DualClutch || t == GearboxType::Cvt;
+    return t == GearboxType::Automatic || t == GearboxType::DualClutch || t == GearboxType::Cvt || t == GearboxType::Powershift;
 }
 
 struct GearPairDesc {

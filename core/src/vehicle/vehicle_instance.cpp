@@ -864,7 +864,8 @@ void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
                 using AP = drivetrain::AutoTransmission::Phase;
                 switch (powertrain_.auto_trans().phase()) {
                     case AP::Idle: snap.shift_phase = drivetrain::ShiftPhase::Idle; break;
-                    case AP::Preselect: snap.shift_phase = drivetrain::ShiftPhase::Selecting; break;
+                    case AP::Preselect:
+                    case AP::Range: snap.shift_phase = drivetrain::ShiftPhase::Selecting; break;
                     case AP::Torque: snap.shift_phase = drivetrain::ShiftPhase::Releasing; break;
                     case AP::Inertia: snap.shift_phase = drivetrain::ShiftPhase::Synchronising; break;
                     case AP::Engage:
@@ -928,7 +929,7 @@ void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
         if (powertrain_.has_auto()) {
             const auto& at = powertrain_.auto_trans();
             snap.clutch_engagement = at.launch_engagement();
-            snap.transmission_kind = at.desc().cvt ? 3 : (at.desc().dual_clutch ? 2 : 1);
+            snap.transmission_kind = at.desc().cvt ? 3 : (at.desc().powershift ? 5 : (at.desc().dual_clutch ? 2 : 1));
             if (at.desc().cvt) { // CVT plan C1
                 const auto& ao = powertrain_.last_auto_outputs();
                 snap.cvt_ratio = ao.cvt_ratio;

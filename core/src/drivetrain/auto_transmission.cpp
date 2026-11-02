@@ -44,7 +44,26 @@ AutoTransmission::AutoTransmission(Desc desc) : desc_(std::move(desc)) {
         if (desc_.dual_clutch) throw std::runtime_error("AutoTransmission: a cvt is not a dual-clutch box");
         cos_beta_ = ps::math::cos(desc_.cvt_desc.belt.sheave_half_angle_deg * real(3.14159265358979323846) / real(180.0));
     }
+    if (desc_.powershift) {
+        if (!desc_.tcu.powershift) throw std::runtime_error("AutoTransmission: a powershift gearbox needs the automatic_tcu's powershift block");
+        if (desc_.dual_clutch || desc_.cvt) throw std::runtime_error("AutoTransmission: a powershift box is neither a dual-clutch nor a cvt box");
+        const PowershiftTcuDesc& ps = *desc_.tcu.powershift;
+        if (ps.start_gear < 1 || ps.start_gear > n) throw std::runtime_error("AutoTransmission: powershift start_gear out of range");
+        if (!(ps.target_fraction > real(0.0)) || !(ps.target_fraction < real(1.0)) || ps.max_skip < 1) {
+            throw std::runtime_error("AutoTransmission: powershift target_fraction must be in (0, 1) and max_skip >= 1");
+        }
+        if (!desc_.forward_range.empty() && static_cast<int>(desc_.forward_range.size()) != n) {
+            throw std::runtime_error("AutoTransmission: forward_range must have one entry per forward gear");
+        }
+    } else if (desc_.tcu.powershift) {
+        throw std::runtime_error("AutoTransmission: the automatic_tcu's powershift block is for a powershift gearbox only");
+    }
     reset(desc_.initial_gear, false);
+}
+
+int AutoTransmission::range_of(int gear) const {
+    if (gear <= 0 || desc_.forward_range.empty()) return 0;
+    return desc_.forward_range[static_cast<std::size_t>(gear - 1)];
 }
 
 real AutoTransmission::ratio(int gear) const {
@@ -310,7 +329,9 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
         if (desired == g && r < sch.down_rpm_at_zero_throttle && g > 1) desired = g - 1;
         manual_gear_ = desired;
     } else if (g > selector_) {
-        desired = g - 1;
+        desired = desc_.powershift ? selector_ : g - 1;
+    } else if (desc_.powershift) {
+        desired = powershift_desired(s, th, g);
     } else {
         const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
         bool kicked = false;
@@ -340,28 +361,84 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     tgt_ = desired;
 }
 
+// Tractor plan stage 1 (PowershiftTcuDesc): hold the engine in the rpm band of the driver's command. Aims at
+// target = down + target_fraction * (up - down); an upshift may skip gears, a downshift goes straight to the gear that
+// restores the target - never one gear per dwell, and never below the start gear unless a lower gear reaches the target. A
+// downshift below the zero-throttle line (stall guard) ignores the dwell.
+int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const {
+    const PowershiftTcuDesc& ps = *desc_.tcu.powershift;
+    const AutomaticTcuDesc& t = desc_.tcu;
+    const ShiftScheduleDesc sch = active_schedule(s);
+    const real w_out = s.output_omega;
+    auto in_rpm = [&](int k) { return std::abs(ratio(k) * w_out) * kRadPerSecToRpm; };
+    const real r = in_rpm(g);
+    const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
+    const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
+    const real target = dn + ps.target_fraction * (up - dn);
+    const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
+    const int n = forward_count();
+    const int top = std::clamp(selector_ > 0 ? selector_ : n, 1, n);
+    if (dwell && r > up && g < top && in_rpm(g + 1) > dn) {
+        int best = g + 1;
+        for (int k = g + 2; k <= std::min(top, g + ps.max_skip); ++k) {
+            if (in_rpm(k) < target) break;
+            best = k;
+        }
+        return best;
+    }
+    const bool stall_guard = r < sch.down_rpm_at_zero_throttle;
+    if (g > 1 && ((dwell && r < dn) || stall_guard)) {
+        // No gear reaches the target (a crawl or a standstill): the start gear, never lower than it - a lower gear
+        // that cannot lift the engine into the band is no use, and a stop ends in the gear the tractor pulls away in.
+        int best = std::min(ps.start_gear, g);
+        for (int k = g - 1; k >= 1; --k) {
+            if (in_rpm(k) >= target) {
+                best = k;
+                break;
+            }
+        }
+        if (best == g) return g;
+        // Never into a gear the upshift line would send straight back (hunting) unless the engine is about to stall.
+        if (!stall_guard && in_rpm(best) >= up * real(0.95)) return g;
+        return best;
+    }
+    return g;
+}
+
 int AutoTransmission::fit_gear(const Sensors& s, real th) const {
-    if (s.output_omega * ratio(1) <= real(0.0)) return 1;
+    const int top = std::clamp(selector_ > 0 ? selector_ : forward_count(), 1, forward_count());
+    if (s.output_omega * ratio(1) <= real(0.0)) return desc_.powershift ? std::min(desc_.tcu.powershift->start_gear, top) : 1;
     const ShiftScheduleDesc sch = active_schedule(s);
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
-    const int top = std::clamp(selector_ > 0 ? selector_ : forward_count(), 1, forward_count());
-    for (int g = 1; g < top; ++g)
+    // Powershift: never below the start gear (a creep or a jitter at standstill must not pick gear 1 of 24).
+    for (int g = desc_.powershift ? std::min(desc_.tcu.powershift->start_gear, top) : 1; g < top; ++g)
         if (std::abs(ratio(g) * s.output_omega) * kRadPerSecToRpm <= up) return g;
     return top;
 }
 
-void AutoTransmission::start_shift(int next, const Sensors& s, real th) {
+// The clutch pressure a shift holds. Powershift (tractor plan stage 1): the engine's own demand counts as well as the torque
+// the rows carried last substep (a governed diesel near its top speed is lightly loaded at the decision, its demand is
+// back at full the moment its rpm falls) and the floor is the data's shift_pressure_fraction of the rated capacity.
+real AutoTransmission::hold_capacity(const Sensors& s) const {
     const real C = desc_.clutch.capacity_nm;
+    if (!desc_.powershift) return std::min(C, kHoldMargin * std::max(std::abs(s.input_torque_prev), kHoldFloorFraction * C));
+    const real t = std::max(std::abs(s.input_torque_prev), std::max(real(0.0), s.engine_torque_demand));
+    return std::min(C, kHoldMargin * std::max(t, desc_.tcu.powershift->shift_pressure_fraction * C));
+}
+
+void AutoTransmission::start_shift(int next, const Sensors& s, real th) {
     next_ = next;
     upshift_ = std::abs(ratio(next)) < std::abs(ratio(cur_));
     power_on_ = th > kPowerOnThrottle;
-    c_hold_ = std::min(C, kHoldMargin * std::max(std::abs(s.input_torque_prev), kHoldFloorFraction * C));
+    c_hold_ = hold_capacity(s);
     t_phase_ = real(0.0);
     // A rolling DCT launch counts as done once a shift starts.
     launch_locked_ = true;
     e_launch_ = real(1.0);
     phase_ = (desc_.dual_clutch && desc_.clutch.preselect_time_s > real(0.0) && pre_ != next) ? Phase::Preselect : Phase::Torque;
     if (phase_ == Phase::Torque) pre_ = next;
+    // Tractor plan stage 1: a shift into another range first opens both clutches (the range selector moves).
+    if (desc_.powershift && desc_.range_change_time_s > real(0.0) && next > 0 && cur_ > 0 && range_of(next) != range_of(cur_)) phase_ = Phase::Range;
 }
 
 void AutoTransmission::complete_shift() {
@@ -553,7 +630,14 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
                 pre_ = next_;
                 phase_ = Phase::Torque;
                 t_phase_ = real(0.0);
-                c_hold_ = std::min(C, kHoldMargin * std::max(std::abs(s.input_torque_prev), kHoldFloorFraction * C));
+                c_hold_ = hold_capacity(s);
+            }
+            break;
+        case Phase::Range:
+            t_phase_ += s.h;
+            if (t_phase_ >= desc_.range_change_time_s) {
+                phase_ = Phase::Inertia;
+                t_phase_ = real(0.0);
             }
             break;
         case Phase::Torque:
@@ -595,6 +679,8 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
             break;
         case Phase::Preselect:
             act.cap_kinetic = C * e;
+            break;
+        case Phase::Range: // both clutches open: the interruption
             break;
         case Phase::Torque: {
             const real x = std::min(real(1.0), t_phase_ / cd.torque_phase_s);

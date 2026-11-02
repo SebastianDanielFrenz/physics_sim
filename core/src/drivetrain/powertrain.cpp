@@ -1781,6 +1781,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             AutoTransmission::Desc ad;
             ad.dual_clutch = gearbox_desc->type == GearboxType::DualClutch;
+            // Tractor plan stage 1: a powershift box and the automatic_tcu's powershift block come together.
+            ad.powershift = gearbox_desc->type == GearboxType::Powershift;
+            if (ad.powershift != at->powershift.has_value()) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id +
+                                          (ad.powershift ? "': a powershift gearbox needs the automatic_tcu's 'powershift' block (its shift law)"
+                                                         : "': the automatic_tcu's 'powershift' block is for a powershift gearbox only"));
+            }
+            ad.forward_range = gearbox_desc->forward_range;
+            ad.range_change_time_s = gearbox_desc->range_change_time_s;
             // CVT plan C1: a cvt gearbox and the automatic_tcu's cvt block come together.
             const bool is_cvt = gearbox_desc->type == GearboxType::Cvt;
             if (is_cvt != at->cvt.has_value()) {

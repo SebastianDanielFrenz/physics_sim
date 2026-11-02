@@ -41,7 +41,7 @@ namespace ps::drivetrain {
 
 class AutoTransmission {
 public:
-    enum class Phase : std::uint8_t { Idle, Engage, Preselect, Torque, Inertia, Closing };
+    enum class Phase : std::uint8_t { Idle, Engage, Preselect, Torque, Inertia, Closing, Range };
 
     struct Desc {
         bool dual_clutch = false;
@@ -52,6 +52,12 @@ public:
         bool has_lockup = false; // Automatic with a converter
         real lockup_capacity_nm = 0.0, lockup_static_factor = 1.0;
         real lockup_engage_time_s = 0.6, lockup_release_time_s = 0.15;
+        // Tractor plan stage 1: a Powershift box. Gears are single clutch packs (one row each, any gear reachable, no
+        // preselect), the box launches on its starting clutch's slip like a DualClutch, tcu.powershift is the shift law.
+        // forward_range / range_change_time_s: a shift into another range first opens both rows for that long.
+        bool powershift = false;
+        std::vector<int> forward_range;
+        real range_change_time_s = 0.0;
         bool cvt = false; // CVT plan C1: forward_ratios = the virtual steps, cvt_desc the variator, tcu.cvt the ratio law
         CvtDesc cvt_desc;
     };
@@ -127,7 +133,7 @@ public:
     [[nodiscard]] int preselected() const { return pre_; }
     [[nodiscard]] real launch_engagement() const { return slip_launch() ? e_launch_ : real(1.0); }
     // DualClutch, or a Cvt without a converter: the box launches on clutch slip.
-    [[nodiscard]] bool slip_launch() const { return desc_.dual_clutch || (desc_.cvt && !desc_.has_lockup); }
+    [[nodiscard]] bool slip_launch() const { return desc_.dual_clutch || desc_.powershift || (desc_.cvt && !desc_.has_lockup); }
     [[nodiscard]] real cvt_ratio() const { return ratio_; }
     [[nodiscard]] int cvt_step() const { return step_; }
     [[nodiscard]] real clamp_force() const { return clamp_; }
@@ -143,6 +149,9 @@ private:
     void choose_target(const Sensors& s, real th);
     void start_shift(int next, const Sensors& s, real th);
     void complete_shift();
+    [[nodiscard]] int powershift_desired(const Sensors& s, real th, int g) const;
+    [[nodiscard]] int range_of(int gear) const;
+    [[nodiscard]] real hold_capacity(const Sensors& s) const;
     void update_launch(const Sensors& s, real th);
     void update_lockup(const Sensors& s, real th);
     void update_preselect(const Sensors& s, real th);

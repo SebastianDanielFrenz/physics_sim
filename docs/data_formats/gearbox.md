@@ -212,6 +212,32 @@ starting clutch, no converter). Test cars `tests/support/fixtures/vehicles/car_s
 `car_sedan_cvt_clutch.json`; tests `tests/validation/test_cvt_gearbox.cpp`, `tests/unit/test_cvt_gearbox_io.cpp`
 (`[cvt]`).
 
+## Powershift gearboxes (tractor plan stage 1)
+
+`"type": "powershift"`: a many-speed tractor box whose gear changes are clutch-to-clutch handovers under load, with no
+torque interruption inside a range. It reuses `AutoTransmission`'s two friction rows (A/B, the dual-clutch shift
+machinery, [Automatic and dual-clutch gearboxes](#automatic-and-dual-clutch-gearboxes)); there is no torque converter, no
+`preselect_time_s` (both rejected) and no clutch component: the launch is slip-launched through the shift clutch like a
+DCT, so a vehicle joins `engine.crank` and `gearbox.in` in `powertrain.shafts`. Needs `shift_clutch` and the
+`automatic_tcu` block `powershift` ([vehicle.md](vehicle.md)).
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `forward_range` | int array, one per forward ratio | all 0 | range number of each forward gear; a change of range is a **range change** |
+| `range_change_time_s` | number >= 0 | 0 | both clutches open for this long on a range change (the synchroniser/dog interruption); 0 = a seamless box |
+
+Rejected on any other type: `forward_range`, `range_change_time_s`. A `forward_range` of the wrong length is rejected.
+
+Shift law (the tcu `powershift` block): target input rpm = `down + target_fraction * (up - down)` of the throttle-
+interpolated schedule. Upshift (dwell passed, rpm above the up line, next gear above the down line): the highest gear up
+to `max_skip` higher that still reaches the target (skips gears). Downshift (rpm below the down line after the dwell, or
+below the zero-throttle line = stall guard): straight to the highest lower gear that reaches the target, else the start
+gear, never below it; refused when the result sits within 0.95 of the up line (hunting). `fit_gear` picks no gear below
+`start_gear`. Hold pressure of a shift = `min(C, 1.3 * max(torque, engine demand, shift_pressure_fraction * C))`: a
+governed diesel near its top speed is lightly loaded at the decision and loaded again as its rpm falls, so the pressure
+follows the demand (measured: the pre-powershift formula gave 0.6 s shifts). Data `data/gearboxes/tractor_24f24r_powershift.json`
+(24F/24R, 6 ranges of 4, [AS]), fixture `tests/support/fixtures/vehicles/tractor_powershift.json`.
+
 ## Ports
 
 Fixed names, same for every gearbox: `<id>.in`, `<id>.out`.

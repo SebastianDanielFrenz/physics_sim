@@ -204,6 +204,26 @@ struct CvtTcuDesc {
     bool stepped_sport = true;
 };
 
+// Tractor plan stage 1: the shift law of an automatic_tcu driving a Powershift gearbox ("powershift" block, required
+// there, rejected elsewhere). The schedule's up/down lines are the edges of an engine-rpm band that moves with the
+// driver's command (pedal or hand-throttle lever, whichever the throttle stage reports). A shift aims at the rpm
+// target = down + target_fraction * (up - down):
+//   upshift   input rpm above the up line (after the dwell): the highest gear (at most max_skip above) whose input rpm at
+//             the present road speed stays at or above the target - several gears at once when the engine is far above it;
+//   downshift input rpm below the down line (after the dwell, at once below the zero-throttle down line): the highest
+//             lower gear whose input rpm reaches the target (the start gear when none does, never below it then) - never
+//             one gear per dwell.
+// start_gear = the gear taken from neutral at standstill (a tractor starts in a field gear, not in 1).
+struct PowershiftTcuDesc {
+    int start_gear = 1;
+    real target_fraction = 0.5; // (0, 1)
+    int max_skip = 4;           // >= 1: gears an upshift may jump
+    // Clutch pressure of a shift, as a fraction of the shift clutch's rated capacity, at least (a shift holds 1.3 x the larger
+    // of the torque the rows carried, the engine's demand and this): a governed diesel is lightly loaded at the decision and
+    // at full demand a moment later. [AS]
+    real shift_pressure_fraction = 0.6; // (0, 1]
+};
+
 struct AutomaticTcuDesc {
     std::string gearbox, engine;
     ShiftScheduleDesc schedule;       // D
@@ -232,6 +252,8 @@ struct AutomaticTcuDesc {
     // CVT plan C1: Cvt only (see CvtTcuDesc). A Cvt with a converter uses the lock-up policy above (lockup_min_gear
     // counts D as gear 1), one without launches on the launch_* law above.
     std::optional<CvtTcuDesc> cvt;
+    // Tractor plan stage 1: Powershift only (see PowershiftTcuDesc).
+    std::optional<PowershiftTcuDesc> powershift;
 };
 
 // Closed, visited exhaustively - at most one transmission controller (manual_tcu or automatic_tcu) and at most one

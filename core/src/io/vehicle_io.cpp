@@ -3218,8 +3218,9 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     else if (type == "automatic") g.type = ps::drivetrain::GearboxType::Automatic;
     else if (type == "dual_clutch") g.type = ps::drivetrain::GearboxType::DualClutch;
     else if (type == "cvt") g.type = ps::drivetrain::GearboxType::Cvt;
+    else if (type == "powershift") g.type = ps::drivetrain::GearboxType::Powershift;
     else {
-        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\" or \"cvt\", got \"" +
+        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\", \"cvt\" or \"powershift\", got \"" +
                                  type + "\"");
     }
 
@@ -3315,6 +3316,30 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
         throw std::runtime_error(ctx + ": initial_gear is out of range");
     }
 
+    // Tractor plan stage 1: the range structure of a powershift gearbox.
+    if (j.contains("forward_range") || j.contains("range_change_time_s")) {
+        if (g.type != ps::drivetrain::GearboxType::Powershift) {
+            throw std::runtime_error(ctx + ": 'forward_range' and 'range_change_time_s' are for \"powershift\" gearboxes only");
+        }
+        if (j.contains("forward_range")) {
+            const json& rj = j.at("forward_range");
+            if (!rj.is_array() || rj.size() != g.forward_ratios.size()) {
+                throw std::runtime_error(ctx + ": 'forward_range' must be an array with one integer per forward ratio");
+            }
+            for (const auto& v : rj) {
+                if (!v.is_number_integer()) throw std::runtime_error(ctx + ".forward_range: every entry must be an integer");
+                g.forward_range.push_back(v.get<int>());
+            }
+        }
+        if (j.contains("range_change_time_s")) {
+            const json& tj = j.at("range_change_time_s");
+            if (!tj.is_number() || !std::isfinite(tj.get<real>()) || tj.get<real>() < real(0.0)) {
+                throw std::runtime_error(ctx + ": range_change_time_s must be a number >= 0");
+            }
+            g.range_change_time_s = tj.get<real>();
+        }
+    }
+
     // Automatic gearbox plan A1: the shift clutches (Automatic, DualClutch) and the torque converter (Automatic).
     {
         const bool c2c = ps::drivetrain::is_clutch_to_clutch(g.type);
@@ -3359,6 +3384,10 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
             if (sc.preselect_time_s < real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s must be >= 0");
             if (g.type == ps::drivetrain::GearboxType::DualClutch && j.contains("converter")) {
                 throw std::runtime_error(ctx + ": a dual_clutch gearbox has no 'converter'");
+            }
+            if (g.type == ps::drivetrain::GearboxType::Powershift) {
+                if (j.contains("converter")) throw std::runtime_error(ctx + ": a powershift gearbox has no 'converter'");
+                if (sc.preselect_time_s != real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s is for dual_clutch gearboxes only");
             }
             const bool is_cvt = g.type == ps::drivetrain::GearboxType::Cvt;
             if (is_cvt) {
@@ -3585,7 +3614,7 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
 ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::string& ctx, const std::vector<std::string>& component_ids) {
     static const char* const kKeys[] = {"id",          "type",           "gearbox",  "engine",         "schedule",       "sport_schedule",
                                         "min_time_in_gear_s", "kickdown_throttle", "kickdown_max_rpm", "manual_timeout_s", "manual_up_rpm",
-                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm", "cvt"};
+                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm", "cvt", "powershift"};
     for (auto it = cj.begin(); it != cj.end(); ++it) {
         if (std::find_if(std::begin(kKeys), std::end(kKeys), [&](const char* k) { return it.key() == k; }) == std::end(kKeys)) {
             throw std::runtime_error(ctx + ": unknown key '" + it.key() + "'");
@@ -3710,6 +3739,25 @@ ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::s
             c.stepped_sport = o.at("stepped_sport").get<bool>();
         }
         d.cvt = std::move(c);
+    }
+    if (cj.contains("powershift")) {
+        // Tractor plan stage 1: the shift law of a powershift gearbox (PowershiftTcuDesc). Whether the gearbox IS a
+        // powershift is checked when the powershift is built.
+        const json& o = cj.at("powershift");
+        const std::string w = ctx + ".powershift";
+        check_keys(o, {"start_gear", "target_fraction", "max_skip", "shift_pressure_fraction"}, w);
+        ps::drivetrain::PowershiftTcuDesc p;
+        if (o.contains("start_gear") && !o.at("start_gear").is_number_integer()) throw std::runtime_error(w + ": 'start_gear' must be an integer");
+        if (o.contains("max_skip") && !o.at("max_skip").is_number_integer()) throw std::runtime_error(w + ": 'max_skip' must be an integer");
+        p.start_gear = o.value("start_gear", p.start_gear);
+        p.max_skip = o.value("max_skip", p.max_skip);
+        p.target_fraction = num(o, "target_fraction", p.target_fraction, w);
+        p.shift_pressure_fraction = num(o, "shift_pressure_fraction", p.shift_pressure_fraction, w);
+        if (p.start_gear < 1 || p.max_skip < 1 || !(p.target_fraction > real(0.0)) || !(p.target_fraction < real(1.0)) ||
+            !(p.shift_pressure_fraction > real(0.0)) || p.shift_pressure_fraction > real(1.0)) {
+            throw std::runtime_error(w + ": start_gear >= 1, max_skip >= 1, target_fraction in (0, 1) and shift_pressure_fraction in (0, 1] required");
+        }
+        d.powershift = p;
     }
     return d;
 }
