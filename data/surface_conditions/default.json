@@ -258,13 +258,223 @@
         "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
       }
     },
+    "road_t1": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 10800,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 3 game hours after the snow starts to lie (tier T1 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
+    "road_t2": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 16200,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 4.5 h after the snow starts to lie (tier T2 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
+    "road_t3": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 21600,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 6 h after the snow starts to lie (tier T3 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
+    "road_t4": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 28800,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 8 h after the snow starts to lie (tier T4 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
+    "road_t5": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 36000,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 10 h after the snow starts to lie (tier T5 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
+    "road_t6": {
+      "kind": "sealed",
+      "albedo": 0.10,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
+      "maintenance": {
+        "plough_after_s": 43200,
+        "residual_mm": 0.5,
+        "salt": { "melt_factor": 3.0, "duration_s": 21600, "effective_above_c": -5.0, "ineffective_below_c": -10.0, "melt_point_depression_k": 5.0 }
+      },
+      "source": {
+        "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
+        "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
+        "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
+        "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
+        "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67",
+        "maintenance.plough_after_s": "[AS] owner 2026-11-02: the plough runs 12 h after the snow starts to lie (tier T6 of 6; major roads first)",
+        "maintenance.residual_mm": "[AS] 0.5 mm water equivalent left on the road after ploughing",
+        "maintenance.salt.melt_factor": "[AS] salt triples the melt rate while active",
+        "maintenance.salt.duration_s": "[AS] one spreading lasts 6 h",
+        "maintenance.salt.effective_above_c": "[AS] salt is fully effective at and above -5 C (surface node)",
+        "maintenance.salt.ineffective_below_c": "[AS] owner: salt below about -10 C does little; no effect at and below -10 C",
+        "maintenance.salt.melt_point_depression_k": "[AS] brine lowers the pack's melt point by up to 5 K, so a salted road melts snow slightly below 0 C (without it the factor cannot act below 0 C: the model melts only from a surface above the melt point); not in the owner's list, 0 switches it off"
+      }
+    },
     "low_mu": {
       "kind": "static",
       "source": "the test-ground ice rink (data/surfaces/surfaces.json): no condition state, weather plan 4.1"
     }
   },
   "source": {
-    "purpose": "Default surface classes: the classes of data/surfaces/surfaces.json plus the road and off-road classes a game's own surface table may use (concrete, paving_stones, sett, cobblestone, gravel, compacted, sand) (weather plan W5/W6, docs/data_formats/surface_conditions.md). W5 thermal + W6 water/friction; the snow/ice/crr fields of W8+ are not in the format yet.",
+    "purpose": "Default surface classes: the classes of data/surfaces/surfaces.json plus the road and off-road classes a game's own surface table may use (concrete, paving_stones, sett, cobblestone, gravel, compacted, sand) (weather plan W5/W6, docs/data_formats/surface_conditions.md). W5 thermal + W6 water/friction + W8 snow subset; road_t1..road_t6 are asphalt copies with a winter maintenance block (ploughing and salt).",
     "marks": "[C] cited and read, [D] derived, [M] from memory of a named source, not re-checked in this increment, [AS] assumed"
   }
 }

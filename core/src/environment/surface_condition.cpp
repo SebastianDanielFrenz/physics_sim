@@ -101,6 +101,22 @@ std::string hydraulic_error(const SurfaceClassDesc& d) {
     return {};
 }
 
+std::string maintenance_error(const MaintenanceDesc& m) {
+    if (!m.present) return {};
+    if (!positive_finite(m.plough_after_s)) return "maintenance.plough_after_s must be > 0";
+    if (!(std::isfinite(m.residual_mm) && m.residual_mm >= 0.0)) return "maintenance.residual_mm must be >= 0";
+    if (!m.salt.present) return {};
+    const SaltDesc& s = m.salt;
+    if (!(std::isfinite(s.melt_factor) && s.melt_factor >= 1.0)) return "maintenance.salt.melt_factor must be >= 1";
+    if (!positive_finite(s.duration_s)) return "maintenance.salt.duration_s must be > 0";
+    if (!std::isfinite(s.effective_above_c) || !std::isfinite(s.ineffective_below_c) ||
+        !(s.effective_above_c > s.ineffective_below_c))
+        return "maintenance.salt.effective_above_c must be > ineffective_below_c";
+    if (!(std::isfinite(s.melt_point_depression_k) && s.melt_point_depression_k >= 0.0))
+        return "maintenance.salt.melt_point_depression_k must be >= 0";
+    return {};
+}
+
 // Builds the column; returns an error string instead of throwing so the
 // validation path can share it.
 std::string build_column_impl(const SurfaceClassDesc& d, ColumnModel& c) {
@@ -114,6 +130,8 @@ std::string build_column_impl(const SurfaceClassDesc& d, ColumnModel& c) {
     if (!(d.layer.depth_m + d.deep.depth_m <= kMaxColumnDepthM))
         return "layer.depth_m + deep.depth_m must be <= " + std::to_string(kMaxColumnDepthM) + " m";
     e = hydraulic_error(d);
+    if (!e.empty()) return e;
+    e = maintenance_error(d.maintenance);
     if (!e.empty()) return e;
 
     c = ColumnModel{};
@@ -130,6 +148,7 @@ std::string build_column_impl(const SurfaceClassDesc& d, ColumnModel& c) {
     c.soil_theta_sat = d.soil.theta_sat;
     c.soil_top_depth_m = kSoilTopDepthM;
     c.friction = d.friction;
+    c.maintenance = d.maintenance;
     // Cells: thickness, conductivity, heat capacity.
     std::array<real, kMaxColumnNodes> cell_dz{}, cell_k{}, cell_rc{};
     int cells = 0;
@@ -328,9 +347,25 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     // lagged sink like the latent flux, limited to the pack) and from above (degree-day on the air temperature).
     const real snow_in = f.snow_mm_h > 0.0 ? f.snow_mm_h / 3600.0 * dt : 0.0;
     const real snow_avail = in.snow_mm + snow_in;
+    // Road-tier salt (maintenance block): while salt_left_s > 0 the melt rate is multiplied by m = 1 + (f - 1) eff,
+    // eff the temperature fade of the surface node (1 at/above effective_above_c, 0 at/below ineffective_below_c),
+    // and the pack's melt point is lowered by eff * melt_point_depression_k (brine), so a salted road melts snow
+    // slightly below 0 C. A class without maintenance/salt: m = 1, depression 0 (the original expressions).
+    real salt_m = 1.0;
+    real salt_depress_c = 0.0;
+    const bool has_maint = col.maintenance.present;
+    if (has_maint && col.maintenance.salt.present && in.salt_left_s > 0.0) {
+        const SaltDesc& sd = col.maintenance.salt;
+        const real t_c = t0 - kCelsiusToKelvin;
+        const real eff = std::clamp((t_c - sd.ineffective_below_c) / (sd.effective_above_c - sd.ineffective_below_c),
+                                    real(0.0), real(1.0));
+        salt_m = 1.0 + (sd.melt_factor - 1.0) * eff;
+        salt_depress_c = eff * sd.melt_point_depression_k;
+    }
     real q_snow = 0.0;
-    if (snow_avail > 0.0 && t0 > kCelsiusToKelvin)
-        q_snow = std::min(kSnowGroundContactWm2K * (t0 - kCelsiusToKelvin), snow_avail * kLatentHeatFusion / dt);
+    if (snow_avail > 0.0 && t0 + salt_depress_c > kCelsiusToKelvin)
+        q_snow = std::min(salt_m * kSnowGroundContactWm2K * (t0 + salt_depress_c - kCelsiusToKelvin),
+                          snow_avail * kLatentHeatFusion / dt);
     // q(T) ~ A - B' T with T^4 linearised about t0.
     const real a_flux = (1.0 - col.albedo) * f.ghi_w_m2 + eps * l_sky + 3.0 * eps * kStefanBoltzmann * t02 * t02 +
                         hc * ta - q_latent - q_snow;
@@ -400,7 +435,7 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     if (snow_avail > 0.0) {
         const real melt_below = q_snow * dt / kLatentHeatFusion;
         const real air_c = ta - kCelsiusToKelvin;
-        const real melt_above = air_c > 0.0 ? kSnowDegreeDayMmPerKDay / 86400.0 * air_c * dt : 0.0;
+        const real melt_above = air_c > 0.0 ? salt_m * kSnowDegreeDayMmPerKDay / 86400.0 * air_c * dt : 0.0;
         const real melt = std::min(snow_avail, melt_below + melt_above);
         snow = snow_avail - melt;
         input += melt;   // melt water reaches the ground under the canopy
@@ -420,6 +455,25 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
         if (take > 0.0) {
             theta += take / layer_mm;
             input -= take;
+        }
+    }
+    // Road-tier maintenance: the plough runs once the pack has lain above the residual for plough_after_s. The
+    // removed snow leaves the class (there is no snow ledger and no water goes to W: it is carried away), the
+    // clock restarts and fresh salt is laid. No heat is exchanged by the removal.
+    real maint_clock = 0.0;
+    real salt_left = 0.0;
+    if (has_maint) {
+        const MaintenanceDesc& mt = col.maintenance;
+        salt_left = std::max(0.0, in.salt_left_s - dt);
+        maint_clock = snow > mt.residual_mm ? in.maint_clock_s + dt : 0.0;
+        if (maint_clock >= mt.plough_after_s) {
+            snow = std::min(snow, mt.residual_mm);
+            maint_clock = 0.0;
+            if (mt.salt.present) salt_left = mt.salt.duration_s;
+            if (!(snow > 1e-9)) {
+                snow = 0.0;
+                snow_rho = 0.0;
+            }
         }
     }
     W += input;
@@ -476,6 +530,8 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     out.frost_mm = in.frost_mm;
     out.snow_mm = snow;
     out.snow_density_kg_m3 = snow_rho;
+    out.maint_clock_s = maint_clock;
+    out.salt_left_s = salt_left;
     for (int i = 0; i < n; ++i) out.temp_k[static_cast<std::size_t>(i)] = t[static_cast<std::size_t>(i)];
     for (int i = n; i < kMaxColumnNodes; ++i) out.temp_k[static_cast<std::size_t>(i)] = 0.0;
 }
@@ -628,7 +684,7 @@ void fold_bytes(std::uint64_t& h, const void* p, std::size_t n) {
 template <class T>
 void fold_value(std::uint64_t& h, const T& v) { fold_bytes(h, &v, sizeof(T)); }
 
-void fold_state(std::uint64_t& h, const SurfaceClassState& s, int nodes) {
+void fold_state(std::uint64_t& h, const SurfaceClassState& s, int nodes, bool maintenance) {
     for (int i = 0; i < nodes; ++i) fold_value(h, s.temp_k[static_cast<std::size_t>(i)]);
     fold_value(h, s.water_mm);
     fold_value(h, s.ice_mm);
@@ -638,6 +694,10 @@ void fold_state(std::uint64_t& h, const SurfaceClassState& s, int nodes) {
     fold_value(h, s.soil_moisture);
     fold_value(h, s.canopy_water_mm);
     fold_value(h, s.drain_tau_s);
+    if (maintenance) {   // road tiers only: every other class hashes exactly as before
+        fold_value(h, s.maint_clock_s);
+        fold_value(h, s.salt_left_s);
+    }
 }
 } // namespace
 
@@ -649,8 +709,8 @@ std::uint64_t ConditionGrid::fold_hash(std::uint64_t h) const {
         const std::size_t u = static_cast<std::size_t>(i);
         fold_value(h, static_cast<std::int32_t>(kinds_[u]));
         if (kinds_[u] == SurfaceKind::Static) continue;
-        fold_state(h, prev_[u], columns_[u].nodes);
-        fold_state(h, next_[u], columns_[u].nodes);
+        fold_state(h, prev_[u], columns_[u].nodes, columns_[u].maintenance.present);
+        fold_state(h, next_[u], columns_[u].nodes, columns_[u].maintenance.present);
     }
     return h;
 }

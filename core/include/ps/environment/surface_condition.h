@@ -62,6 +62,7 @@ struct ColumnModel {
     real soil_theta_sat = 0.0;
     real soil_top_depth_m = 0.1;
     SurfaceFrictionDesc friction;
+    MaintenanceDesc maintenance;     // road tiers: copied from the desc, present == false for every other class
 };
 
 // Throws std::invalid_argument when the column needs more than kMaxColumnNodes
@@ -100,6 +101,9 @@ struct SurfaceClassState {
     real soil_moisture = 0.0;       // theta
     real canopy_water_mm = 0.0;     // C
     real drain_tau_s = 0.0;         // W6: frozen drainage time constant (plan 4.4)
+    // Road-tier maintenance (hashed only for a class with a maintenance block, 0 otherwise):
+    real maint_clock_s = 0.0;       // env seconds the pack has lain above residual_mm
+    real salt_left_s = 0.0;         // remaining salt time after the last plough
 };
 
 // Clear-sky emissivity from the vapour pressure (Geiger 1959 via Solaimanian &

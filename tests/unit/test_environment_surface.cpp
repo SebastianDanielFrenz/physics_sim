@@ -754,11 +754,13 @@ TEST_CASE("Surface grid: class list from names, static and unmapped classes", "[
     CHECK(a.unmapped_names().empty());
     // default.json also carries the road and off-road classes a game's own surface table may use (2026-10-05); the
     // surfaces.json table does not name them, so they are unused entries there. Without names every class of the file
-    // is used, in name order (13).
+    // is used, in name order (19). The six road tiers (road_t1..road_t6) are in surfaces.json too (SurfaceIds 6-11), but
+    // this table lists only the original six.
     CHECK(a.unused_entries() ==
-          std::vector<std::string>{"cobblestone", "compacted", "concrete", "gravel", "paving_stones", "sand", "sett"});
+          std::vector<std::string>{"cobblestone", "compacted", "concrete", "gravel", "paving_stones", "road_t1", "road_t2",
+                                   "road_t3", "road_t4", "road_t5", "road_t6", "sand", "sett"});
     const ConditionGrid all(d, {}, ConditionGridDesc{});
-    REQUIRE(all.class_count() == 13);
+    REQUIRE(all.class_count() == 19);
     CHECK(all.class_name(0) == "asphalt");
     CHECK(all.unmapped_names().empty());
     CHECK(all.unused_entries().empty());
@@ -768,7 +770,8 @@ TEST_CASE("Surface grid: class list from names, static and unmapped classes", "[
     REQUIRE(b.unmapped_names().size() == 1);
     CHECK(b.unmapped_names()[0] == "mud_flat");
     CHECK(b.unused_entries() == std::vector<std::string>{"cobblestone", "compacted", "concrete", "dirt", "field", "gravel", "kerb",
-                                                         "low_mu", "paving_stones", "sand", "sett"});
+                                                         "low_mu", "paving_stones", "road_t1", "road_t2", "road_t3", "road_t4",
+                                                         "road_t5", "road_t6", "sand", "sett"});
     // Rejections.
     CHECK_THROWS_WITH(ConditionGrid(d, {"asphalt", "asphalt"}, ConditionGridDesc{}), ContainsSubstring("duplicate"));
     CHECK_THROWS_WITH(ConditionGrid(d, {"asphalt", ""}, ConditionGridDesc{}), ContainsSubstring("empty"));
@@ -827,8 +830,9 @@ nlohmann::json valid_conditions_json() {
 
 TEST_CASE("Surface conditions loader: the shipped file and rejections", "[environment][surface][io]") {
     const SurfaceConditionsDesc d = default_conditions();
-    // The six surfaces.json classes plus the seven road/off-road classes of 2026-10-05 (test_environment_surface_classes.cpp).
-    REQUIRE(d.classes.size() == 13);
+    // The six surfaces.json classes, the seven road/off-road classes of 2026-10-05 and the six road tiers
+    // (test_environment_surface_classes.cpp).
+    REQUIRE(d.classes.size() == 19);
     CHECK(d.find("asphalt")->albedo == 0.10);
     CHECK(d.find("asphalt")->layer.k_w_mk == 1.38);
     CHECK(d.find("asphalt")->layer.rho_c_j_m3k == 2.0e6);

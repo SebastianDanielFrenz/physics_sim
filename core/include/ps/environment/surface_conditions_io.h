@@ -3,7 +3,7 @@
 // weather plan 7.4, W5). Keyed by surface NAME (the names of
 // data/surfaces/surfaces.json); supports `extends` (a game ships its own
 // override). Rejects unknown keys; the keys of later increments (texture,
-// drainage, friction, crr, soil, canopy, abrasiveness, maintenance) are
+// drainage, friction, crr, soil, canopy, abrasiveness) are
 // rejected as reserved.
 //
 // Lives in ps_environment_io (nlohmann PRIVATE), like climate_io.h.

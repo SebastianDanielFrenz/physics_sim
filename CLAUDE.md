@@ -251,7 +251,7 @@ physics_sim/
   docs/data_formats/surface_conditions.md. Tests test_environment_surface.cpp ([environment][surface], ps_environment_tests:
   S1 SHRP +1.03 K, S2 Kallas range +1.6 % / t_max +0.26 h / 12 in rms 1.11 K, S2b night min -4.5 K [!mayfail], S3 0.033 K,
   S4), test_environment_surface_world.cpp ([environment][vehicle][world]). data/scenarios/environment_surface.json
-  (0x030df2de793ce721 at W5, 0xa413eb2036d292e8 (pedal P1, was 0xcef127a9c2643925; tyre crr d1e1144, was 0x64326439851d8dfc) since W6). Adapter: get_surface_temperature_c, demo --m1-surfaces, HUD road line. Decisions vault PHYS-061, notes out/weather_w5_progress.md.
+  (0x030df2de793ce721 at W5, 0xc6e2566f58149e42 (road tiers: 12 classes, was 0xa413eb2036d292e8; pedal P1, was 0xcef127a9c2643925; tyre crr d1e1144, was 0x64326439851d8dfc) since W6). Adapter: get_surface_temperature_c, demo --m1-surfaces, HUD road line. Decisions vault PHYS-061, notes out/weather_w5_progress.md.
   W6 (222103b, DeepSeek draft finished by Sonnet): water and wet grip. SurfaceClassState gains hashed water_mm/canopy_water_mm/
   soil_moisture/drain_tau_s, stepped in the same env-time step as the thermal column (surface_condition.cpp step_column): rain ->
   canopy (vegetated) -> infiltration min(ksat*dt, pore space) -> film -> evaporation/dew -> drainage. Dalton flux h_m(rho_sat(Ts) -
@@ -273,6 +273,7 @@ physics_sim/
   test_environment_surface_world.cpp W6-G3 (car_sedan wet/dry stop ratio 1.402 from 20 m/s, 1.861 from 30 m/s, inside the
   Wong/PIARC bands)/G4b/G10, zero alloc, 1 vs 10 workers (ps_unit_tests); every one with a recorded sabotage. Notes
   out/weather_w6_progress.md.
+  Road tiers (branch claude/road-tiers, 2026-11-02): surface classes road_t1..road_t6 (asphalt copies, SurfaceIds 6-11, data/surfaces/surfaces.json + data/surface_conditions/default.json) with an optional per-class `maintenance` block (MaintenanceDesc/SaltDesc in surface_condition_desc.h, loader surface_conditions_io.cpp): the plough (snow lying above residual_mm for plough_after_s is cut to residual_mm, T1 3 h ... T6 12 h) and salt (melt factor with a temperature fade and an optional melt-point depression) inside step_column; SurfaceClassState maint_clock_s/salt_left_s hashed only with the block; docs/data_formats/surface_conditions.md "Maintenance (road tiers)"; tests test_environment_maintenance.cpp M1-M6 [environment][surface][maintenance].
 - `ps_field` (STATIC, `core/src/field`, public headers `core/include/ps/field/`; farming F1a) and `ps_field_io`
   (STATIC, nlohmann PRIVATE, links ps_field + ps_environment_io): the field model and its loaders, see the Layout
   entry; ps_field links ps_environment (PUBLIC), ps_detmath/ps_warnings/ps_options, NEVER ps_core. Guard

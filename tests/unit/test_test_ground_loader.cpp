@@ -114,8 +114,13 @@ TEST_CASE("A body dropped on the test_ground grass patch reports the grass surfa
 
 TEST_CASE("SurfaceTable assigns stable, distinct ids to every surfaces.json entry", "[io][surface_table]") {
     io::SurfaceTable surfaces(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
-    // surfaces.json currently defines asphalt, dirt, field, grass, kerb, low_mu.
-    REQUIRE(surfaces.size() == 6);
+    // surfaces.json currently defines asphalt, dirt, field, grass, kerb, low_mu and the road tiers road_t1..road_t6
+    // (ids 6-11: they sort after the original six, so none of those ids moved).
+    REQUIRE(surfaces.size() == 12);
+    REQUIRE(surfaces.id_for("asphalt") == 0);
+    REQUIRE(surfaces.id_for("low_mu") == 5);
+    REQUIRE(surfaces.id_for("road_t1") == 6);
+    REQUIRE(surfaces.id_for("road_t6") == 11);
     REQUIRE(surfaces.id_for("asphalt") != kInvalidSurfaceId);
     REQUIRE(surfaces.id_for("grass") != kInvalidSurfaceId);
     REQUIRE(surfaces.id_for("asphalt") != surfaces.id_for("grass"));
