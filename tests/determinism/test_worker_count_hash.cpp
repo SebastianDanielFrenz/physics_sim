@@ -1141,16 +1141,18 @@ TEST_CASE("Generated-map engine scenario: rpm rises under throttle, upshifts, p_
 // environment_day 0x2af395ee8a54f0b5 (W2: a clock-only environment, no weather). A sabotage that made
 // the vehicle step read the environment air for a weather-less World, or folded the weather into the
 // hash unconditionally, moves these.
+// Test-cost audit 2026-11-02 (L3): vehicle_tractor_i4 (0xee2c08f11ee76f55), vehicle_fuel_tank (0xb08736ed4b3a8d4f) and
+// vehicle_gen_engine (0x2fad7071a9ce65c1, a 4 s cold map generation per load) are no longer listed here: the same
+// numbers are asserted by their own worker-count cases above (1, 2, 4, 10 and 24 workers, same run_scenario_file or the
+// same scenario file), and those scenarios have no weather environment either, so a W4 change that moved their hash
+// fails those cases.
 TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state hash at 1 and 10 workers",
           "[determinism][environment][vehicle][heavy][world][io]") {
     struct Pin { const char* file; std::uint64_t hash; };
     const Pin pins[] = {
         {"vehicle_step_steer.json", 0xe77fd6569d82786cULL},
         {"vehicle_powertrain.json", 0xec3f01c51673f663ULL}, // pedal P1, was 0xaadddd7bcd24ac15
-        {"vehicle_tractor_i4.json", 0xee2c08f11ee76f55ULL}, // D0 phantom wheel cast fix, was 0x44327cc4b10c57b5
-        {"vehicle_fuel_tank.json", 0xb08736ed4b3a8d4fULL},
         {"vehicle_sim_engine.json", 0x92b0090ff4b70656ULL}, // pedal P1, was 0x3aed0da9057e5829
-        {"vehicle_gen_engine.json", 0x2fad7071a9ce65c1ULL}, // knock model v4 2026-10-19, was 0x82bf30120b3212bb (v3); knock opt-in 2026-10-18, was 0x2164909873144ac3; pedal P1, was 0x194fc20db754f52c
         {"environment_day.json", 0xce55f12949e0ee73ULL},
     };
     for (const Pin& p : pins) {

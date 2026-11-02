@@ -911,12 +911,15 @@ TEST_CASE("L4 diag: reference speed after a launch", "[.][diag][abs]") {
 
 // Bands written before the first run (L4 header above): v_ref within max(1 m/s, 8 %) of the true speed during the whole
 // stop (v > 3 m/s), and the ABS stop on dry asphalt shorter than the same stop with ABS off.
+// The ABS-off stop is simulated once per throttle, not once per reference-speed mode: with assist.abs 0 and ESC off
+// (base_controls) nothing reads the reference speed, so the mode only changes a value that is never consumed and the two
+// runs would be identical (test-cost audit 2026-11-02, L5; checked on car_sedan and car_sedan_awd by running both modes: distance, end time and speeds equal to the last bit).
 void check_launch_brake(const VehicleDesc& d, const std::vector<real>& throttles) {
-  for (AbsReferenceSpeed mode : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
-    for (real thr : throttles) {
+  for (real thr : throttles) {
+    const LaunchBrakeRun off = launch_then_brake(d, false, thr, 20.0, 10.0, AbsReferenceSpeed::Estimated);
+    for (AbsReferenceSpeed mode : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
         CAPTURE(d.name, thr, static_cast<int>(mode));
         const LaunchBrakeRun on = launch_then_brake(d, true, thr, 20.0, 10.0, mode);
-        const LaunchBrakeRun off = launch_then_brake(d, false, thr, 20.0, 10.0, mode);
         CAPTURE(on.v_launch_end, on.max_ref_over, on.distance, off.distance, on.t_end, on.v_end);
         REQUIRE(on.v_launch_end > 19.0);
         CHECK(on.max_ref_excess <= 0.0);

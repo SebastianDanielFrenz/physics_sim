@@ -310,27 +310,12 @@ TEST_CASE("C3 World: zero own allocation per tick with a thermal vehicle (U8, Wo
     CHECK(own == 0);
 }
 
-TEST_CASE("C3 World: thermal state is hashed and worker-count invariant", "[thermal][drivetrain][determinism]") {
-    std::uint64_t h1 = 0, h10 = 0, h_perturbed = 0;
-    for (const int workers : {1, 10}) {
-        Rig rig = make_rig(thermal_desc(), workers);
-        World& w = *rig.world;
-        w.set_control("throttle", 0.3);
-        for (int t = 0; t < 600; ++t) w.step();
-        (workers == 1 ? h1 : h10) = w.state_hash();
-        if (workers == 1) {
-            // A different oil state at the same tick must change the hash (T_o is folded).
-            Rig other = make_rig(thermal_desc(), 1);
-            other.world->set_control("throttle", 0.3);
-            for (int t = 0; t < 300; ++t) other.world->step();
-            other.world->set_engine_thermal_state(other.vehicle, EngineThermalState{91.0, 95.5});
-            for (int t = 0; t < 300; ++t) other.world->step();
-            h_perturbed = other.world->state_hash();
-        }
-    }
-    CHECK(h1 == h10);
-    CHECK(h1 != h_perturbed);
-}
+// "C3 World: thermal state is hashed and worker-count invariant" (1 vs 10 workers over 600 ticks of car_sedan_sim_thermal, a
+// perturbed thermal state moves the hash) was removed in the test-cost audit 2026-11-02: tests/determinism/
+// test_worker_count_hash.cpp "Engine thermal: vehicle_thermal.json hashes identically across 1, 2, 4, 10 and 24 workers; T_o is
+// hashed" runs the same car through a cold-soak scenario at five worker counts against a pinned hash and asserts that a
+// thermal-state perturbation moves the hash; the jacket-specific hashed state and allocation-freedom stay in
+// test_engine_thermal_jacket.cpp J6.
 
 TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan runs hotter, rejections", "[thermal][drivetrain][cooling_capacity]") {
     // Idle at part throttle is too gentle to need the radiator; start the coolant hot instead (thermostat open, fan on)
