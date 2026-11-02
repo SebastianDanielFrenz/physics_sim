@@ -111,8 +111,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                         }
                         const real up_th = lerp(up_z, up_f, shift_req);
                         const real down_th = lerp(dn_z, dn_f, shift_req);
+                        // With the multi-gear downshift on, a crawl counts too: a slipping auto-clutch holds the engine above the downshift point
+                        // while the vehicle crawls under heavy draft in a high gear, and the box would never leave that gear. The gearbox input rpm at the
+                        // present road speed below the clutch's anti-stall rpm is such a crawl (the clutch cannot lock there); the ordinary dip of a
+                        // slipping clutch after an upshift (input rpm below the downshift point, above the anti-stall rpm) must not downshift.
+                        const bool road_speed_below_down = desc_.auto_shift.downshift_target_fraction > real(0.0) && s.forward_ratios != nullptr &&
+                                                           s.gearbox_current >= 1 && s.gearbox_current <= s.forward_ratio_count &&
+                                                           out_rpm * std::abs(s.forward_ratios[s.gearbox_current - 1]) < desc_.auto_clutch.anti_stall_rpm;
                         if (dwell_ok && engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
-                        else if (engine_rpm < down_th && s.gearbox_current > 1) {
+                        else if ((engine_rpm < down_th || road_speed_below_down) && s.gearbox_current > 1) {
                             desired_target = s.gearbox_current - 1;
                             const real fraction = desc_.auto_shift.downshift_target_fraction;
                             if (fraction > real(0.0) && s.forward_ratios != nullptr) {

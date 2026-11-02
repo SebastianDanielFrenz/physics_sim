@@ -873,6 +873,9 @@ TEST_CASE("ManualTcu: downshifts that follow the road speed", "[unit][drivetrain
     CHECK(target_after(0.5, 6, 12, 330.0, 888.0) == 9);  // the floor is below the pick
     CHECK(target_after(0.5, 10, 12, 330.0, 888.0) == 10); // the floor stops it at 10
     CHECK(target_after(0.5, 6, 12, 5.0, 888.0) == 6);    // at a near standstill no gear reaches the target: the floor
+    CHECK(target_after(0.5, 6, 12, 5.0, 1450.0) == 6);   // a slipping clutch holds the engine above the point while the road speed is far below it
+    CHECK(target_after(0.5, 6, 12, 360.0, 1450.0) == 12); // input rpm 968: below the downshift point (1000), above the anti-stall rpm (950): an ordinary slipping clutch, no downshift
+    CHECK(target_after(0.0, 6, 12, 5.0, 1450.0) == 12);  // key off: only the engine rpm counts, as before
     CHECK(target_after(0.5, 6, 6, 5.0, 300.0) == 6);     // already in the floor gear: no downshift at all
     CHECK(target_after(0.5, 1, 1, 5.0, 300.0) == 1);
 }
