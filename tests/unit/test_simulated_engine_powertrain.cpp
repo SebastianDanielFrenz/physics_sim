@@ -385,7 +385,7 @@ TEST_CASE("C12 F9: a tank holding the engine's second fuel burns that fuel, not 
 //       bounded operating-point inversion uses the current atmosphere;
 //   (d) white-box Powertrain: live changes never rebuild the complete control grid.
 // ---------------------------------------------------------------------------
-TEST_CASE("C12 T3: the ambient sample drives the manifold and bounded live pedal control", "[unit][drivetrain][engine]") {
+TEST_CASE("C12 T3: the ambient sample drives the manifold and bounded live pedal control", "[unit][drivetrain][engine][niche]") {
     const SimulatedEngineDesc desc = fx::electronic_engine();
     const auto maps = SimulatedEngine::build_maps(desc);
     const real rpm = 3000.0, w = w_of(rpm);

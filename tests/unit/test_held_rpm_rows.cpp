@@ -344,7 +344,7 @@ TEST_CASE("held: 1 vs 10 workers give the same maps (lumped)", "[cycle][drivetra
     check_workers(lumped_past_breathing());
 }
 
-TEST_CASE("held: 1 vs 10 workers give the same maps (boosted pipe)", "[cycle][drivetrain][pipe]") {
+TEST_CASE("held: 1 vs 10 workers give the same maps (boosted pipe)", "[cycle][drivetrain][pipe][niche]") {
     CycleModelDesc d = pipe_past_breathing();
     d.grid_rpm = {4500.0, 9000.0, 13000.0, 18000.0}; // held 13000, 18000 from 9000
     check_workers(d);

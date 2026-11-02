@@ -598,7 +598,7 @@ TEST_CASE("P7d W8f: map_pressure_index is the identity without a WOT curve, cont
 }
 
 // W8g: the loader rejects an authored p_im-axis table next to generated WOT rows; without one it carries the curve.
-TEST_CASE("P7d W8g: the loader carries the WOT curve and rejects an authored ve beside it", "[cycle][pipe][drivetrain][io]") {
+TEST_CASE("P7d W8g: the loader carries the WOT curve and rejects an authored ve beside it", "[cycle][pipe][drivetrain][io][niche]") {
     io::EngineMapOptions o;
     o.quality = MapQuality::Sketch;
     o.pool = &pool();

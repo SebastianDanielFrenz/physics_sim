@@ -348,7 +348,7 @@ TEST_CASE("C16b review R4: a cycle-source edit misses the cache and the loaded m
 }
 
 TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, never thrown, and self-heals",
-          "[drivetrain][cycle][io]") {
+          "[drivetrain][cycle][io][niche]") {
     TempCacheDir cache;
     const CycleModelDesc desc = fixture_desc();
     const FuelDesc fuel = fx::gasoline();

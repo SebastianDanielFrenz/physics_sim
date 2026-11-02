@@ -860,7 +860,7 @@ TEST_CASE("KCB knock model file equals the compiled knock model v4", "[knock][kn
     rejects("missing", g);
 }
 
-TEST_CASE("KCB fit: knock model v4 on the A25A and Honda L15B7 Tier 3 rows at measured boundary conditions", "[knock][knock_cal]") {
+TEST_CASE("KCB fit: knock model v4 on the A25A and Honda L15B7 Tier 3 rows at measured boundary conditions", "[knock][knock_cal][niche]") {
     std::vector<std::string> names = {"a25a_kv1bc", "honda_l15b7_t3"};
     for (const Set& s : sets())
         if (is_light_set(s.pk->name)) names.push_back(s.pk->name);

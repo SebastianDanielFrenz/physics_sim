@@ -450,7 +450,7 @@ TEST_CASE("P9 K1: per-profile cache keys", "[vvl][drivetrain][cycle]") {
     CHECK(ek[1] != keys[1]);
 }
 
-TEST_CASE("P9 K2/G1: each profile set is its single-lift generation, identical for 1 and 10 workers", "[vvl][drivetrain][cycle]") {
+TEST_CASE("P9 K2/G1: each profile set is its single-lift generation, identical for 1 and 10 workers", "[vvl][drivetrain][cycle][niche]") {
     const SimulatedEngineDesc& d = k20a_pending();
     const CycleModelDesc& c = *d.cycle;
     const FuelDesc& fuel = d.fuels.front();
@@ -539,7 +539,7 @@ TEST_CASE("P9 R1: per-profile tables and the blend at 0, 1 and 0.5", "[vvl][driv
     }
 }
 
-TEST_CASE("P9 V2: switching with hysteresis, the blend ramp and the p_im / oil gates", "[vvl][drivetrain][cycle]") {
+TEST_CASE("P9 V2: switching with hysteresis, the blend ramp and the p_im / oil gates", "[vvl][drivetrain][cycle][niche]") {
     const SimulatedEngineDesc& d = k20a();
 
     SECTION("WOT up and down through the band") {

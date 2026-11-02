@@ -1274,7 +1274,7 @@ TEST_CASE("A8 V10 sabotage diag: missing loss term (cranked flow-noise coefficie
                 peak, peak < 200.0 ? "OK" : "EXCEEDS", radiated_power_w, radiated_power_w < 200.0 ? "OK" : "EXCEEDS");
 }
 
-TEST_CASE("A7 tie: audio-grade cycle-mean fresh air within 3 % of the power-grade engine", "[audio][cycle][pipe]") {
+TEST_CASE("A7 tie: audio-grade cycle-mean fresh air within 3 % of the power-grade engine", "[audio][cycle][pipe][niche]") {
     // Catches: an audio engine that is not the map generator's engine (a
     // different runner, valve or combustion model), a plenum loop that misses
     // its pressure target.

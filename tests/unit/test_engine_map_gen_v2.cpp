@@ -126,7 +126,7 @@ TEST_CASE("A5 V7: lumped engines keep generator v1 bit-identical", "[drivetrain]
 // settled"): with the throttle fully closed the plenum still sat at ~28 kPa.
 // Such a node is generated with the plenum held at the node pressure; points
 // that settle normally stay bit-identical (G1's pin).
-TEST_CASE("A5 G6: long high-overlap cams on a twin-turbo V8 generate the whole grid", "[drivetrain][cycle][pipe]") {
+TEST_CASE("A5 G6: long high-overlap cams on a twin-turbo V8 generate the whole grid", "[drivetrain][cycle][pipe][niche]") {
     jobs::JobSystem pool(10);
     io::EngineMapOptions opt;
     opt.quality = MapQuality::Preview;

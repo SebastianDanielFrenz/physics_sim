@@ -256,7 +256,7 @@ TEST_CASE("Audio bank prep P1b: turbo hyper V8 bank equals the pre-move generato
     CHECK(again.key == r.key);
 }
 
-TEST_CASE("Audio bank prep P2: cancel throws GenerationCancelled and leaves nothing on disk", "[audio][engine_tools]") {
+TEST_CASE("Audio bank prep P2: cancel throws GenerationCancelled and leaves nothing on disk", "[audio][engine_tools][niche]") {
     // Catches: a cancel that is ignored, a cancel that leaves a cache or temp file, a cancel reported as another
     // error, progress off the calling thread.
     const auto desc = fixture_engine();
@@ -368,7 +368,7 @@ TEST_CASE("Audio bank prep P3: a cancel after the last tick still publishes noth
     CHECK(entries_under(dir) == 0);
 }
 
-TEST_CASE("Audio bank prep P4: cache files - hit, damaged, wrong key, old format", "[audio][engine_tools]") {
+TEST_CASE("Audio bank prep P4: cache files - hit, damaged, wrong key, old format", "[audio][engine_tools][niche]") {
     // Catches: a valid file ignored, an invalid one accepted (or crashing the call instead of a silent miss).
     const auto desc = fixture_engine();
     const std::uint64_t key = key_of(desc);
@@ -426,7 +426,7 @@ TEST_CASE("Audio bank prep P4: cache files - hit, damaged, wrong key, old format
     }
 }
 
-TEST_CASE("Audio bank prep P5: the key follows what reaches the sound", "[audio][engine_tools]") {
+TEST_CASE("Audio bank prep P5: the key follows what reaches the sound", "[audio][engine_tools][niche]") {
     // Catches: a key blind to an ECU / map / throttle / cycle / fuel change (stale bank served), a key that moves
     // with free text, source positions or the worker count (needless 30 s rebakes).
     const auto base = fixture_engine();

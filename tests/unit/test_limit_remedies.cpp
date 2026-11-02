@@ -565,7 +565,7 @@ TEST_CASE("R8 owner's example: stock hardware + the 800 hp kit -> placeholders, 
     CHECK(n7b_sat->value > 0.92);
 }
 
-TEST_CASE("R9 TurboRotorCap: the wastegate clears one that came from a saturated gate, a boost target beyond the hardware gives solved = false", "[drivetrain][dyno][n2o][turbo]") {
+TEST_CASE("R9 TurboRotorCap: the wastegate clears one that came from a saturated gate, a boost target beyond the hardware gives solved = false", "[drivetrain][dyno][n2o][turbo][niche]") {
     // (a) stock hardware at 7000 rpm: the rotor reaches the 180000 rpm table edge because the gate has no authority; the same
     // area clears it as clears the wastegate/boost kinds (the predicate for TurboRotorCap includes all three).
     // (b) target_boost 3 bar abs: at 6000 rpm the gate is shut and the rotor still hits the cap - a bigger gate changes nothing:

@@ -637,7 +637,7 @@ TEST_CASE("P10 K1: per-node cache keys", "[vvl][drivetrain][cycle]") {
     CHECK(mk == keys); // u is not a generator input (each node generates as a single-lift engine)
 }
 
-TEST_CASE("P10 K2/G1: each node set is its single-lift generation, identical for 1 and 10 workers", "[vvl][drivetrain][cycle]") {
+TEST_CASE("P10 K2/G1: each node set is its single-lift generation, identical for 1 and 10 workers", "[vvl][drivetrain][cycle][niche]") {
     const SimulatedEngineDesc& d = n52_pending();
     const CycleModelDesc& c = *d.cycle;
     const FuelDesc& fuel = d.fuels.front();
@@ -667,7 +667,7 @@ TEST_CASE("P10 K2/G1: each node set is its single-lift generation, identical for
 // R: runtime
 // =====================================================================================================================
 
-TEST_CASE("P10 R1: per-node tables; held at a node every WOT substep is that node's single-lift engine", "[vvl][drivetrain][cycle]") {
+TEST_CASE("P10 R1: per-node tables; held at a node every WOT substep is that node's single-lift engine", "[vvl][drivetrain][cycle][niche]") {
     const SimulatedEngineDesc& d = n52();
     SECTION("steady tables per node") {
         const SimulatedEngine f(d);
@@ -948,7 +948,7 @@ TEST_CASE("P10 V1: part-load fuel at equal brake torque, lift family vs throttle
 // H1 / D1
 // =====================================================================================================================
 
-TEST_CASE("P10 H1: u enters the state hash only with a family; a hot swap carries every node set; 1 vs 10 workers", "[vvl][drivetrain][cycle]") {
+TEST_CASE("P10 H1: u enters the state hash only with a family; a hot swap carries every node set; 1 vs 10 workers", "[vvl][drivetrain][cycle][niche]") {
     const SimulatedEngineDesc& d = n52();
     {
         SimulatedEngine a(d, family_maps()), b(d, family_maps());
