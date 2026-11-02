@@ -19,6 +19,14 @@
 
 namespace ps_test {
 
+// Job-system workers a rig's World gets when the caller does not say (test-cost audit 2026-11-02, vault note in
+// out/test_speedup_vault_draft.txt). 1 worker still runs every stage as a job on a worker thread (the sim thread only
+// waits), so debug_alloc's in-job accounting is unchanged; what it saves is the yield-spinning of 3 extra threads per
+// test, which oversubscribes the machine under `ctest --parallel` (a plain rig test ran 15-45x slower than alone).
+// A test that needs real parallelism - a zero-allocation-in-job check over several batches, a worker-count comparison,
+// a race check - passes its worker count explicitly (>= 2).
+constexpr int kRigDefaultWorkers = 1;
+
 // A large flat MeshShape ground tagged with a single SurfaceId on every
 // triangle (mirrors tests/unit/test_mesh_heightfield_shapes.cpp's
 // flat_quad_mesh) - used where a test needs the wheel/tyre surface lookup
@@ -131,7 +139,7 @@ struct VehicleTestRig {
 // below).
 inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc& desc, ps::real chassis_mass,
                                                    const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                                   ps::real slope_grade = 0.0, int job_workers = 4,
+                                                   ps::real slope_grade = 0.0, int job_workers = kRigDefaultWorkers,
                                                    ps::Vec3 tilt_axis = ps::Vec3::unit_y(),
                                                    ps::real tick_hz = 240.0, ps::real substep_hz = 960.0,
                                                    ps::real ground_half_extent = 1000.0) {
@@ -183,7 +191,7 @@ inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc
 
 inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps::real chassis_mass,
                                          const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                         ps::real slope_grade = 0.0, int job_workers = 4,
+                                         ps::real slope_grade = 0.0, int job_workers = kRigDefaultWorkers,
                                          ps::Vec3 tilt_axis = ps::Vec3::unit_y(), ps::real tick_hz = 240.0,
                                          ps::real substep_hz = 960.0, ps::real ground_half_extent = 1000.0) {
     const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
@@ -205,7 +213,7 @@ inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps
 // already offers) can also pick a non-asphalt surface.
 inline VehicleTestRig build_vehicle_rig_on_surface(const std::string& vehicle_json_path, ps::real chassis_mass,
                                                      const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                                     const std::string& surface_name, int job_workers = 4,
+                                                     const std::string& surface_name, int job_workers = kRigDefaultWorkers,
                                                      ps::real tick_hz = 240.0, ps::real substep_hz = 960.0) {
     VehicleTestRig rig;
 
