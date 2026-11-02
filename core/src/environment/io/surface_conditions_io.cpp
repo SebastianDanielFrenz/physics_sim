@@ -58,8 +58,9 @@ SurfaceFrictionDesc read_friction(ObjectReader& parent, const std::string& ctx, 
     f.damp = r.number("damp", false, 0.85);
     f.wet = r.number("wet", false, 0.71);
     f.wet_grass = r.number("wet_grass", false, 0.67);
+    f.snow_packed = r.number("snow_packed", false, 0.35);
     // W8/W9 conditions: a clear error, not a silent drop.
-    for (const char* k : {"slush", "snow_loose", "snow_packed", "ice", "wet_ice", "frost", "black_ice", "mud"})
+    for (const char* k : {"slush", "snow_loose", "ice", "wet_ice", "frost", "black_ice", "mud"})
         r.reserve_for_later(k, "W8/W9 (snow, ice, mud grip)", kFormat);
     r.skip("source");
     r.finish();

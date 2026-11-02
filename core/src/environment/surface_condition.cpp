@@ -324,9 +324,16 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     const real evap_kg_m2_s = ex.net();
     const real L_v = kLatentHeatVaporisation - kLatentHeatSlope * (t0 - kCelsiusToKelvin);
     const real q_latent = L_v * evap_kg_m2_s;   // W/m2 out of the surface
+    // Snow pack: what is there this step (old pack + snowfall), the melt from below (the surface node's heat, a
+    // lagged sink like the latent flux, limited to the pack) and from above (degree-day on the air temperature).
+    const real snow_in = f.snow_mm_h > 0.0 ? f.snow_mm_h / 3600.0 * dt : 0.0;
+    const real snow_avail = in.snow_mm + snow_in;
+    real q_snow = 0.0;
+    if (snow_avail > 0.0 && t0 > kCelsiusToKelvin)
+        q_snow = std::min(kSnowGroundContactWm2K * (t0 - kCelsiusToKelvin), snow_avail * kLatentHeatFusion / dt);
     // q(T) ~ A - B' T with T^4 linearised about t0.
-    const real a_flux =
-        (1.0 - col.albedo) * f.ghi_w_m2 + eps * l_sky + 3.0 * eps * kStefanBoltzmann * t02 * t02 + hc * ta - q_latent;
+    const real a_flux = (1.0 - col.albedo) * f.ghi_w_m2 + eps * l_sky + 3.0 * eps * kStefanBoltzmann * t02 * t02 +
+                        hc * ta - q_latent - q_snow;
     const real b_flux = 4.0 * eps * kStefanBoltzmann * t02 * t0 + hc;
 
     // Tridiagonal: lo[i] T[i-1] + di[i] T[i] + up[i] T[i+1] = rhs[i].
@@ -386,6 +393,22 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
             const real take = input < room ? input : room;
             C += take;
             input -= take;
+        }
+    }
+    real snow = snow_avail;
+    real snow_rho = 0.0;
+    if (snow_avail > 0.0) {
+        const real melt_below = q_snow * dt / kLatentHeatFusion;
+        const real air_c = ta - kCelsiusToKelvin;
+        const real melt_above = air_c > 0.0 ? kSnowDegreeDayMmPerKDay / 86400.0 * air_c * dt : 0.0;
+        const real melt = std::min(snow_avail, melt_below + melt_above);
+        snow = snow_avail - melt;
+        input += melt;   // melt water reaches the ground under the canopy
+        if (snow > 1e-9) {
+            snow_rho = (in.snow_density_kg_m3 * in.snow_mm + kSnowFreshDensityKgM3 * snow_in) / snow_avail;
+            snow_rho += (kSnowSettledDensityKgM3 - snow_rho) * dt / (kSnowSettleTauS + dt);
+        } else {
+            snow = 0.0;
         }
     }
     if (soil_like && input > 0.0) {
@@ -451,8 +474,8 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     out.drain_tau_s = tau;
     out.ice_mm = in.ice_mm;
     out.frost_mm = in.frost_mm;
-    out.snow_mm = in.snow_mm;
-    out.snow_density_kg_m3 = in.snow_density_kg_m3;
+    out.snow_mm = snow;
+    out.snow_density_kg_m3 = snow_rho;
     for (int i = 0; i < n; ++i) out.temp_k[static_cast<std::size_t>(i)] = t[static_cast<std::size_t>(i)];
     for (int i = n; i < kMaxColumnNodes; ++i) out.temp_k[static_cast<std::size_t>(i)] = 0.0;
 }

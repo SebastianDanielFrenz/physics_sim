@@ -50,6 +50,7 @@ void ConditionGrip::update_state(const ConditionGrid& grid, real t_env) {
     for (int i = 0; i < n; ++i) {
         w_wet_[i] = 0.0;
         w_grass_[i] = 0.0;
+        w_snow_[i] = 0.0;
         if (!stateful_[i]) continue;
         const SurfaceClassState& a = grid.prev(i);
         const SurfaceClassState& b = grid.next(i);
@@ -69,6 +70,7 @@ void ConditionGrip::update_state(const ConditionGrid& grid, real t_env) {
             ww = std::max(ww, std::min(water / kPondFullMm, real(1.0)));   // ponded water: a ramp to fully wet over kPondFullMm
         }
         w_wet_[i] = std::clamp(ww, real(0.0), real(1.0));
+        w_snow_[i] = std::clamp(lerp(a.snow_mm, b.snow_mm) / kSnowFullMm, real(0.0), real(1.0));
         if (vegetated_[i]) {
             const real cw = col.canopy_capacity_mm > 0.0 ? canopy / col.canopy_capacity_mm : 0.0;
             w_grass_[i] = std::clamp(std::max(cw, w_wet_[i]), real(0.0), real(1.0));
@@ -79,6 +81,11 @@ void ConditionGrip::update_state(const ConditionGrid& grid, real t_env) {
 real ConditionGrip::water_weight(int surface_id) const {
     if (!valid_ || surface_id < 0 || surface_id >= count_) return 0.0;
     return w_wet_[surface_id];
+}
+
+real ConditionGrip::snow_weight(int surface_id) const {
+    if (!valid_ || surface_id < 0 || surface_id >= count_) return 0.0;
+    return w_snow_[surface_id];
 }
 
 real ConditionGrip::factor(int surface_id, real speed_m_s) const { return factor(surface_id, profile_, speed_m_s); }
@@ -92,12 +99,17 @@ real ConditionGrip::factor(int surface_id, const TyreConditionFactors& p, real s
     const int j = std::min(static_cast<int>(pos), kSpeedSamples - 2);
     const real frac = pos - static_cast<real>(j);
     const real mu_wet = table_[surface_id][j] + (table_[surface_id][j + 1] - table_[surface_id][j]) * frac;
+    real base;
     if (vegetated_[surface_id]) {
         const real g = w_grass_[surface_id];
-        return (1.0 - g) * p.dry + g * friction_[surface_id].wet_grass * p.wet_grass;
+        base = (1.0 - g) * p.dry + g * friction_[surface_id].wet_grass * p.wet_grass;
+    } else {
+        const real ww = w_wet_[surface_id];
+        base = (1.0 - ww) * p.dry + ww * mu_wet * p.wet;
     }
-    const real ww = w_wet_[surface_id];
-    return (1.0 - ww) * p.dry + ww * mu_wet * p.wet;
+    const real ws = w_snow_[surface_id];
+    if (ws <= 0.0) return base;
+    return (1.0 - ws) * base + ws * friction_[surface_id].snow_packed * p.snow_packed;
 }
 
 } // namespace ps::environment

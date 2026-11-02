@@ -78,6 +78,7 @@ struct SurfaceForcing {
     real cloud_cover = 0.0;         // [0, 1]
     real bottom_temp_k = 283.15;    // Dirichlet at the column bottom
     real precip_mm_h = 0.0;         // W6: liquid-equivalent precipitation rate
+    real snow_mm_h = 0.0;           // snowfall, water equivalent (not in precip_mm_h)
 };
 
 // Initial profile at the start of a spin-up: linear from surface to bottom.
@@ -145,6 +146,16 @@ inline constexpr real kAirCpJkgK = 1005.0;              // [C] dry air
 inline constexpr real kLatentHeatVaporisation = 2.501e6; // [C] at 0 C
 inline constexpr real kLatentHeatSlope = 2370.0;        // [C] L_v(T) = L0 - slope (T - 273.15)
 inline constexpr real kMaxCondensationKgM2S = 1.0e-4;   // [AS] ~0.36 mm/h dew cap
+
+// Snow pack (a W8 subset: snowfall, melt, settling; no frost, ice or refreeze). The pack is at 0 C; it melts from
+// above by a degree-day law on the air temperature and from below by the surface node's heat, which leaves the
+// column as a sink in the energy balance (so a warm road cools while it melts snow).
+inline constexpr real kLatentHeatFusion = 3.34e5;       // [C] J/kg
+inline constexpr real kSnowDegreeDayMmPerKDay = 4.0;    // [C] Hock 2003: 2.5-6 mm/(K day) for snow
+inline constexpr real kSnowGroundContactWm2K = 30.0;    // [AS] heat transfer from the surface into the pack
+inline constexpr real kSnowFreshDensityKgM3 = 100.0;    // [D] new snow 50-200 kg/m3
+inline constexpr real kSnowSettledDensityKgM3 = 300.0;  // [D] settled snow 200-400 kg/m3
+inline constexpr real kSnowSettleTauS = 2.0 * 86400.0;  // [AS] settling time constant
 
 // One backward-Euler step of length dt. `out` may alias `in`. Allocation-free.
 void step_column(const ColumnModel& column, const SurfaceForcing& forcing, real dt, const SurfaceClassState& in,

@@ -6,7 +6,7 @@
   "groove_void_ratio": 0.35,
   "siping": "high",
   "inflation_pressure_kpa": 230.0,
-  "condition_factors": { "dry": 0.95, "damp": 1.05, "wet": 1.0, "wet_grass": 1.05 },
+  "condition_factors": { "dry": 0.95, "damp": 1.05, "wet": 1.0, "wet_grass": 1.05, "snow_packed": 1.6 },
   "tread_exponents": { "wet": 0.5 },
   "thermal": null,
   "wear": null,

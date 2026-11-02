@@ -50,6 +50,7 @@ struct SurfaceFrictionDesc {
     real damp = 0.85;        // [AS] midpoint of dry and wet [D]
     real wet = 0.71;         // [D] Wong wet/dry peak (0.6 / 0.85)
     real wet_grass = 0.67;   // [D] Cenek wet/dry mean (RACE-002)
+    real snow_packed = 0.35; // [D] packed snow mu 0.2-0.35 over dry asphalt ~0.85 (reference summer tyre)
 };
 
 // W6: the per-class soil hydraulic parameters (plan 4.4). Loaded from the

@@ -60,7 +60,8 @@ TyreProfileDesc parse_tyre_profile_json(const json& root, const std::string& ori
         d.condition_factors.damp = fr.number("damp", false, 1.0);
         d.condition_factors.wet = fr.number("wet", false, 1.0);
         d.condition_factors.wet_grass = fr.number("wet_grass", false, 1.0);
-        for (const char* k : {"slush", "snow_loose", "snow_packed", "ice", "wet_ice", "frost", "black_ice", "mud"})
+        d.condition_factors.snow_packed = fr.number("snow_packed", false, 1.0);
+        for (const char* k : {"slush", "snow_loose", "ice", "wet_ice", "frost", "black_ice", "mud"})
             fr.reserve_for_later(k, "W8/W9 (snow, ice, mud grip)", kFormat);
         fr.skip("source");
         fr.finish();

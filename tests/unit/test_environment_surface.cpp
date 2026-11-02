@@ -1549,3 +1549,26 @@ TEST_CASE("W6-G6b: every water state value is folded into the grid hash",
         CHECK(grid.fold_hash(0xcbf29ce484222325ULL) == base);
     }
 }
+
+TEST_CASE("Snow pack: snowfall builds it below 0 C, warm air and a warm road melt it into the film",
+          "[environment][surface][snow]") {
+    const ColumnModel col = build_column(find_class(default_conditions(), "asphalt"));
+    SurfaceClassState s;
+    initial_column_state(col, InitialProfile{268.0, 268.0}, s);
+    SurfaceForcing f = quiet(268.0);
+    f.bottom_temp_k = 268.0;
+    f.snow_mm_h = 2.0;
+    for (int n = 0; n < 180; ++n) step_column(col, f, 60.0, s, s);   // 3 h of 2 mm/h below freezing: nothing melts
+    CHECK_THAT(s.snow_mm, WithinAbs(6.0, 1e-9));
+    CHECK(s.water_mm == 0.0);
+    CHECK(s.snow_density_kg_m3 > kSnowFreshDensityKgM3);
+    f = quiet(278.0);
+    f.bottom_temp_k = 283.0;
+    real water_peak = 0.0;
+    for (int n = 0; n < 24 * 60 && s.snow_mm > 0.0; ++n) {
+        step_column(col, f, 60.0, s, s);
+        water_peak = std::max(water_peak, s.water_mm);
+    }
+    CHECK(s.snow_mm == 0.0);   // 5 K air alone melts 6 mm in about 7 h
+    CHECK(water_peak > 0.0);
+}
