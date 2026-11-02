@@ -17,6 +17,9 @@
 //      own message; the same defect in an inline file tyre gives the identical message (one validation function).
 // TI7  an injected desc replaces a file tyre (inline object or path); a path that does not exist is never read.
 // TI8  unknown wheel keys (e.g. a game's own "tyre_spec") are ignored by the loader, as before.
+// TI9  a tyre file's "extends" is honoured by both readers, load_tyre_json and a wheel's "tyre" path: the parent's
+//      fields arrive, the child's win. Sabotage (recorded): read_json_file back in both readers - the child carries its
+//      own format and source, so it still loads, without its parent, and only the field checks fail.
 
 #include "ps/io/vehicle_io.h"
 #include "ps/world/world.h"
@@ -290,4 +293,31 @@ TEST_CASE("TI8 unknown wheel keys are ignored", "[io][vehicle][tyre]") {
     CHECK(tyre_identical(v.wheels[0].tyre, make_tyre("game tyre", 17.0)));
     // ... but "tyre_spec" is not a tyre: without the injection the wheel has none.
     REQUIRE_THROWS_WITH(io::load_vehicle_json(f.str()), ContainsSubstring("wheel 'FL': no tyre"));
+}
+
+TEST_CASE("TI9 a tyre file may extend another, through both readers", "[io][vehicle][tyre]") {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps_test_tyre_injection_ti9";
+    std::filesystem::create_directories(dir);
+    const auto write = [&](const char* name, const std::string& contents) {
+        std::ofstream out(dir / name);
+        out << contents;
+    };
+    write("parent.json", R"({ "format": "physics_sim.tyre/1", "name": "parent", "source": "test fixture", "fz0": 5000.0, "width": 0.2 })");
+    // Its own format and source, like every shipped child: without the merge this file still loads, parentless.
+    write("child.json", R"({ "extends": "parent.json", "format": "physics_sim.tyre/1", "name": "child", "source": "test fixture", "width": 0.25 })");
+    write("vehicle.json", vehicle_with_wheels(R"([ { "name": "FL", "tyre": "child.json" } ])"));
+
+    const vehicle::TyreDesc direct = io::load_tyre_json((dir / "child.json").string());
+    CHECK(direct.name == "child");
+    CHECK(direct.width == 0.25);
+    CHECK(direct.fz0 == 5000.0);
+
+    const vehicle::VehicleDesc v = io::load_vehicle_json((dir / "vehicle.json").string());
+    REQUIRE(v.wheels.size() == 1);
+    CHECK(v.wheels[0].tyre.width == 0.25);
+    CHECK(v.wheels[0].tyre.fz0 == 5000.0);
+    CHECK(tyre_identical(v.wheels[0].tyre, direct));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
 }
