@@ -33,6 +33,37 @@ DailyWeatherSource::DailyWeatherSource(const ClimateDesc& climate, std::uint64_t
     if (!(config_.rs_reference_day_s > 0.0)) throw std::invalid_argument("DailyWeatherConfig: rs_reference_day_s must be > 0");
 }
 
+real DailyWeatherSource::day_start_s(std::int64_t day) const {
+    if (day < 0) throw std::invalid_argument("DailyWeatherSource: day must be >= 0");
+    const int n_year = calendar_.days_per_year();
+    const std::int64_t year = day / n_year;
+    const int doy_game = static_cast<int>(day % n_year);
+    const real t0 = static_cast<real>(year) * calendar_.year_length_s() + calendar_.day_start_in_year_s(doy_game) -
+                    calendar_.epoch_offset_s();
+    if (t0 < 0.0) throw std::invalid_argument("DailyWeatherSource: day " + std::to_string(day) + " starts before the climate epoch");
+    return t0;
+}
+
+void DailyWeatherSource::drop_cached_from(std::int64_t day) {
+    for (std::size_t b = 0; b < blocks_.size(); ++b) {
+        if (!blocks_[b]) continue;
+        for (int i = 0; i < kBlockDays; ++i)
+            if (static_cast<std::int64_t>(b) * kBlockDays + i >= day) blocks_[b]->have[i] = false;
+    }
+    cursor_ = environment::WeatherCursor{};
+}
+
+int DailyWeatherSource::add_season_override(const WeatherPresetDesc& target, real ramp_s, std::int64_t from_day) {
+    const int id = timeline_.add_season_override(target, ramp_s, day_start_s(from_day));
+    drop_cached_from(from_day);
+    return id;
+}
+
+void DailyWeatherSource::clear_overrides(std::int64_t from_day) {
+    timeline_.clear_overrides();
+    drop_cached_from(from_day < 0 ? 0 : from_day);
+}
+
 DailyWeather DailyWeatherSource::compute(std::int64_t day) {
     if (day < 0) throw std::invalid_argument("DailyWeatherSource: day must be >= 0");
     const int n_year = calendar_.days_per_year();
