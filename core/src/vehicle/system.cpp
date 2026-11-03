@@ -369,7 +369,20 @@ void System::apply_collision_pairs(IRigidBackend& backend) {
     for (const Coupling& c : couplings_) {
         if (c.alive) pairs.emplace_back(instances_[c.towing]->chassis(), instances_[c.towed]->chassis());
     }
+    pairs.insert(pairs.end(), extra_disabled_pairs_.begin(), extra_disabled_pairs_.end());
     backend.set_disabled_collision_pairs(pairs);
+}
+
+void System::set_extra_disabled_pairs(std::vector<std::pair<BodyId, BodyId>> pairs, IRigidBackend& backend) {
+    extra_disabled_pairs_ = std::move(pairs);
+    apply_collision_pairs(backend);
+}
+
+void System::drop_disabled_pairs_of(BodyId body, IRigidBackend& backend) {
+    const auto involves = [&](const std::pair<BodyId, BodyId>& p) { return p.first == body || p.second == body; };
+    if (std::none_of(extra_disabled_pairs_.begin(), extra_disabled_pairs_.end(), involves)) return;
+    std::erase_if(extra_disabled_pairs_, involves);
+    apply_collision_pairs(backend);
 }
 
 machine::LatchTarget System::latch_target(const Coupling& c, const VehicleTickWork& towing, real h) const {

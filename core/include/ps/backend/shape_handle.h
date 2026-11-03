@@ -38,7 +38,7 @@
 //   built it and may be used with any World in the process (shapes are
 //   immutable and backend-instance independent). Do not keep handles in
 //   static storage that is destroyed after main() returns.
-// * Kinds: Box, Sphere, Capsule, Cylinder and MeshShape. HeightfieldShape is
+// * Kinds: Box, Sphere, Capsule, Cylinder, ConvexHull, ConvexCompound and MeshShape. HeightfieldShape is
 //   rejected (std::invalid_argument): heightfield content is mutable
 //   (update_heightfield_body, the prefetch ring's spares) and a shared,
 //   immutable heightfield would break that contract; the terrain prefetch
@@ -63,7 +63,7 @@
 
 namespace ps {
 
-enum class ShapeKind : std::uint8_t { Box, Sphere, Capsule, Cylinder, Mesh, Heightfield };
+enum class ShapeKind : std::uint8_t { Box, Sphere, Capsule, Cylinder, Mesh, Heightfield, ConvexHull, ConvexCompound };
 
 // Backend-defined payload behind a ShapeHandle. Opaque: only the backend
 // that created it knows its concrete type (jolt_backend.cpp's

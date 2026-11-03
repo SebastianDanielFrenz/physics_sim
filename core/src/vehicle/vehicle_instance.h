@@ -160,7 +160,7 @@ public:
     void align_backend_with_shadow(const VehicleTickWork& tw, IRigidBackend& backend) const;
 
     // Every chassis of this vehicle's island, its own included: its wheels and ground probes do not see them. Empty
-    // for a vehicle in no coupling, whose queries stay the plain ones. Sim thread, between steps.
+    // for a vehicle in no coupling, whose wheel casts exclude only its own chassis. Sim thread, between steps.
     void set_cast_exclusions(std::vector<BodyId> bodies) { cast_exclusions_ = std::move(bodies); }
 
     [[nodiscard]] const std::optional<machine::TowBrakeDesc>& tow_brake() const { return desc_.tow_brake; }

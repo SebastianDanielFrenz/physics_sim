@@ -19,6 +19,7 @@
 #include <span>
 #include <utility>
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -39,6 +40,11 @@ struct BodyDesc {
     ShapeDesc shape = SphereShape{};
     BodyMotionType motion = BodyMotionType::Dynamic;
     real mass = 1.0;              // ignored for Static/Kinematic
+    // Mass properties from another (convex) shape: the body's inertia and centre of mass are those of `mass_shape`
+    // scaled to `mass`, whatever `shape` is - a collision hull that follows a car's outline keeps the chassis's
+    // authored box inertia and mass centre. Unset = from `shape` (today's behaviour). Dynamic/Kinematic bodies only;
+    // Mesh/Heightfield are rejected. IRigidBackend::set_mass keeps using this shape.
+    std::optional<ShapeDesc> mass_shape;
     // A wheel (shape_cast with skip_non_wheel_bodies) may stand on this body. true = today's behaviour. false: the body is invisible to wheel
     // casts - a parked machine's collision box, a woken vehicle, a bale: the chassis/collision shapes still meet it, only the wheel does not
     // read its side or top as ground. Read in the wheel jobs, so set at creation (or between steps with set_wheel_contact), never mid-step.

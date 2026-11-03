@@ -28,6 +28,9 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/PhysicsMaterial.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -348,6 +351,29 @@ JPH::RefConst<JPH::Shape> make_heightfield_shape(const HeightfieldShape& s) {
     return JPH::RefConst<JPH::Shape>(new JPH::RotatedTranslatedShape(heightfield_wrapper_position(s), kHeightfieldYupToZup, inner.GetPtr()));
 }
 
+JPH::Ref<JPH::ConvexHullShapeSettings> convex_hull_settings(const ConvexHullShape& s) {
+    JPH::Array<JPH::Vec3> points;
+    points.reserve(s.points.size());
+    for (const Vec3& p : s.points) points.push_back(to_vec3f(p));
+    return new JPH::ConvexHullShapeSettings(points, static_cast<float>(s.max_convex_radius));
+}
+
+JPH::RefConst<JPH::Shape> created_or_throw(const JPH::ShapeSettings& settings, const char* what) {
+    JPH::Shape::ShapeResult result = settings.Create();
+    if (result.HasError()) throw std::runtime_error(std::string(what) + " rejected by Jolt: " + result.GetError().c_str());
+    return result.Get();
+}
+
+// The CalculateInertia case of BodyCreationSettings::GetMassProperties (inertia multiplier 1), shared by the
+// mass_shape override and set_mass so both reproduce it bit for bit.
+JPH::MassProperties scaled_mass_properties(const JPH::Shape& shape, float mass) {
+    JPH::MassProperties props = shape.GetMassProperties();
+    props.ScaleToMass(mass);
+    props.mInertia *= 1.0f;
+    props.mInertia(3, 3) = 1.0f;
+    return props;
+}
+
 JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
     return std::visit(
         [](auto&& s) -> JPH::RefConst<JPH::Shape> {
@@ -362,6 +388,13 @@ JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
                 return JPH::RefConst<JPH::Shape>(new JPH::CylinderShape(static_cast<float>(s.half_height), static_cast<float>(s.radius)));
             } else if constexpr (std::is_same_v<T, MeshShape>) {
                 return make_mesh_shape(s);
+            } else if constexpr (std::is_same_v<T, ConvexHullShape>) {
+                return created_or_throw(*convex_hull_settings(s), "ConvexHullShape");
+            } else if constexpr (std::is_same_v<T, ConvexCompoundShape>) {
+                if (s.pieces.empty()) throw std::runtime_error("ConvexCompoundShape: no pieces");
+                JPH::StaticCompoundShapeSettings compound;
+                for (const ConvexHullShape& piece : s.pieces) compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), convex_hull_settings(piece));
+                return created_or_throw(compound, "ConvexCompoundShape");
             } else {
                 static_assert(std::is_same_v<T, HeightfieldShape>);
                 return make_heightfield_shape(s);
@@ -680,6 +713,8 @@ ShapeKind shape_kind_of(const ShapeDesc& desc) {
             else if constexpr (std::is_same_v<T, CapsuleShape>) return ShapeKind::Capsule;
             else if constexpr (std::is_same_v<T, CylinderShape>) return ShapeKind::Cylinder;
             else if constexpr (std::is_same_v<T, MeshShape>) return ShapeKind::Mesh;
+            else if constexpr (std::is_same_v<T, ConvexHullShape>) return ShapeKind::ConvexHull;
+            else if constexpr (std::is_same_v<T, ConvexCompoundShape>) return ShapeKind::ConvexCompound;
             else return ShapeKind::Heightfield;
         },
         desc);
@@ -1041,10 +1076,24 @@ private:
     // BodyId assignment, same seam-welding lists). `prepared` (handle path
     // only) is kept in the slot so the shape outlives every handle copy
     // until destroy_body.
-    BodyId add_body(const BodyDesc& desc, const JPH::RefConst<JPH::Shape>& shape, JPH::HeightFieldShape* raw_heightfield, bool is_mesh,
+    BodyId add_body(const BodyDesc& desc, JPH::RefConst<JPH::Shape> shape, JPH::HeightFieldShape* raw_heightfield, bool is_mesh,
                     std::shared_ptr<const PreparedShape> prepared) {
         const JPH::EMotionType motion = to_jph_motion(desc.motion);
         const JPH::ObjectLayer layer = (desc.motion == BodyMotionType::Static) ? Layers::NON_MOVING : Layers::MOVING;
+
+        // BodyDesc::mass_shape: the collision shape is shifted so its centre of mass sits where the mass shape's is
+        // (OffsetCenterOfMassShape moves only the mass centre, never the geometry), and the body gets the mass
+        // shape's mass properties through the same arithmetic as CalculateInertia below - a plain box body and a
+        // hull with that box as mass_shape integrate bit-identically.
+        JPH::RefConst<JPH::Shape> mass_shape;
+        if (desc.mass_shape && desc.motion != BodyMotionType::Static) {
+            if (std::holds_alternative<MeshShape>(*desc.mass_shape) || std::holds_alternative<HeightfieldShape>(*desc.mass_shape)) {
+                throw std::invalid_argument("create_body: mass_shape must be convex (not a Mesh/Heightfield)");
+            }
+            mass_shape = make_shape(*desc.mass_shape);
+            const JPH::Vec3 shift = mass_shape->GetCenterOfMass() - shape->GetCenterOfMass();
+            shape = new JPH::OffsetCenterOfMassShape(shape, shift);
+        }
 
         JPH::BodyCreationSettings settings(shape, to_rvec3(desc.pose.position), to_jph_quat(desc.pose.orientation), motion, layer);
         settings.mLinearVelocity = to_vec3f(desc.velocity.linear);
@@ -1058,7 +1107,10 @@ private:
         settings.mMotionQuality = to_jph_motion_quality(desc.motion_quality);
         settings.mMaxAngularVelocity = static_cast<float>(desc.max_angular_velocity);
         settings.mMaxLinearVelocity = static_cast<float>(desc.max_linear_velocity);
-        if (desc.motion != BodyMotionType::Static) {
+        if (mass_shape != nullptr) {
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+            settings.mMassPropertiesOverride = scaled_mass_properties(*mass_shape, static_cast<float>(desc.mass));
+        } else if (desc.motion != BodyMotionType::Static) {
             settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
             settings.mMassPropertiesOverride.mMass = static_cast<float>(desc.mass);
         }
@@ -1067,6 +1119,7 @@ private:
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
         slots_[id.index].prepared = std::move(prepared);
         slots_[id.index].wheel_contact = desc.wheel_contact;
+        slots_[id.index].mass_shape = std::move(mass_shape);
         body_interface().SetUserData(jph_id, pack_body_id(id));
         if (raw_heightfield != nullptr || is_mesh) {
             terrain_surface_body_ids_.insert(std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jph_id), jph_id);
@@ -1342,11 +1395,10 @@ public:
         if (!(mass > real(0.0)) || !std::isfinite(mass)) return;
         JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
         if (!body || !body->IsDynamic()) return;
-        // The creation path's CalculateInertia override (BodyCreationSettings::GetMassProperties, inertia multiplier
-        // 1): the shape's mass properties scaled to the new mass.
-        JPH::MassProperties props = body->GetShape()->GetMassProperties();
-        props.ScaleToMass(static_cast<float>(mass));
-        props.mInertia(3, 3) = 1.0f;
+        // The creation path's override: the (mass) shape's mass properties scaled to the new mass.
+        const Slot& slot = slots_[id.index];
+        const JPH::MassProperties props =
+            scaled_mass_properties(slot.mass_shape != nullptr ? *slot.mass_shape : *body->GetShape(), static_cast<float>(mass));
         JPH::MotionProperties* mp = body->GetMotionProperties();
         mp->SetMassProperties(mp->GetAllowedDOFs(), props);
     }
@@ -1656,6 +1708,8 @@ private:
         // releasing every handle copy never frees a shape in use. Released
         // in free_slot, AFTER DestroyBody dropped the body's own reference.
         std::shared_ptr<const PreparedShape> prepared{};
+        // Non-null only for a body created with BodyDesc::mass_shape: set_mass rescales this shape's properties.
+        JPH::RefConst<JPH::Shape> mass_shape{};
     };
     class WheelBodyFilter final : public JPH::BodyFilter {
     public:
