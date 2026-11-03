@@ -94,6 +94,21 @@ struct HeightfieldShape {
 // static feature mesh never both claim the same point at once.
 inline constexpr real kHeightfieldNoCollision = static_cast<real>(std::numeric_limits<float>::max());
 
-using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape, CylinderShape, MeshShape, HeightfieldShape>;
+// Convex hull of a point cloud, body-local (Jolt's ConvexHullShape: the backend builds the hull, interior points
+// are dropped). At least 4 non-coplanar points. max_convex_radius rounds the hull's edges without moving its faces
+// (JoltPhysics' own default 0.05). Allowed on dynamic bodies, unlike MeshShape.
+struct ConvexHullShape {
+    std::vector<Vec3> points;
+    real max_convex_radius = 0.05;
+};
+
+// A rigid compound of convex hulls, each piece in body-local coordinates (no per-piece pose). For a dynamic body
+// whose outline is not convex - a car chassis (data/collision/*_hull.json, ps/io/chassis_hull_io.h).
+struct ConvexCompoundShape {
+    std::vector<ConvexHullShape> pieces;
+};
+
+using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape, CylinderShape, MeshShape, HeightfieldShape, ConvexHullShape,
+                               ConvexCompoundShape>;
 
 } // namespace ps

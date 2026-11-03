@@ -866,6 +866,7 @@ $script:PathRules = @(
     @{ Re = '^data/electronics/'; Kind = 'topics'; Topics = @('io', 'drivetrain', 'vehicle') },  # engine garage P8 electronics parts (launch control, assist fitment)
     @{ Re = '^data/oxidizers/|^tools/oxidizerdata/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },  # N2O N0 property data + its generator
     @{ Re = '^data/(climates|weather_presets|weather_classes|surface_conditions|tyre_profiles)/'; Kind = 'topics'; Topics = @('environment', 'io', 'vehicle') },  # weather plan data files
+    @{ Re = '^data/collision/|^tools/collisiongen/'; Kind = 'topics'; Topics = @('vehicle', 'backend') },  # chassis collision hulls + their generator
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },
     @{ Re = '^data/tracks/'; Kind = 'topics'; Topics = @('terrain', 'io') },
     @{ Re = '^data/scenarios/'; Kind = 'scenario' },

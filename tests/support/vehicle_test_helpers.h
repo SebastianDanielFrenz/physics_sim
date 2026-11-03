@@ -97,27 +97,14 @@ struct VehicleTestRig {
 // (matches the vehicle JSON's own attachment_local.z convention - see
 // data/vehicles/car_sedan.json's header comment for how it was derived).
 //
-// IMPORTANT (found the hard way - PLAN.md P3): chassis_half_extents must
-// NOT reach down/out far enough to overlap any wheel's suspension-travel
-// envelope (the cylinder shape cast in wheel_instance.cpp's
-// measure_contact starts at the "full bump" wheel position and sweeps
-// toward "full extension"). IRigidBackend::shape_cast has no way to
-// exclude a specific body from the query, and Jolt's CastShape reports an
-// immediate fraction-0 "hit" against a shape the query already starts
-// inside of (inconsistently, depending on broadphase iteration order in
-// this codebase's observed case - with the chassis box just barely
-// overlapping, 3 of 4 wheels reported the spurious self-hit at zero
-// steer, and a DIFFERENT single wheel did once a steer angle rotated its
-// query cylinder enough to grow its footprint back into the margin) - the
-// wheel then reads back as fully bottomed against its own chassis, and
-// the resulting huge/wrong Fz feeds a runaway tyre force and yaw spin.
-// Keep the chassis collision box narrower/higher than the wheel
-// attachment envelope by a margin comfortably bigger than one wheel
-// radius (a steered wheel's query cylinder sweeps a cone-like footprint
-// as it rotates, not just its unrotated bounding box) - exactly like a
-// real chassis "belly" sits well above and inboard of the wheels. This is
-// not merely a test convenience: any scenario author assembling a real
-// chassis body around this vehicle system has the same obligation.
+// History (PLAN.md P3, vault PHYS-017): the chassis box used to have to stay
+// clear of every wheel's suspension-travel envelope, because a wheel cast
+// that starts inside its own chassis read it as ground (fraction-0 hit,
+// huge wrong Fz). Since 2026-11-03 every wheel cast excludes its own
+// chassis (VehicleInstance's wheel pass), so a chassis may also carry a hull
+// of the car's real outline (tests/unit/test_chassis_hull.cpp,
+// data/collision/). The rigs below keep their small boxes: every validation
+// number was recorded on them.
 // PLAN.md P4 I1 (PHYS-033): the VehicleDesc-taking core of build_vehicle_rig
 // below, split out so a test can mutate a loaded desc (e.g. zeta = 0,
 // qsy = 0, an attachment z) before building the rig, and so a test can run

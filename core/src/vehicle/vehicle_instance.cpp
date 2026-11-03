@@ -518,9 +518,13 @@ void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidB
 
     // Pass 1: every wheel's ground contact, before pre_solve (ARB needs
     // the partner's fresh measurement - wheel_instance.h's comment).
+    // A wheel never sees its own chassis (a coupled vehicle's list already holds it): the chassis may then carry a
+    // hull of the car's real outline that encloses the wheels' travel (tests/unit/test_chassis_hull.cpp).
+    const std::span<const BodyId> excluded =
+        cast_exclusions_.empty() ? std::span<const BodyId>(&chassis_, 1) : std::span<const BodyId>(cast_exclusions_);
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
         const real delta = ackermann_wheel_angle(i, delta_avg);
-        wheels_[i]->measure_contact(pose_s, delta, backend, cast_exclusions_);
+        wheels_[i]->measure_contact(pose_s, delta, backend, excluded);
     }
 
     // PHYS-033 P4 I2 commit 5b (plan section 7 step 4): pre_solve -
