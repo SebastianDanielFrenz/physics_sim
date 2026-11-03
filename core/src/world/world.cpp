@@ -1387,8 +1387,13 @@ BodyId World::create_body(const BodyDesc& desc, const ShapeHandle& shape) {
 void World::destroy_body(BodyId id) {
     if (vehicle_system_->chassis_is_coupled(id)) throw std::logic_error("destroy_body: this chassis is coupled; detach it first");
     const bool was_static = terrain_manager_ && backend_->is_static(id);
+    vehicle_system_->drop_disabled_pairs_of(id, *backend_);
     backend_->destroy_body(id);
     if (was_static) terrain_manager_->on_static_geometry_changed();
+}
+
+void World::set_disabled_collision_pairs(std::vector<std::pair<BodyId, BodyId>> pairs) {
+    vehicle_system_->set_extra_disabled_pairs(std::move(pairs), *backend_);
 }
 
 void World::set_terrain_interest_point(std::uint64_t id, const Vec3& world_xy, real stream_radius_m) {

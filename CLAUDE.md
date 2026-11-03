@@ -1201,7 +1201,7 @@ Every vehicle's wheel casts exclude its own chassis (`shape_cast_excluding`; a c
 chassis of its island) since 2026-11-03: Jolt's `CastShape` reports an immediate fraction-0 "hit" against a
 shape the query starts inside of, so a chassis shape reaching into the wheels' suspension-travel envelope used
 to read as ground (wildly wrong per-wheel `Fz`, vault PHYS-017). A chassis may now be a full-size hull
-(`data/collision/`, `tests/unit/test_chassis_hull.cpp` H1-H5 [vehicle][chassis_hull]: corner loads and ride
+(`data/collision/`, `tests/unit/test_chassis_hull.cpp` H1-H6 [vehicle][chassis_hull]: corner loads and ride
 height bit-equal to the box, roof stands a crate/capsule, an inverted car rests on its roof with zero wheel
 load, a 0.35 m barrier at 3 m/s meets the chassis before any wheel; sabotage = an empty exclusion span, H2-H5
 fail with corner loads up to 776 kN). The test rigs (`build_vehicle_rig()`) keep their small boxes; every
@@ -1857,6 +1857,10 @@ the collision shape is wrapped in `OffsetCenterOfMassShape` so its centre of mas
 the body takes `MassAndInertiaProvided` from `scaled_mass_properties(mass_shape, mass)` - the same arithmetic as
 `CalculateInertia`, so a box body and a hull body with that box as mass_shape are bit-identical; `Slot::mass_shape`
 keeps it for `set_mass`.
+`World::set_disabled_collision_pairs` adds user pairs (merged with the hitches' coupled-chassis pairs by
+`vehicle::System::apply_collision_pairs`, the backend holds one list); `destroy_body` drops a body's pairs first.
+For a character controller that resolves its own contacts against a dynamic body it must not shove (racing_game's
+walker on a hull car; test H6).
 
 `BodyDesc::wheel_contact` (default true; `IRigidBackend::set_wheel_contact` between steps): false makes a body
 invisible to the wheel path only, `shape_cast(..., skip_non_wheel_bodies = true)` and `shape_cast_excluding(...,

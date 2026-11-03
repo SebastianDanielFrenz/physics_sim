@@ -78,6 +78,10 @@ public:
     [[nodiscard]] const machine::HitchPointDesc* towing_point(HitchId id) const;
     [[nodiscard]] bool contains(HitchId id) const { return id.index < couplings_.size() && couplings_[id.index].alive && couplings_[id.index].generation == id.generation; }
     [[nodiscard]] bool chassis_is_coupled(BodyId chassis) const;
+    // World::set_disabled_collision_pairs: pairs that make no contacts on top of the coupled chassis pairs (the backend
+    // holds one list, so both live here). drop_disabled_pairs_of removes a body's pairs before it is destroyed.
+    void set_extra_disabled_pairs(std::vector<std::pair<BodyId, BodyId>> pairs, IRigidBackend& backend);
+    void drop_disabled_pairs_of(BodyId body, IRigidBackend& backend);
     void set_coupling_passes(int passes) { coupling_passes_ = passes; }
 
     // A PTO shaft across a live hitch, from the towing vehicle's pto.out into the towed vehicle's first PTO tool. Its
@@ -184,6 +188,7 @@ private:
 
     void rebuild_islands();
     void apply_collision_pairs(IRigidBackend& backend);
+    std::vector<std::pair<BodyId, BodyId>> extra_disabled_pairs_;
     void kill_coupling(Coupling& c);
     void update_tow_brakes(const Island& island, const IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt);
     void update_lifts(const Island& island, const std::vector<real>& channel_values, real tick_dt);

@@ -117,7 +117,14 @@ public:
     // the terrain tile system's cached suppression results (see
     // TerrainConfig::precompute_suppression_at_load).
     BodyId create_body(const BodyDesc& desc);
+    // Drops the body's set_disabled_collision_pairs entries first.
     void destroy_body(BodyId id);
+
+    // Body pairs that make no contacts with each other, on top of the coupled chassis pairs the hitches keep (the
+    // backend holds one list; World merges both). Queries still see the bodies. Sim thread, between steps; every body
+    // must be live. Replaces the previous list. For a character controller that resolves its own contacts against a
+    // dynamic body it must not shove (racing_game's walker on a car with a collision hull).
+    void set_disabled_collision_pairs(std::vector<std::pair<BodyId, BodyId>> pairs);
 
     // Prebuilt shapes (racing_game R2; contract in ps/backend/shape_handle.h).
     // create_shape: ANY thread, also while step() runs on the sim thread and

@@ -18,6 +18,10 @@
 // H5  a 0.35 m barrier: driven into it at 3 m/s, the nose meets it before any wheel loads up (contact at tick 119,
 //     no wheel compressed); on the old box the barrier passes under the chassis and a front wheel climbs it at tick
 //     174 (the reported symptom).
+// H6  World::set_disabled_collision_pairs: a kinematic walker capsule driven into the hull's flank shoves the 1.5 t
+//     car (infinite mass); with the pair disabled the car stays put and queries still see it (racing_game's walker
+//     resolves its contacts itself); destroy_body drops the pair. Measured 2026-11-03: shoved 1.014 m without the
+//     pair, 6.1e-7 m with it.
 
 #include "engine_map_test_cache.h"
 #include "vehicle_test_helpers.h"
@@ -266,6 +270,44 @@ TEST_CASE("H5 a low barrier meets the nose before a wheel", "[vehicle][chassis_h
         } else {
             CHECK(chassis_tick < 0); // the reported symptom: the barrier passes under the box and a wheel climbs it
             CHECK(wheel_tick >= 0);
+        }
+    }
+}
+
+TEST_CASE("H6 a disabled pair: a kinematic capsule does not shove the hull car", "[vehicle][world][chassis_hull]") {
+    for (const bool disabled : {false, true}) {
+        Rig r = hyper_rig(true, at(0.0, 0.0, kHyperSpawnZ));
+        r.world->set_control("handbrake", 1.0);
+        ps_test::settle(*r.world, 1.0);
+        const Vec3 car0 = r.world->backend().get_pose(r.chassis).position;
+
+        BodyDesc capsule;
+        capsule.shape = CapsuleShape{0.575, 0.30};
+        capsule.motion = BodyMotionType::Kinematic;
+        capsule.pose.orientation = Quat::from_axis_angle(Vec3::unit_x(), 1.5707963267948966);
+        capsule.pose.position = Vec3{0.0, 1.6, 0.875};
+        const BodyId walker = r.world->create_body(capsule);
+        if (disabled) r.world->set_disabled_collision_pairs({{walker, r.chassis}});
+
+        // Walk at 1.4 m/s into the driver's door for 1 s (0.8 m deep into the flank at the end).
+        Motion m;
+        m.linear = Vec3{0.0, -1.4, 0.0};
+        for (int i = 0; i < 240; ++i) {
+            r.world->backend().set_motion(walker, m);
+            r.world->step();
+        }
+        const real shoved = (r.world->backend().get_pose(r.chassis).position - car0).length();
+        INFO("disabled " << disabled << " shoved " << shoved);
+        std::vector<ShapeContactHit> hits;
+        r.world->backend().collide_shape_into(ShapeDesc{CapsuleShape{0.575, 0.30}}, r.world->backend().get_pose(walker), hits);
+        CHECK(std::any_of(hits.begin(), hits.end(), [&](const ShapeContactHit& h) { return h.body == r.chassis; }));
+        if (disabled) {
+            CHECK(shoved < 1.0e-3);
+            r.world->destroy_body(walker); // drops the pair before the body goes
+            r.world->step();
+            CHECK(r.world->backend().get_pose(r.chassis).position.z > 0.0);
+        } else {
+            CHECK(shoved > 0.05);
         }
     }
 }
