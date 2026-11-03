@@ -83,6 +83,22 @@ public:
     // Computes a record without touching the cache (reference for tests).
     DailyWeather compute(std::int64_t day);
 
+private:
+    real day_start_s(std::int64_t day) const;       // env time of the first instant of `day`
+    void drop_cached_from(std::int64_t day);
+
+public:
+
+    // A season-bound weather override (WeatherTimeline::add_season_override) that starts at the first instant of game day `from_day`
+    // (a ramp-in of ramp_s, then the preset until the natural season ends). Days before `from_day` are unchanged (their cached records
+    // stay); every cached record from `from_day` on is dropped and recomputed with the override. Returns the override id; throws
+    // std::invalid_argument like the timeline (bad preset or ramp, day before the climate epoch). Calling it again later for a day at or
+    // after an earlier override hides that one exactly once ramped in (the timeline's own chaining rule).
+    int add_season_override(const environment::WeatherPresetDesc& target, real ramp_s, std::int64_t from_day);
+    // Removes every override and drops every cached record from `from_day` on.
+    void clear_overrides(std::int64_t from_day);
+    int override_count() const { return timeline_.override_count(); }
+
     const environment::ClimateDesc& climate() const { return climate_; }
     const environment::Calendar& calendar() const { return calendar_; }
     std::uint64_t seed() const { return seed_; }

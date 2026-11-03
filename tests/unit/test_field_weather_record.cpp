@@ -145,3 +145,52 @@ TEST_CASE("W4 climate statistics of the shipped farm climate (30 years)", "[fiel
     CHECK_THAT(rs_jan / n_jan, WithinRel(2.4, 0.25));
     CHECK_THAT(rs_jul / n_jul, WithinRel(19.2, 0.12));
 }
+
+// ---- season-bound override (the farm sim's "set weather" cheat) -------------------------------------------------------------
+// Recorded sabotages (2026-11-03), made in core/src/field/weather_record.cpp, run, reverted:
+//  - O-a: drop_cached_from() does nothing (the override cannot reach days already read): WO1 and WO3 failed (2 of 3 cases).
+//  Not run: dropping every day instead of from `from_day` (it only costs time, no result changes).
+#include "ps/environment/weather_io.h"
+
+namespace {
+environment::WeatherPresetDesc preset(const char* name) {
+    return ps::io::load_weather_preset_json(test_field::data_dir() / "weather_presets" / (std::string(name) + ".json"));
+}
+double rain_sum(DailyWeatherSource& s, int first, int last) {
+    double r = 0.0;
+    for (int d = first; d <= last; ++d) r += s.record(d).precip_mm();
+    return r;
+}
+} // namespace
+
+TEST_CASE("WO1 an override from a day leaves every earlier day as it was and changes the days after", "[field][weather][override]") {
+    DailyWeatherSource plain(test_field::farm_climate(), 5);
+    DailyWeatherSource over(test_field::farm_climate(), 5);
+    const int from = 300; // late October: a rainless-ish week in the natural series is not required, the sums are compared
+    for (int d = 0; d < from + 20; ++d) (void)over.record(d); // the days are read (and cached) BEFORE the override exists
+    over.add_season_override(preset("heavy_rain"), 3600.0, from);
+    CHECK(over.override_count() == 1);
+    for (int d = 0; d < from; ++d) CHECK(same(over.record(d), plain.record(d)));
+    CHECK(rain_sum(over, from + 1, from + 12) > rain_sum(plain, from + 1, from + 12) + 20.0);
+}
+
+TEST_CASE("WO2 clearing the overrides restores the natural series from that day", "[field][weather][override]") {
+    DailyWeatherSource plain(test_field::farm_climate(), 5);
+    DailyWeatherSource over(test_field::farm_climate(), 5);
+    over.add_season_override(preset("heavy_rain"), 3600.0, 300);
+    const double wet = rain_sum(over, 301, 310);
+    over.clear_overrides(300);
+    CHECK(over.override_count() == 0);
+    for (int d = 295; d < 330; ++d) CHECK(same(over.record(d), plain.record(d)));
+    CHECK(wet > rain_sum(plain, 301, 310));
+}
+
+TEST_CASE("WO3 the override result does not depend on the order the days are read in", "[field][weather][override]") {
+    DailyWeatherSource fwd(test_field::farm_climate(), 5);
+    DailyWeatherSource back(test_field::farm_climate(), 5);
+    fwd.add_season_override(preset("snow"), 1800.0, 320);
+    back.add_season_override(preset("snow"), 1800.0, 320);
+    std::vector<DailyWeather> a;
+    for (int d = 310; d < 340; ++d) a.push_back(fwd.record(d));
+    for (int d = 339; d >= 310; --d) CHECK(same(back.record(d), a[static_cast<std::size_t>(d - 310)]));
+}
