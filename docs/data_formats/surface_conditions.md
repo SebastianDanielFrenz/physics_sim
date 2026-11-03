@@ -69,6 +69,7 @@ Class object:
 | `soil` | object, required for `soil`/`vegetated` | `ksat_mm_h` > 0 (saturated conductivity), `theta_fc` and `theta_sat` volumetric, `0 < theta_fc < theta_sat <= 1` |
 | `canopy` | object, required for `vegetated` | `capacity_mm` > 0 (interception store) |
 | `friction` | object, optional for non-static | `damp`/`wet`/`wet_grass`/`snow_packed`, relative to the class's own dry level (defaults 0.85 / 0.71 / 0.67 / 0.35); the other W8/W9 condition keys stay reserved |
+| `maintenance` | object, optional for non-static | winter maintenance (road tiers): `plough_after_s` > 0, `residual_mm` >= 0 (default 0.5), optional `salt` {`melt_factor` >= 1, `duration_s` > 0, `effective_above_c` > `ineffective_below_c`, optional `melt_point_depression_k` >= 0 (default 0)}; see "Maintenance (road tiers)" |
 | `source` | string or object | provenance |
 
 A static class takes none of the fields above.
@@ -168,12 +169,61 @@ snow) adds to it. The pack sits at 0 C and melts from two sides:
 
 Melt water joins the liquid input (under the canopy). Density: fresh snow
 100 kg/m3, settling toward 300 kg/m3 with a 2-day time constant [D/AS]. No frost,
-ice, refreeze, sublimation, drifting or clearing. Because each class has its own
+ice, refreeze, sublimation or drifting; clearing exists only for a class with a
+`maintenance` block (next section). Because each class has its own
 surface temperature, a warm road loses its snow before the grass next to it; the
 grid steps on environment time, so the time scale speeds accumulation and melt
 alike.
 
 The snapshot's `condition` is 3 while the class has any snow cover.
+
+### Maintenance (road tiers)
+
+Major roads are ploughed some time after snowfall, minor roads later, so
+clearing is per surface CLASS and grip follows the same snow pack the visuals
+read. `data/surfaces/surfaces.json` and this file carry six copies of asphalt,
+`road_t1` (motorway / Kraftfahrstrasse) to `road_t6` (every other paved road);
+they sort after every existing name, so no `SurfaceId` moved (asphalt 0 ... low_mu 5,
+road_t1..road_t6 = 6..11). Their thermal, water and friction numbers are the asphalt
+ones [AS]; they differ only by the block
+
+    "maintenance": { "plough_after_s": 10800, "residual_mm": 0.5,
+                     "salt": { "melt_factor": 3.0, "duration_s": 21600,
+                               "effective_above_c": -5.0, "ineffective_below_c": -10.0,
+                               "melt_point_depression_k": 5.0 } }
+
+A class without the block has no extra state, no hash fold and is bit-identical to
+before. The rule, per grid step (`step_column`, environment time):
+
+1. State `maint_clock_s` = environment seconds the pack has lain above
+   `residual_mm` (it grows by `dt` each step that ends with `snow_mm > residual_mm`
+   and is 0 otherwise) and `salt_left_s` = remaining salt time. Both are hashed
+   only for a class with `maintenance`.
+2. Salt, while `salt_left_s > 0`: `m = 1 + (melt_factor - 1) eff`,
+   `eff = clamp((T_s - ineffective_below_c) / (effective_above_c - ineffective_below_c), 0, 1)`
+   with `T_s` the surface node temperature in C at the start of the step. `m` multiplies
+   BOTH the ground-contact conductance (30 W/(m2 K)) and the degree-day melt, so the
+   surface energy balance and the melt stay consistent. `salt_left_s` falls by `dt`, floor 0.
+3. Plough, after the melt: when the clock (including this step) reaches
+   `plough_after_s`, `snow_mm = min(snow_mm, residual_mm)`, the clock restarts at 0
+   and `salt_left_s = salt.duration_s`. A pack that keeps growing is therefore
+   ploughed each time it has lain above the residual for `plough_after_s`; a pack that
+   melts first is never ploughed.
+
+The removed snow leaves the class: there is no snow ledger, none of it becomes film
+water, and no heat is booked for the removal. Tiers (owner decision 2026-11-02,
+[AS]): `plough_after_s` T1 3 h, T2 4.5 h, T3 6 h, T4 8 h, T5 10 h, T6 12 h; residual 0.5 mm;
+salt `melt_factor` 3, 6 h, fully effective at and above -5 C, no effect at and below
+-10 C. The pack melts only from a surface above 0 C (or air above 0 C), so a factor alone
+could not act at subzero temperatures, which is where salt is used. `melt_point_depression_k`
+([AS] 5 K, an addition to the owner's list, 0 switches it off) lowers the pack's melt point by
+`eff` times it while salt is active: the ground-contact melt is driven by
+`T_s + eff * depression - 0 C`, so a salted road melts snow down to about -5 C and nothing
+below it. Limits: no ice or refreeze, salt has no friction effect of its own, the plough
+removes the whole excess instantly and without any heat exchange, the plough clock counts only how
+long snow lay (not how much fell), and `dt_env_s` should stay at its default 60 s: the melt
+sink is lagged (like the latent flux), and with the salt factor 3 a large step would over-correct
+the thin surface cell.
 
 The published wet weight of a class (the condition grip and the snapshot's
 `condition`): sealed `W / W_tex`; soil/vegetated
@@ -260,6 +310,6 @@ class without valid `soil` fields or (vegetated) without `canopy`; `mtd`/texture
 storage on a soil class; a friction level outside (0, 2]; an `extends` error.
 Keys of later increments are rejected by name with "is part of
 physics_sim.surface_conditions/1 but is not implemented before ...": `crr` (W8),
-`abrasiveness` (W10), `maintenance` (later) and the `friction` condition keys
+`abrasiveness` (W10) and the `friction` condition keys
 `slush`, `snow_loose`, `snow_packed`, `ice`, `wet_ice`, `frost`, `black_ice`,
 `mud` (W8/W9).

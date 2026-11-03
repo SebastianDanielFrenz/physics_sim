@@ -67,6 +67,30 @@ SurfaceFrictionDesc read_friction(ObjectReader& parent, const std::string& ctx, 
     return f;
 }
 
+MaintenanceDesc read_maintenance(ObjectReader& parent, const std::string& ctx, const std::string& origin) {
+    const json& j = parent.object("maintenance");
+    ObjectReader r(j, ctx + ".maintenance", origin);
+    MaintenanceDesc m;
+    m.present = true;
+    m.plough_after_s = r.number("plough_after_s", true, 0.0);
+    m.residual_mm = r.number("residual_mm", false, 0.5);
+    if (r.has("salt")) {
+        const json& sj = r.object("salt");
+        ObjectReader sr(sj, ctx + ".maintenance.salt", origin);
+        m.salt.present = true;
+        m.salt.melt_factor = sr.number("melt_factor", true, 1.0);
+        m.salt.duration_s = sr.number("duration_s", true, 0.0);
+        m.salt.effective_above_c = sr.number("effective_above_c", true, 0.0);
+        m.salt.ineffective_below_c = sr.number("ineffective_below_c", true, 0.0);
+        m.salt.melt_point_depression_k = sr.number("melt_point_depression_k", false, 0.0);
+        sr.skip("source");
+        sr.finish();
+    }
+    r.skip("source");
+    r.finish();
+    return m;
+}
+
 SurfaceClassDesc read_class(const std::string& name, const json& j, const std::string& origin) {
     const std::string ctx = "surfaces." + name;
     ObjectReader r(j, ctx, origin);
@@ -82,11 +106,10 @@ SurfaceClassDesc read_class(const std::string& name, const json& j, const std::s
     // Keys of later increments (weather plan 7.4): a clear error, not a silent drop.
     r.reserve_for_later("crr", "W8 (condition rolling resistance)", kFormat);
     r.reserve_for_later("abrasiveness", "W10 (tyre wear)", kFormat);
-    r.reserve_for_later("maintenance", "a later increment (winter maintenance)", kFormat);
 
     if (c.kind == SurfaceKind::Static) {
         for (const char* k : {"albedo", "emissivity", "layer", "deep", "mtd_mm", "texture_storage_mm", "drainage",
-                              "soil", "canopy", "friction"})
+                              "soil", "canopy", "friction", "maintenance"})
             if (r.has(k)) r.fail(std::string("a static class takes no field (\"") + k + "\")");
     } else {
         c.albedo = r.number("albedo", true, 0.0);
@@ -113,6 +136,7 @@ SurfaceClassDesc read_class(const std::string& name, const json& j, const std::s
             }
         }
         if (r.has("friction")) c.friction = read_friction(r, ctx, origin);
+        if (r.has("maintenance")) c.maintenance = read_maintenance(r, ctx, origin);
     }
     c.source = source_text(r.child("source"));
     r.finish();

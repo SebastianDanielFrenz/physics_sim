@@ -1199,7 +1199,7 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
 // Windows-vs-Linux hash compare (coordinator).
 TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4, 10 and 24 workers and really steps the grid",
           "[determinism][environment][vehicle][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0xa413eb2036d292e8ULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0xcef127a9c2643925); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x64326439851d8dfc): re-recorded 2026-10-05 (W6: water film/drain/soil state hashed, wet grip active; was 0x030df2de793ce721 at W5)
+    constexpr std::uint64_t kRecorded = 0xc6e2566f58149e42ULL; // 2026-11-02 road tiers: surfaces.json gained road_t1..road_t6, so the grid folds 12 classes instead of 6 (was 0xa413eb2036d292e8); 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0xcef127a9c2643925); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x64326439851d8dfc): re-recorded 2026-10-05 (W6: water film/drain/soil state hashed, wet grip active; was 0x030df2de793ce721 at W5)
     const std::uint64_t reference = run_scenario_file("environment_surface.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);
@@ -1232,7 +1232,7 @@ TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4,
     const ps::environment::EnvironmentSnapshot* s = world.environment_snapshot();
     REQUIRE(s != nullptr);
     CHECK(s->has_surfaces);
-    CHECK(s->surface_count == 6);
+    CHECK(s->surface_count == 12);
     CHECK(s->surfaces[0].has_state);
     // The grid index matches the published env time (it may be negative: the climate epoch sets t = 0).
     const ps::environment::ConditionGrid* g = world.environment()->surface_conditions();

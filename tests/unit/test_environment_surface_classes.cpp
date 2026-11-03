@@ -5,8 +5,8 @@
 //
 // What the checks are, and why the data file needs them (docs/data_formats/surface_conditions.md, CLAUDE.md "[C] cited
 // and read, [D] derived, [M] from memory, [AS] assumed"):
-//  C1 the file loads and holds exactly the 13 classes (asphalt, cobblestone, compacted, concrete, dirt, field, grass,
-//     gravel, kerb, low_mu, paving_stones, sand, sett);
+//  C1 the file loads and holds exactly the 19 classes (asphalt, cobblestone, compacted, concrete, dirt, field, grass,
+//     gravel, kerb, low_mu, paving_stones, road_t1..road_t6 (road tiers 2026-11-02), sand, sett);
 //  C2 the seven new classes have the kinds the racing_game request fixed (concrete/paving_stones/sett/cobblestone
 //     sealed, gravel/compacted/sand soil) and every field their kind requires;
 //  C3 provenance. The source of every non-static class is an object whose strings all start with [C], [D], [M] or
@@ -16,7 +16,7 @@
 //     names no existing field is an error too (a stale entry after a rename);
 //  C4 value plausibility of the data itself (friction.damp >= friction.wet, because ConditionGrip clamps the wet level to
 //     damp; theta_fc < theta_sat; the new classes' friction ratios in (0, 2]);
-//  C5 a 3-day grid run with all 13 classes mapped (surface_names = the 13 names) and a diurnal forcing with a 3 h rain:
+//  C5 a 3-day grid run with all 19 classes mapped (surface_names = the 19 names) and a diurnal forcing with a 3 h rain:
 //     surface temperatures finite and between the air and air + 60 K at 14:00 (and above air - 12 K at night), film depth
 //     >= 0 and > 0 on every sealed class right after the rain, soil moisture inside [0, theta_sat], and the condition
 //     grip factor of every class inside (0, 1.15] (sealed < 1 when wet, sand > 1).
@@ -68,7 +68,8 @@ json load_json() {
 const std::vector<std::string> kNewClasses = {"concrete", "paving_stones", "sett", "cobblestone", "gravel", "compacted", "sand"};
 
 const std::vector<std::string> kAllClasses = {"asphalt", "cobblestone", "compacted", "concrete", "dirt",   "field", "grass",
-                                              "gravel",  "kerb",        "low_mu",    "paving_stones", "sand", "sett"};
+                                              "gravel",  "kerb",        "low_mu",    "paving_stones", "road_t1", "road_t2",
+                                              "road_t3", "road_t4", "road_t5", "road_t6", "sand", "sett"};
 
 bool is_new_class(const std::string& n) { return std::find(kNewClasses.begin(), kNewClasses.end(), n) != kNewClasses.end(); }
 
@@ -148,7 +149,7 @@ int class_index(const ConditionGrid& g, const std::string& name) {
 
 } // namespace
 
-TEST_CASE("Surface classes C1: the shipped default.json loads with all 13 classes", "[environment][surface][io]") {
+TEST_CASE("Surface classes C1: the shipped default.json loads with all 19 classes", "[environment][surface][io]") {
     const SurfaceConditionsDesc d = io::load_surface_conditions_json(default_path());
     REQUIRE(d.classes.size() == kAllClasses.size());
     // sorted by name (the loader sorts)
@@ -271,14 +272,14 @@ TEST_CASE("Surface classes C4: friction levels and soil bounds of the data itsel
         if (c.kind == SurfaceKind::Sealed) CHECK(c.friction.wet < 1.0);
 }
 
-TEST_CASE("Surface classes C5: a grid run with all 13 classes stays finite and plausible", "[environment][surface][io]") {
+TEST_CASE("Surface classes C5: a grid run with all 19 classes stays finite and plausible", "[environment][surface][io]") {
     const SurfaceConditionsDesc d = io::load_surface_conditions_json(default_path());
     ConditionGridDesc gd;
     gd.dt_env_s = 60.0;
     gd.spinup_s = 2.0 * 86400.0;
     gd.max_fast_forward_s = 30.0 * 86400.0;
     ConditionGrid grid(d, kAllClasses, gd);
-    REQUIRE(grid.class_count() == 13);
+    REQUIRE(grid.class_count() == 19);
     CHECK(grid.unmapped_names().empty());
     CHECK(grid.unused_entries().empty());
     const DiurnalRain src;

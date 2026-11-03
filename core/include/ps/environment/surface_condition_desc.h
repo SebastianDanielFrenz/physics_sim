@@ -61,6 +61,24 @@ struct SoilDesc {
     real theta_sat = 0.0;    // saturation, (theta_fc, 1]
 };
 
+// Winter maintenance of one class (road tiers; docs/data_formats/surface_conditions.md "Maintenance (road tiers)").
+// A class without a "maintenance" block has `present == false`: no state, no hash fold, bit-identical behaviour.
+struct SaltDesc {
+    bool present = false;
+    real melt_factor = 1.0;               // >= 1: multiplier on the melt rate while salt is active
+    real duration_s = 0.0;                // > 0: env seconds one ploughing's salt lasts
+    real effective_above_c = 0.0;         // surface temperature at/above which salt is fully effective
+    real ineffective_below_c = 0.0;       // surface temperature at/below which salt has no effect (< effective_above_c)
+    real melt_point_depression_k = 0.0;   // >= 0: lowers the pack's melt point by eff * this while salt is active (0 = off)
+};
+
+struct MaintenanceDesc {
+    bool present = false;
+    real plough_after_s = 0.0;            // > 0: env seconds snow must lie above the residual before the plough runs
+    real residual_mm = 0.5;               // >= 0: water equivalent left after ploughing
+    SaltDesc salt;
+};
+
 struct SurfaceClassDesc {
     std::string name;
     SurfaceKind kind = SurfaceKind::Static;
@@ -84,6 +102,8 @@ struct SurfaceClassDesc {
     real canopy_capacity_mm = 0.0;
     // Friction levels (defaults are the plan's reference-tyre values).
     SurfaceFrictionDesc friction;
+    // Optional winter maintenance (road tiers).
+    MaintenanceDesc maintenance;
 
     std::string source;
 };
