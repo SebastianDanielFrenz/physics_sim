@@ -1,0 +1,502 @@
+{
+ "aero": {
+  "body": {
+   "angular_damping": [
+    0.15,
+    0.25,
+    0.25
+   ],
+   "drag_area_xyz_m2": [
+    0.58,
+    1.7,
+    2.6
+   ],
+   "position_local": [
+    0,
+    0,
+    0
+   ],
+   "reference_area_m2": 1.9,
+   "reference_length_m": 2.7,
+   "side_force_slope": 0.25
+  },
+  "fans": [],
+  "surfaces": [
+   {
+    "area_m2": 0.32,
+    "cd0": 0.025,
+    "cl0": -0.75,
+    "ground": {
+     "gain": 0,
+     "probe_local": [
+      0,
+      0,
+      -1
+     ],
+     "range_m": 0
+    },
+    "induced_drag": 0.09,
+    "lift_slope_per_rad": 2,
+    "max_offset_rad": 0.0,
+    "min_offset_rad": 0.0,
+    "name": "splitter",
+    "position_local": [
+     1.65,
+     0,
+     -0.36
+    ],
+    "rate_rad_s": 0.6108652381980153,
+    "rest_angle_rad": 0.0,
+    "stall_angle_rad": 0.3,
+    "stalled_drag": 1.2
+   },
+   {
+    "area_m2": 2.8,
+    "cd0": 0.025,
+    "cl0": -0.45,
+    "ground": {
+     "gain": 0.55,
+     "probe_local": [
+      0,
+      0,
+      -1
+     ],
+     "range_m": 0.65
+    },
+    "induced_drag": 0.09,
+    "lift_slope_per_rad": 1,
+    "max_offset_rad": 0.0,
+    "min_offset_rad": 0.0,
+    "name": "underfloor",
+    "position_local": [
+     0.1,
+     0,
+     -0.39
+    ],
+    "rate_rad_s": 0.6108652381980153,
+    "rest_angle_rad": 0.0,
+    "stall_angle_rad": 0.3,
+    "stalled_drag": 1.2
+   },
+   {
+    "area_m2": 0.516,
+    "cd0": 0.025,
+    "cl0": -0.15,
+    "ground": {
+     "gain": 0,
+     "probe_local": [
+      0,
+      0,
+      -1
+     ],
+     "range_m": 0
+    },
+    "induced_drag": 0.09,
+    "lift_slope_per_rad": 4.5,
+    "max_lift_m": 0.28,
+    "max_offset_rad": 0.9599310885968813,
+    "min_offset_rad": -0.13962634015954636,
+    "name": "rear_wing",
+    "position_local": [
+     -1.714,
+     0,
+     0.475
+    ],
+    "rate_rad_s": 0.6108652381980153,
+    "rest_angle_rad": 0.13962634015954636,
+    "stall_angle_rad": 0.3,
+    "stalled_drag": 1.2
+   }
+  ],
+  "wake": {
+   "deficit": 0.28,
+   "expansion": 0.12,
+   "length_m": 24,
+   "radius_m": 1,
+   "turbulence": 0.15
+  }
+ },
+ "brake_system": {
+  "corners": [
+   {
+    "max_torque_nm": 3600.0,
+    "wheel": "FL"
+   },
+   {
+    "max_torque_nm": 3600.0,
+    "wheel": "FR"
+   },
+   {
+    "max_torque_nm": 2400.0,
+    "wheel": "RL"
+   },
+   {
+    "max_torque_nm": 2400.0,
+    "wheel": "RR"
+   }
+  ],
+  "handbrake": {
+   "max_torque_nm": 1600.0,
+   "wheels": [
+    "RL",
+    "RR"
+   ]
+  },
+  "type": "direct_torque"
+ },
+ "contents_mass": {
+  "enabled": true,
+  "update_threshold_kg": 0.1
+ },
+ "controllers": [
+  {
+   "creep_torque_nm": 60.0,
+   "engine": "engine",
+   "gearbox": "gearbox",
+   "id": "tcu",
+   "kickdown_max_rpm": 7650.0,
+   "kickdown_throttle": 0.9,
+   "launch": {
+    "anti_stall_rpm": 700.0,
+    "bite_rpm": 1150.0,
+    "full_rpm_max": 4250.0,
+    "full_rpm_min": 1850.0,
+    "lock_slip_rpm": 100.0
+   },
+   "manual_timeout_s": 0.0,
+   "min_time_in_gear_s": 0.4,
+   "schedule": {
+    "down_rpm_at_full_throttle": 3850.0,
+    "down_rpm_at_zero_throttle": 1300.0,
+    "up_rpm_at_full_throttle": 7850.0,
+    "up_rpm_at_zero_throttle": 2400.0
+   },
+   "sport_schedule": {
+    "down_rpm_at_full_throttle": 4800.0,
+    "down_rpm_at_zero_throttle": 2200.0,
+    "up_rpm_at_full_throttle": 8000.0,
+    "up_rpm_at_zero_throttle": 3350.0
+   },
+   "type": "automatic_tcu",
+   "upshift_torque_fraction": 0.4
+  },
+  {
+   "id": "assists",
+   "ref": "electronics_assist_unit_racing_abs_esc.json",
+   "type": "electronics"
+  },
+  {
+   "id": "epb",
+   "ref": "../../../../data/electronics/epb_generic.json",
+   "type": "electronics"
+  },
+  {
+   "id": "hybrid_modes",
+   "ref": "drive_modes_hybrid.json",
+   "type": "electronics"
+  }
+ ],
+ "cooling_system": "cooling_hyper.json",
+ "engine_thermal_start": "warm",
+ "format": "physics_sim.vehicle/2",
+ "hitch_points": [
+  {
+   "class": "../../../../data/hitch_classes/ball.json",
+   "max_tongue_load_n": 490,
+   "max_towed_mass_kg": 750,
+   "name": "socket_tow_rear",
+   "position": [
+    -2.114,
+    0.0,
+    -0.009
+   ],
+   "role": "towing"
+  }
+ ],
+ "hitch_points_source": "racing_game [AS]: a tow ball on the rig's socket_tow_rear (data/models/*/*.rig.json) moved to the chassis origin the way vehicle_visual.gd places the model (rig position + the mean of wheel attachment - rig wheel pivot), centred on y = 0 where the rig's recovery eye sits off centre, and RAISED in z so the ball sits at the tipper's coupler height (0.50 m above the ground at rest; ball height per car measured by rg_unit_tests [trailer_diag]): a tandem trailer on four stiff wheels is pitch-stiff, and a ball lower than its coupler makes the hitch push the nose down and lift the car's rear [M: tongue load -4.3 kN behind the saloon with the ball at 0.33 m, +0.1 kN at 0.475 m]. Ratings are assumed for the body class (braked trailer mass, tongue load = 75 kg x g for a saloon, less for the small cars); the hitch ratings never refuse a hitch, they only grade the limit findings.",
+ "name": "car_hyper_n2o",
+ "powertrain": {
+  "compliance": "rigid",
+  "components": [
+   {
+    "id": "engine",
+    "ref": "engine_hyper_v8_one1_audio.json",
+    "thermal": "thermal_hyper_v8_one1.json",
+    "type": "engine"
+   },
+   {
+    "id": "gearbox",
+    "ref": "gearbox_hyper_7dct.json",
+    "type": "gearbox"
+   },
+   {
+    "carrier_axis_local": [
+     0,
+     1,
+     0
+    ],
+    "carrier_inertia_kgm2": 0.02,
+    "efficiency": 0.97,
+    "id": "diff",
+    "kind": "torsen",
+    "ratio": 2.68,
+    "torque_bias_ratio": 2.5,
+    "type": "differential"
+   },
+   {
+    "capacity_nm": 1500.0,
+    "channel": "park_lock",
+    "id": "park",
+    "max_engage_speed_rad_s": 1.0,
+    "static_factor": 1.0,
+    "type": "park_lock"
+   },
+   {
+    "capacity_kg": 56.236875,
+    "fuel": "../../../../data/fuels/e5.json",
+    "id": "tank",
+    "initial_kg": 44.9895,
+    "type": "fuel_tank"
+   },
+   {
+    "id": "n2o_bottle",
+    "ref": "../../../../data/n2o_bottles/bottle_15lb_950psi.json",
+    "type": "n2o_bottle"
+   },
+   {
+    "controller": "nitrous_controller_custom_wet_800.json",
+    "id": "n2o_kit",
+    "ref": "../../../../data/nitrous_kits/custom_wet_plate_800_bigjet.json",
+    "type": "nitrous_kit"
+   },
+   {
+    "capacity_kwh": 28.0,
+    "id": "conversion_battery",
+    "initial_soc": 0.9,
+    "mass_kg": 231.0,
+    "max_charge_w": 320000.0,
+    "max_discharge_w": 300000.0,
+    "type": "battery"
+   },
+   {
+    "battery": "conversion_battery",
+    "crank_assist": false,
+    "efficiency": 0.97,
+    "id": "conversion_motor",
+    "inertia_kgm2": 0.09,
+    "mass_kg": 95.0,
+    "max_power_w": 450000.0,
+    "max_rpm": 15000.0,
+    "peak_torque_nm": 650.0,
+    "regen_torque_nm": 300.0,
+    "type": "electric_motor"
+   },
+   {
+    "battery": "conversion_battery",
+    "crank_assist": true,
+    "efficiency": 0.95,
+    "id": "conversion_generator",
+    "inertia_kgm2": 0.1,
+    "mass_kg": 30,
+    "max_power_w": 50000,
+    "max_rpm": 12000,
+    "peak_torque_nm": 200,
+    "regen_torque_nm": 200,
+    "type": "electric_motor"
+   },
+   {
+    "charge_optimize_efficiency": true,
+    "charge_power_w": 50000,
+    "charge_target_soc": 0.8,
+    "crank_timeout_s": 5,
+    "id": "conversion_control",
+    "low_soc": 0.2,
+    "stop_delay_s": 2,
+    "type": "hybrid_control"
+   },
+   {
+    "efficiency": 0.98,
+    "id": "conversion_reduction",
+    "inertia_in_kgm2": 0.02,
+    "inertia_out_kgm2": 0.02,
+    "ratio": 1.6119402985074627,
+    "type": "gear_pair"
+   }
+  ],
+  "fluid": [
+   [
+    "tank.out",
+    "engine.fuel"
+   ],
+   [
+    "n2o_bottle.out",
+    "n2o_kit.n2o"
+   ],
+   [
+    "n2o_kit.out",
+    "engine.nitrous"
+   ]
+  ],
+  "rotor_reaction": true,
+  "shafts": [
+   {
+    "ports": [
+     "engine.crank",
+     "conversion_generator.shaft",
+     "gearbox.in"
+    ]
+   },
+   {
+    "ports": [
+     "gearbox.out",
+     "diff.carrier",
+     "park.shaft",
+     "conversion_reduction.out"
+    ]
+   },
+   {
+    "ports": [
+     "diff.left",
+     "wheel:RL"
+    ]
+   },
+   {
+    "ports": [
+     "diff.right",
+     "wheel:RR"
+    ]
+   },
+   {
+    "ports": [
+     "conversion_motor.shaft",
+     "conversion_reduction.in"
+    ]
+   }
+  ]
+ },
+ "source": "TEST FIXTURE (hybrid crank runaway, owner drive 2026-11-06, bug_logs/2026-11-06_racing_game_engine_failure): the garage car the owner drove (racing_game release 20261104-1825, physics_sim 603fc5f), paths rewritten to this folder and data/, tyre_spec replaced by the shipped hyper tyres. car_hyper.json plus an ~800 hp nitrous shot (N2O plan N7, owner request 2026-10-06 'make it 800'): components n2o_bottle (../n2o_bottles/bottle_15lb_950psi.json, 15 lb at 950 psig, full) and n2o_kit (../nitrous_kits/custom_wet_plate_800_bigjet.json, 3.81/1.535 mm jets re-sized for the larger wastegate below, with its default controller ../nitrous_controllers/custom_wet_800.json - arm channel nitrous_arm, default off, progressive, 6 deg retard) and the fluid links n2o_bottle.out -> n2o_kit.n2o, n2o_kit.out -> engine.nitrous. The kit fuel is the engine's burnt fuel from the car's own tank. TURBO CHANGE [AS] (N7b, owner option b: about 800 hp at the 1.8 bar target without the wastegate saturating): the engine component carries the vehicle-level 'turbo_configuration' override ../turbo_configurations/hyper_twin_n2o.json -> ../turbos/hyper_turbo_n2o.json, the stock turbo with a 1.26 x larger wastegate (1.4875e-3 m2 per turbo instead of 1.18e-3); engines/hyper_v8_one1_audio.json, car_hyper.json and the stock turbo files are unchanged. DRIVELINE CHANGE [AS]: clutch capacity_nm 1650 -> 3650 (the shot's peak crank torque on the dyno-held V8 is about 3150 N*m at 3000 rpm, the lowest rpm of the controller's window; 1.15 x 3150 = 3622 -> 3650; the stock 1650 N*m would slip the clutch under the shot; was 3400 for the previous 3.6 mm jet with the stock gate, whose shot peak was 2950 N*m). Nothing else in the driveline is changed: gearbox synchro capacities only act while the clutch is open during a shift, the torque-following auto-clutch close takes its target from the engine's torque demand (which includes the N2O torque) plus max_sync_torque_nm, the Torsen and the park lock are not in the torque path under power; the whole-car pull in tests/validation/test_car_hyper_n2o.cpp holds the clutch locked. car_hyper source: Fictional Sculpted A hypercar, author-designed data rather than measured manufacturer specifications. Chassis mass 1500 kg, 42/58 front/rear static split, 2.70 m wheelbase, tracks 1.70/1.65 m, tyre radii 0.347/0.364 m and widths 0.265/0.325 m match the art rig. Chassis origin is the mass centre, front/rear axle x=+1.566/-1.134; the adapter shifts the complete model +0.216 m to align all four wheel arches. Chassis spawn height 0.50 m. Spring static compression 0.035 m: k=(1500*9.81*axle_fraction/2)/0.035. Attachment z=radius-0.50-0.035, so each axle settles at the correct visual ride height. Damper bump/rebound target damping ratios 0.45/0.60 about each corner mass. One:1-inspired simulated 5.1 L V8 (engines/hyper_v8_one1_audio.json, maps generated from its cycle model at load), 8250 rpm limiter; authored twin-turbo approximation with separate hardware/configuration files, cycle-generated E5 calibration producing net 1371 Nm at 6000 rpm and 1000.2 kW at 7500 rpm at ISA (assumed internals; actual E5 knock safety not validated), 7-speed assisted manual, rear drive, Torsen ratio 2.5. Tyre coefficients inherit the tested sedan model with explicit new dimensions, reference loads, stiffness and friction scales; not a measured tyre fit. Authored, uncalibrated coefficient aero: body drag/side force, splitter, bounded ground-effect underfloor and rate-limited active rear wing; fictional values, not measured One:1 aerodynamics. No suction fan fitted. Simulated engine provides live pipe-network engine audio. Fuel: authored 75 L E5 tank, initial 60 L; fuel consumption uses the simulated engine model. Game variant: generated preliminary turbo maps, with explicit authored fallback outside supported coverage; original declared power is a historical calibration, not the new dyno result. [AS] x1.3 springs, x1.14 dampers, 2026-10-12: keep the rear off the bump stop to ~450 km/h; owner report of bounce above 390 km/h. All four spring_rate values x1.3 (88290 -> 114777 front, 121924.29 -> 158501.57 rear), damper_bump_rate/damper_rebound_rate x sqrt(1.3) = 1.1402 (damping ratio unchanged); static compression is now 0.035/1.3 = 0.02692 m, so attachment_local z is raised by 0.035 - 0.02692 = 0.008077 m (front -0.188 -> -0.179923, rear -0.171 -> -0.162923) to keep the static ride height and the chassis spawn height unchanged. No spring_preload is used. Engine thermal model (owner decision 2026-10-12): cooling_system data/cooling_systems/hyper.json (radiator sized from the heat load, see its source note) and engine_thermal data/engine_thermal/hyper_v8_one1.json; the car starts warm (engine_thermal_start warm, change it here for a cold soak). [AS] Assists (2026-10-13, physics_sim 46e0ea0): the Racing assist unit is attached (controllers entry 'assists', modes Off/On/Relaxed/Sport/Drift, default On, rear-wing automation on), mirroring physics_sim's own car_hyper files; the game no longer sets a traction-control default or drives the rear wing itself. Tyres (2026-10-13, universal tyres): no tyre files - each wheel carries a tyre_spec (compound + width/aspect/rim) that rg::load_vehicle builds in memory from data/tyres/families.json (tyre_families); a raw ps::io::load_vehicle_json of this file is rejected (physics_sim 6c5bb87: a wheel without a tyre is a load error); rg::load_vehicle injects the tyres through VehicleLoadOptions::tyres.",
+ "steering": {
+  "ackermann_fraction": 1.0,
+  "max_wheel_angle": 0.5585053606381855,
+  "rear_steer_fraction": 0.0,
+  "steer_rate_limit": 0.0
+ },
+ "wheels": [
+  {
+   "arb_partner": 1,
+   "attachment_local": [
+    1.566,
+    0.85,
+    -0.179923077
+   ],
+   "is_front": true,
+   "name": "FL",
+   "steered": true,
+   "suspension": {
+    "arb_rate": 22000.0,
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "bump_stop_rate": 600000.0,
+    "damper_bump_rate": 5411,
+    "damper_rebound_rate": 7215,
+    "spring_rate": 114777.0,
+    "travel_max": 0.105
+   },
+   "wheel_inertia": 1.3858394339622642,
+   "wheel_mass": 20.0,
+   "wheel_radius": 0.347,
+   "wheel_width": 0.305,
+   "tyre": "../../../../data/tyres/hyper_front_265_35r20.json"
+  },
+  {
+   "arb_partner": 0,
+   "attachment_local": [
+    1.566,
+    -0.85,
+    -0.179923077
+   ],
+   "is_front": true,
+   "name": "FR",
+   "steered": true,
+   "suspension": {
+    "arb_rate": 22000.0,
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "bump_stop_rate": 600000.0,
+    "damper_bump_rate": 5411,
+    "damper_rebound_rate": 7215,
+    "spring_rate": 114777.0,
+    "travel_max": 0.105
+   },
+   "wheel_inertia": 1.3858394339622642,
+   "wheel_mass": 20.0,
+   "wheel_radius": 0.347,
+   "wheel_width": 0.305,
+   "tyre": "../../../../data/tyres/hyper_front_265_35r20.json"
+  },
+  {
+   "arb_partner": 3,
+   "attachment_local": [
+    -1.134,
+    0.825,
+    -0.162923077
+   ],
+   "is_front": false,
+   "name": "RL",
+   "steered": false,
+   "suspension": {
+    "arb_rate": 18000.0,
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "bump_stop_rate": 600000.0,
+    "damper_bump_rate": 7473,
+    "damper_rebound_rate": 9964,
+    "spring_rate": 158501.5714285714,
+    "travel_max": 0.105
+   },
+   "wheel_inertia": 1.4921087999999998,
+   "wheel_mass": 24.0,
+   "wheel_radius": 0.364,
+   "wheel_width": 0.305,
+   "tyre": "../../../../data/tyres/hyper_rear_325_30r21.json"
+  },
+  {
+   "arb_partner": 2,
+   "attachment_local": [
+    -1.134,
+    -0.825,
+    -0.162923077
+   ],
+   "is_front": false,
+   "name": "RR",
+   "steered": false,
+   "suspension": {
+    "arb_rate": 18000.0,
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "bump_stop_rate": 600000.0,
+    "damper_bump_rate": 7473,
+    "damper_rebound_rate": 9964,
+    "spring_rate": 158501.5714285714,
+    "travel_max": 0.105
+   },
+   "wheel_inertia": 1.4921087999999998,
+   "wheel_mass": 24.0,
+   "wheel_radius": 0.364,
+   "wheel_width": 0.305,
+   "tyre": "../../../../data/tyres/hyper_rear_325_30r21.json"
+  }
+ ]
+}

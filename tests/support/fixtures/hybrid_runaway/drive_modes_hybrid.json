@@ -1,0 +1,29 @@
+{
+ "format": "physics_sim.electronics/1",
+ "kind": "drive_modes",
+ "name": "Hybrid driving modes",
+ "default_mode": "normal",
+ "modes": {
+  "eco": {
+   "launch_control_allowed": false,
+   "launch_control_default": false
+  },
+  "normal": {
+   "launch_control_allowed": false,
+   "launch_control_default": false
+  },
+  "sport": {
+   "launch_control_allowed": true,
+   "launch_control_default": true
+  },
+  "racing": {
+   "launch_control_allowed": true,
+   "launch_control_default": true
+  },
+  "electric": {
+   "launch_control_allowed": false,
+   "launch_control_default": false
+  }
+ },
+ "source": "[AS] Mode availability only (electric = the pure-electric mode, ICE off and disconnected, linear pedal, B available); the hybrid supervisor owns electric priority, combustion scheduling and neutral charging. Automatic schedule load uses combined available power. Fitted Launch Control is available in Sport/Racing only; Eco/Normal/Electric disable it."
+}

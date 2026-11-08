@@ -186,7 +186,15 @@ public:
         // orifice's flow sensitivity is much greater than density alone.
         const real flow_gain=p_im>real(0.0) && charge_old>p_im ?
             real(1.0)+real(0.5)*p_im/std::max(ambient_pa*real(0.001),charge_old-p_im):real(1.0);
-        const real slope=compressor_stage_used ? std::max(real(0),stage_slope*flow_gain/std::max(ambient_pa,charge_old)) : !overspeed ? real(0.0) :
+        // The analytic overspeed term is d(head)/d(charge) of the parabola ref*speed2*(1 - (flow/ratio)^2).
+        // Past choke (corrected flow >= 1) the head is clamped to 0 and its derivative is 0, so the term
+        // must vanish there too: applying the parabola's slope beyond choke froze a charge left above the
+        // (zero) head (tau ~90 ms instead of 25 ms) while the engine drew several times the choke flow at no
+        // compressor work, and a plate toggled 0/1 on a held crank pumped energy into the rotor and charge
+        // (rotor 79.5M rpm, 4.2e5 bar; found diagnosing the 2026-11-06 hybrid key-off crank runaway,
+        // tests/unit/test_hybrid_crank_runaway.cpp).
+        const bool past_choke=corrected_flow>=real(1.0);
+        const real slope=compressor_stage_used ? std::max(real(0),stage_slope*flow_gain/std::max(ambient_pa,charge_old)) : (!overspeed || past_choke) ? real(0.0) :
             real(2.0)*desc.reference_head_pa*speed_edge*speed_edge*flow*flow*flow_gain/std::max(ambient_pa,charge_old);
         charge_pa += alpha/(real(1.0)+alpha*slope)*(desired-charge_pa);
         const real pr = std::max(real(1.0),(charge_pa+dp)/ambient_pa);

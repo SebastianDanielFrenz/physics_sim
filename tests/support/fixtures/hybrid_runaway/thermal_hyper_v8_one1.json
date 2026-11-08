@@ -1,0 +1,17 @@
+{
+ "capacity_per_l": {
+  "engine_j_k": 33762.35,
+  "oil_j_k": 8545.0
+ },
+ "displacement_l": 5.066,
+ "extends": "../../../../data/engine_thermal/class_si_passenger.json",
+ "format": "physics_sim.engine_thermal/1",
+ "pump": {
+  "l_min_per_krpm_per_l": 15.0
+ },
+ "source": "Hypercar 5.1 L twin-turbo V8 (data/engines/hyper_v8_one1_audio.json, car_hyper and car_hyper_n2o). displacement_l 5.066 [C: the engine file's own cited geometry, 8 cylinders x pi/4 x 92 mm^2 x 95.25 mm = 8 x 633.2 cm3 = 5065.6 cm3]; everything else is [AS]/[D] and says so. Engine lump 32495 J/K per litre = 164.6 kJ/K [AS]: 18 kg/L participating metal [AS: an all-aluminium block and heads, less than the class's iron-bearing 25 kg/L] x 900 J/(kg K) [C: aluminium, as the class file] = 16200, plus 4.5 L/L coolant [AS: 22.8 L, a multi-radiator hypercar loop with long lines and a larger header than the class 3.0 L/L] x 1065 kg/m3 x 3400 J/(kg K) = 16295 [class fluid values]. Oil lump 8545 J/K per litre = 43.3 kJ/K [AS]: dry sump with 2.8 L/L oil [AS: 14.2 L] x 851 kg/m3 [C class] x 2000 J/(kg K) = 4766, plus 6 kg/L crank and tank metal [AS, class] x 630 = 3780. wall_heat_fraction 0.20 is the class value and MUST stay equal to the turbo configuration's in_cylinder_wall_heat_fraction (default 0.20 in every hyper turbo configuration; the vehicle loader rejects a mismatch, one energy split one fraction), so it is not tuned; the cooling system is sized for the heat it gives (data/cooling_systems/hyper.json). The remaining numbers are the class defaults [AS] unchanged: friction_to_oil_fraction 0.30, hydrodynamic_fraction 0.5 (the generated friction map has no cold-start validation, the game starts warm), conductances per litre (block-air 7.5 W/K per L + 0.75 per m/s, oil-air 2.5 + 0.25 per m/s, oil-coolant time constant 300 s), coolant pump 10 L/min per 1000 rpm per litre (380 L/min at 7500 rpm), thermostat 88 -> 100 C with 2 K hysteresis and a 20 s wax lag. class_si_passenger.json carries their derivations.",
+ "thermostat": {
+  "full_open_c": 94.0,
+  "open_c": 82.0
+ }
+}
