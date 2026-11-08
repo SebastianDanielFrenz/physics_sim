@@ -150,6 +150,7 @@ add_executable(ps_unit_tests
   test_hybrid_charge.cpp
   test_hybrid_shift.cpp
   test_hybrid_ice_start_gear.cpp
+  test_hybrid_crank_runaway.cpp
   test_brake_blend.cpp
   test_b_mode.cpp
   test_hybrid_power_split.cpp

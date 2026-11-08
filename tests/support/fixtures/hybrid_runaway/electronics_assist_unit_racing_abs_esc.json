@@ -1,0 +1,122 @@
+{
+ "abs": {
+  "apply_rate_per_s": 15.0,
+  "default_enabled": true,
+  "front_split_max": 0.2,
+  "front_split_rate_per_s": 0.4,
+  "ki_per_s": 30.0,
+  "kp": 3.0,
+  "min_speed_mps": 2.0,
+  "reanchor_rate_per_s": 10.0,
+  "reanchor_scale": 0.05,
+  "rear_select_low": true,
+  "release_rate_per_s": 60.0,
+  "slip_floor_mps": 3.0,
+  "target_slip": 0.12
+ },
+ "aero_control": {
+  "airbrake_brake_full": 1.0,
+  "airbrake_brake_start": 0.45,
+  "airbrake_min_speed_m_s": 20.0,
+  "airbrake_offset_deg": 45.0,
+  "cruise_offset_deg": 4.0,
+  "cruise_ramp_end_m_s": 30.0,
+  "cruise_ramp_start_m_s": 10.0,
+  "default_enabled": true,
+  "launch_offset_deg": 10.0,
+  "surface": "rear_wing"
+ },
+ "esc": {
+  "brake_gain_per_rad_s": 2.0,
+  "brake_rate_per_s": 10.0,
+  "characteristic_speed_mps": 25.0,
+  "deadband_fraction": 0.1,
+  "deadband_rad_s": 0.05,
+  "default_mode": "on",
+  "max_brake": 0.8,
+  "max_lateral_accel_mps2": 8.5,
+  "min_speed_mps": 5.0,
+  "mode_params": {
+   "sport": {
+    "deadband_fraction": 0.2,
+    "deadband_rad_s": 0.1,
+    "max_brake": 0.6
+   }
+  },
+  "modes": [
+   "off",
+   "on",
+   "sport"
+  ],
+  "torque_gain_per_rad_s": 1.0
+ },
+ "format": "physics_sim.electronics/1",
+ "grade": "racing",
+ "kind": "assist_unit",
+ "launch_control": {
+  "arm_brake": 0.5,
+  "arm_max_speed_mps": 0.5,
+  "arm_throttle": 0.9,
+  "attack_rate_per_s": 20.0,
+  "clutch_down_per_s": 12.0,
+  "clutch_ramp_s": 0.25,
+  "clutch_up_per_s": 6.0,
+  "default_enabled": false,
+  "handover_speed_mps": 6.0,
+  "ki_per_s": 6.0,
+  "kp": 2.0,
+  "launch_rpm": 5000,
+  "max_launch_s": 3.0,
+  "min_fraction": 0.05,
+  "recovery_rate_per_s": 8.0,
+  "release_brake": 0.2,
+  "slip_floor_mps": 1.0,
+  "slip_target": {
+   "drift": 0.2,
+   "on": 0.1,
+   "relaxed": 0.12,
+   "sport": 0.14
+  }
+ },
+ "name": "Racing Assists with ABS and ESC",
+ "source": "racing_game-owned: physics_sim's assist_unit_racing.json (traction control, launch control and rear-wing automation unchanged, so the unit tracks physics) plus the abs and esc blocks of assist_unit_street_abs_esc.json, unchanged (rewritten 2026-10-18: the earlier copy of the racing traction-control tune had gone stale against physics, so choosing it also changed the traction-control feel). Shipped by car_hyper and car_hyper_n2o. [AS] Hybrid conversion: preserve fitted assist capabilities and adapt offered TC modes.",
+ "traction_control": {
+  "default_mode": "on",
+  "mode_params": {
+   "drift": {
+    "attack_rate_per_s": 6.0,
+    "ignition_cut": false,
+    "ki_per_s": 2.0,
+    "kp": 1.0,
+    "min_fraction": 0.35,
+    "recovery_rate_per_s": 12.0,
+    "target_slip": 0.35
+   },
+   "relaxed": {
+    "attack_rate_per_s": 15.0,
+    "ignition_cut": true,
+    "ki_per_s": 8.0,
+    "kp": 4.0,
+    "min_fraction": 0.0,
+    "recovery_rate_per_s": 8.0,
+    "target_slip": 0.12
+   },
+   "sport": {
+    "attack_rate_per_s": 10.0,
+    "ignition_cut": true,
+    "ki_per_s": 8.0,
+    "kp": 4.0,
+    "min_fraction": 0.15,
+    "recovery_rate_per_s": 10.0,
+    "target_slip": 0.18
+   }
+  },
+  "modes": [
+   "off",
+   "on",
+   "relaxed",
+   "sport",
+   "drift"
+  ]
+ }
+}

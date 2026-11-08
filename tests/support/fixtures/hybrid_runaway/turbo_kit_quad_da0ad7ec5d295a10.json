@@ -1,0 +1,17 @@
+{
+ "boost_control": {
+  "actuator_tau_s": 0.1,
+  "kd_s": 0.05,
+  "ki_per_s": 1.0,
+  "kp": 1.0,
+  "source": "[A] the hyper twin's PID (gains per unit of target_boost_bar), as physics_sim's turbo templates use it"
+ },
+ "compressible_exhaust": true,
+ "count": 4,
+ "format": "physics_sim.turbo_configuration/1",
+ "intercooler_effectiveness": 0.75,
+ "name": "kit_quad",
+ "source": "Garage turbo kit \"Quad-turbo kit\" for hyper_v8_one1_audio (data/engines/turbo_kits.json, rg::size_turbo_kit).",
+ "target_boost_bar": 5.0,
+ "turbo": "kit_turbo_595072ed84bf36a8.json"
+}
