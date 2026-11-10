@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.operation/1",
+  "name": "spray_maize_grass_herbicide",
+  "spray": {
+    "product": "maize_grass_herbicide",
+    "dose": 1.0
+  },
+  "source": "Farm needs operation: field sprayer with the maize grass herbicide at label dose."
+}

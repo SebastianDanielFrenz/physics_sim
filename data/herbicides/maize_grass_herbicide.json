@@ -1,0 +1,87 @@
+{
+  "format": "physics_sim.herbicide/1",
+  "name": "maize_grass_herbicide",
+  "moa": "group_2_als",
+  "label_rate": 1.0,
+  "targets": {
+    "annual_grass": {
+      "ed50_rel": 0.2,
+      "slope": 3.0,
+      "stage_gdd_full": 300.0,
+      "stage_gdd_zero": 700.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence of the label optimum: annual grasses at 3-4 leaves (Samson Extra 6 OD: optimum 3-4 leaves; Swiss technical information: grasses from 2 leaves to tillering), ~300 gdd after emergence.",
+        "stage_gdd_zero": "[AS] grasses past tillering escape (Swiss technical information Samson Extra), ~700 gdd."
+      }
+    },
+    "volunteer": {
+      "ed50_rel": 0.3,
+      "slope": 3.0,
+      "stage_gdd_full": 300.0,
+      "stage_gdd_zero": 700.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    },
+    "perennial": {
+      "ed50_rel": 0.6,
+      "slope": 2.0,
+      "stage_gdd_full": 300.0,
+      "stage_gdd_zero": 700.0,
+      "source": {
+        "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
+        "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
+        "stage_gdd_full": "[AS] couch grass should have 4-6 leaves (Swiss technical information Samson Extra), ~300 gdd after the shoots emerge.",
+        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+      }
+    }
+  },
+  "resistance": {
+    "ed50_factor": 50.0,
+    "source": {
+      "ed50_factor": "[AS] ED50 multiplier of the resistant biotype (target-site resistance gives resistance factors of 10 to over 100, recalled)."
+    }
+  },
+  "residual": {
+    "half_life_days": 15.0,
+    "germ_kill": 0.1,
+    "source": {
+      "half_life_days": "[AS] half-life of the soil-residual activity.",
+      "germ_kill": "[AS] share of emerging seedlings killed at full residual activity."
+    }
+  },
+  "crops": {
+    "grain_maize": {
+      "max_bbch": 18.0,
+      "damage_in": 0.0,
+      "damage_out": 0.6,
+      "source": {
+        "max_bbch": "[C] Samson 4 SC Gebrauchsanleitung (myagrar.de, 2021-01-29): maize 2- to 8-leaf stage, BBCH 12-18; Samson Extra 6 OD (agrofert.cz, 2018): maize BBCH 12-18.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    },
+    "default": {
+      "max_bbch": 0.0,
+      "damage_in": 1.0,
+      "damage_out": 1.0,
+      "source": {
+        "max_bbch": "[AS] a sulfonylurea grass herbicide is made for maize only: any other crop is never in its safe window (the farmer sprays it on maize only).",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    }
+  },
+  "damage": {
+    "dose_exponent": 1.5,
+    "source": {
+      "dose_exponent": "[AS] crop damage grows with dose^exponent (an overdose hurts more than proportionally)."
+    }
+  },
+  "source": "Farm needs (2026-11-10): a nicosulfuron-type post-emergence grass herbicide for maize (ALS, HRAC 2; Samson 4 SC class). Crop window and weed stage from the Samson 4 SC Gebrauchsanleitung; the dose response numbers are [AS]."
+}

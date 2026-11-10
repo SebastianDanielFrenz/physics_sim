@@ -253,7 +253,7 @@ def write_weeds():
         dump(os.path.join(ROOT, "weeds", w["name"] + ".json"), w)
 
 
-def herbicide(name, moa, label, targets, res_factor, half_life, germ_kill, crops, exponent, note):
+def herbicide(name, moa, label, targets, res_factor, half_life, germ_kill, crops, exponent, note, crop_src=None, target_src=None):
     t = {}
     for k, (ed50, slope, full, zero) in targets.items():
         t[k] = {"ed50_rel": ed50, "slope": slope, "stage_gdd_full": full, "stage_gdd_zero": zero,
@@ -266,6 +266,10 @@ def herbicide(name, moa, label, targets, res_factor, half_life, germ_kill, crops
         c[k] = {"max_bbch": mb, "damage_in": di, "damage_out": do,
                 "source": {"max_bbch": "[AS] last crop stage with the safe window.", "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
                            "damage_out": "[AS] ... outside the window."}}
+    for k, d in (crop_src or {}).items():
+        c[k]["source"].update(d)
+    for k, d in (target_src or {}).items():
+        t[k]["source"].update(d)
     return {
         "format": "physics_sim.herbicide/1", "name": name, "moa": moa, "label_rate": label,
         "targets": t,
@@ -283,8 +287,20 @@ def write_herbicides():
     dump(os.path.join(ROOT, "herbicides", "grass_herbicide.json"),
          herbicide("grass_herbicide", "group_1_accase", 1.0,
                    {"annual_grass": (0.25, 3.0, 400.0, 900.0), "volunteer": (0.3, 3.0, 400.0, 900.0), "perennial": (0.8, 2.0, 400.0, 900.0)},
-                   100.0, 10.0, 0.2, {"winter_wheat": (39.0, 0.0, 0.5), "default": (30.0, 0.05, 0.8)}, 1.5,
-                   "F1c herbicide: a generic post-emergence grass herbicide (ACCase type). Every number [AS]; no product label was consulted."))
+                   100.0, 10.0, 0.2, {"winter_wheat": (39.0, 0.0, 0.5), "sugar_beet": (39.0, 0.0, 0.5), "default": (30.0, 0.05, 0.8)}, 1.5,
+                   "F1c herbicide: a generic post-emergence grass herbicide (ACCase type). Every number [AS]; no product label was consulted. The sugar_beet row (farm needs, 2026-11-10) is the beet graminicide use: ACCase graminicides (fluazifop, quizalofop, cycloxydim) leave dicot crops untouched; the crop stage limit is [AS], the weed timing (grass at BBCH 11-12 to 2-4 leaf) is that of LfL Bayern / ISIP sugar beet grass recommendations (Fusilade Max, Targa Super).",
+                   crop_src={"sugar_beet": {"max_bbch": "[AS] graminicides are selective for dicots; the sugar beet labels found (LfL Bayern empfehlungen_rube_5_graeser, ISIP lw-08 Zuckerrueben) time the treatment by the grass stage (BBCH 11-12 of the grasses, Targa Super label: ab 2- bis 4-Blattstadium der Ungraeser), not by a beet stage; the beet limit here is the row-closing stage."}}))
+    # nicosulfuron-type maize grass herbicide (ALS, HRAC 2): grasses incl. couch grass, safe in maize to BBCH 18
+    dump(os.path.join(ROOT, "herbicides", "maize_grass_herbicide.json"),
+         herbicide("maize_grass_herbicide", "group_2_als", 1.0,
+                   {"annual_grass": (0.2, 3.0, 300.0, 700.0), "volunteer": (0.3, 3.0, 300.0, 700.0), "perennial": (0.6, 2.0, 300.0, 700.0)},
+                   50.0, 15.0, 0.1, {"grain_maize": (18.0, 0.0, 0.6), "default": (0.0, 1.0, 1.0)}, 1.5,
+                   "Farm needs (2026-11-10): a nicosulfuron-type post-emergence grass herbicide for maize (ALS, HRAC 2; Samson 4 SC class). Crop window and weed stage from the Samson 4 SC Gebrauchsanleitung; the dose response numbers are [AS].",
+                   crop_src={"grain_maize": {"max_bbch": "[C] Samson 4 SC Gebrauchsanleitung (myagrar.de, 2021-01-29): maize 2- to 8-leaf stage, BBCH 12-18; Samson Extra 6 OD (agrofert.cz, 2018): maize BBCH 12-18."},
+                             "default": {"max_bbch": "[AS] a sulfonylurea grass herbicide is made for maize only: any other crop is never in its safe window (the farmer sprays it on maize only)."}},
+                   target_src={"annual_grass": {"stage_gdd_full": "[AS] weed thermal time since emergence of the label optimum: annual grasses at 3-4 leaves (Samson Extra 6 OD: optimum 3-4 leaves; Swiss technical information: grasses from 2 leaves to tillering), ~300 gdd after emergence.",
+                                               "stage_gdd_zero": "[AS] grasses past tillering escape (Swiss technical information Samson Extra), ~700 gdd."},
+                               "perennial": {"stage_gdd_full": "[AS] couch grass should have 4-6 leaves (Swiss technical information Samson Extra), ~300 gdd after the shoots emerge."}}))
     # a sulfonylurea-type broadleaf herbicide (ALS, HRAC 2)
     dump(os.path.join(ROOT, "herbicides", "broadleaf_herbicide.json"),
          herbicide("broadleaf_herbicide", "group_2_als", 1.0,
@@ -366,6 +382,7 @@ def write_operations():
     hv2 = {"straw_carried": 1.0, "straw_chopped": 0.0, "grain_loss": 0.015, "source": tag(["straw_carried", "straw_chopped", "grain_loss"], "combine with a swath and a baler pass: all harvestable straw is carried off; grain losses as for the chopping combine.")}
     dump(os.path.join(ROOT, "operations", "combine_straw_off.json"), op("combine_straw_off", "F1c operation: combine harvest, the harvestable straw baled and removed.", harvest=hv2))
     dump(os.path.join(ROOT, "operations", "spray_grass_herbicide.json"), op("spray_grass_herbicide", "F1c operation: field sprayer with the grass herbicide at label dose.", spray={"product": "grass_herbicide", "dose": 1.0}))
+    dump(os.path.join(ROOT, "operations", "spray_maize_grass_herbicide.json"), op("spray_maize_grass_herbicide", "Farm needs operation: field sprayer with the maize grass herbicide at label dose.", spray={"product": "maize_grass_herbicide", "dose": 1.0}))
     dump(os.path.join(ROOT, "operations", "spray_broadleaf_herbicide.json"), op("spray_broadleaf_herbicide", "F1c operation: field sprayer with the broadleaf herbicide at label dose.", spray={"product": "broadleaf_herbicide", "dose": 1.0}))
     dump(os.path.join(ROOT, "operations", "spray_total_herbicide.json"), op("spray_total_herbicide", "F1c operation: field sprayer with the non-selective herbicide at label dose.", spray={"product": "total_herbicide", "dose": 1.0}))
 
