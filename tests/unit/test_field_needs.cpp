@@ -6,10 +6,11 @@
 //      the lime pools step as before, and the crop grows more;
 //  NP  pathogens: the loss stays computed (loss_untreated, inoculum, suppression identical to the field with the need on) but the growth
 //      factor is exactly 1, so the crop grows like its twin without the pathogen model;
-//  NW  weeds: the competition factor is exactly 1, the weeds draw no water from the crop and the crop yields more; the weeds themselves
-//      still grow, so sprays still act on them.
+//  NW  weeds: the competition factor is exactly 1, the weeds draw no water from the crop and the crop yields more; the weeds do not come at
+//      all (no germination, standing plants go to the residue, no mineral N drawn): the crop ends close to its twin without a weed palette.
 //
 // Recorded sabotages (made in core/src/field, this file run, reverted; 2026-11-10):
+//  - NS-w2 (2026-11-10): weed_to_residue + continue removed in step_weeds: NW fails (weeds_off above 0);
 //  - NS-l: the lime flag ignored (nf_ph kept): NL fails (f_ph below 1 with the need off);
 //  - NS-p: the pathogen flag ignored (loss kept in stress_rotation): NP fails (growth_factor below 1);
 //  - NS-w: the weed flag ignored in manage_prestep only: NW fails (weed_factor below 1); ignored in the transpiration only: NW fails (weed transpiration above 0).
@@ -116,16 +117,18 @@ TEST_CASE("NP pesticide: with the need off the pathogen costs no growth", "[fiel
     CHECK_THAT(b.view(0).biomass_g_m2, WithinAbs(c.view(0).biomass_g_m2, 1e-9));   // as if the model were off
 }
 
-TEST_CASE("NW weeds: with the need off the weeds cost no yield and still grow", "[field][needs][weeds]") {
+TEST_CASE("NW weeds: with the need off the weeds cost no yield, draw no nitrogen and do not come", "[field][needs][weeds]") {
     const ps::io::FieldScenario sc = ps::io::load_field_scenario(tf::data_dir() / "field_scenarios/wheat_managed_11y.json");
     FieldConfig on = sc.field;
     on.nx = on.ny = 1;
     on.cell_soil.assign(1, 0);
     FieldConfig off = on;
     off.weed_loss_enabled = false;
+    FieldConfig none = on;   // the twin without a weed palette at all
+    none.weeds.clear();
     DailyWeatherSource src(sc.climate, 21, sc.weather);
-    Field a(on), b(off);
-    double min_on = 1.0, weeds_off = 0.0;
+    Field a(on), b(off), c(none);
+    double min_on = 1.0, weeds_off = 0.0, weeds_on = 0.0;
     for (std::int64_t d = 0; d < 3 * 365; ++d) {
         const DailyWeather& w = src.record(d);
         for (const ps::io::FieldOperationRule& rule : sc.rules) {
@@ -135,15 +138,21 @@ TEST_CASE("NW weeds: with the need off the weeds cost no yield and still grow", 
             if (rule.effect.spray.product != 0) continue;   // no spraying: the weeds stand
             a.apply_all(rule.effect);
             b.apply_all(rule.effect);
+            c.apply_all(rule.effect);
         }
         a.step_day(w);
         b.step_day(w);
+        c.step_day(w);
         min_on = std::min(min_on, a.management_view(0).weed_factor);
         CHECK(b.management_view(0).weed_factor == 1.0);
         for (const WeedGroupView& g : b.management_view(0).weeds) weeds_off += g.biomass_g_m2;
+        for (const WeedGroupView& g : a.management_view(0).weeds) weeds_on += g.biomass_g_m2;
     }
     REQUIRE(min_on < 0.95);   // the competition is real with the need on
     CHECK(b.management_view(0).weed_transpiration_mm == 0.0);
     CHECK(a.management_view(0).weed_transpiration_mm > 0.0);
-    CHECK(weeds_off > 0.0);   // the weeds still grow
+    CHECK(weeds_on > 0.0);
+    CHECK(weeds_off == 0.0);   // the weeds do not come
+    // and the crop is where its twin without a weed palette is (the weeds' residue and the seed bank are the only differences)
+    CHECK_THAT(b.view(0).biomass_g_m2, WithinAbs(c.view(0).biomass_g_m2, 0.02 * std::max(1.0, c.view(0).biomass_g_m2)));
 }
