@@ -309,7 +309,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
             real zt = cr->zr_min_m + (cr->zr_max_m - cr->zr_min_m) * frac;
             if (mgmt) zt *= 1.0 - so.management.damage_root_penalty * s.damage[c];
             if (zt > s.zr[c]) set_root_depth(c, zt);
-            if (cfg_.pathogens_enabled) s.stress_rotation[c] = 1.0 - s.path_loss0[c] * (1.0 - fungicide_protection(c));
+            if (cfg_.pathogens_enabled) s.stress_rotation[c] = cfg_.pathogen_loss_enabled ? 1.0 - s.path_loss0[c] * (1.0 - fungicide_protection(c)) : 1.0;
         }
     }
 
@@ -371,7 +371,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         kcb + 0.05);
     // weeds: potential use (the stress part is applied with the bucket below) and the soil they shade
     real weed_cover = 0.0;
-    real tr_w_pot = (mgmt && !cfg_.weeds.empty()) ? weed_transpiration(c, taw1, cc_star, et0, weed_cover) : 0.0;
+    real tr_w_pot = (mgmt && !cfg_.weeds.empty() && cfg_.weed_loss_enabled) ? weed_transpiration(c, taw1, cc_star, et0, weed_cover) : 0.0;
     const real few = (1.0 - cc_star) * (1.0 - weed_cover);
     real de_a = s.d_evap[c] - infil;
     if (de_a < 0.0) de_a = 0.0;
@@ -446,6 +446,7 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     real nf_n = 1.0, nf_pk = 1.0, nf_ph = 1.0;
     if (cfg_.nutrients_enabled) {
         nutrient_growth_factors(c, st, emerged, nf_n, nf_pk, nf_ph);
+        if (!cfg_.lime_need_enabled) nf_ph = 1.0;
         s.f_n[c] = nf_n;
         s.f_pk[c] = nf_pk;
         s.f_ph[c] = nf_ph;

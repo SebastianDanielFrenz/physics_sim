@@ -7,13 +7,13 @@
     "annual_broadleaf": {
       "ed50_rel": 0.2,
       "slope": 3.0,
-      "stage_gdd_full": 500.0,
-      "stage_gdd_zero": 1100.0,
+      "stage_gdd_full": 1200.0,
+      "stage_gdd_zero": 1800.0,
       "source": {
         "ed50_rel": "[AS] dose relative to the label rate that kills half the susceptible plants; the label rate is set to kill > 95 %.",
         "slope": "[AS] log-logistic slope (typical herbicide dose-response slopes 2-4, recalled).",
-        "stage_gdd_full": "[AS] weed thermal time since emergence up to which the efficacy is complete.",
-        "stage_gdd_zero": "[AS] thermal time from which the efficacy is zero (large weeds escape)."
+        "stage_gdd_full": "[AS] owner 2026-11-10: cleavers (Galium aparine) are controlled late; weed thermal time since emergence up to which the efficacy is complete. Label windows: Starane XL BBCH 13-45, LfL Bayern BBCH 30-45, UK labels up to GS 39, JKI Croupier BBCH 20-39 (wheat stages, not weed stages: the late crop limit is why the window is long).",
+        "stage_gdd_zero": "[AS] owner 2026-11-10: thermal time from which the efficacy is zero (large weeds escape); same label sources as stage_gdd_full."
       }
     },
     "annual_grass": {

@@ -615,7 +615,7 @@ void Field::manage_prestep(std::size_t c, const DailyWeather&) {
     const SoilManagementDesc& m = soil_of(c).management;
     s_.residue_evap_factor[c] = 1.0 - m.mulch_evap_max_reduction * residue_cover(c);
     s_.tilth_e2[c] = 1.0 - m.loose_stage2_evap_reduction * s_.loose[c];
-    s_.weed_f[c] = weed_competition(c);
+    s_.weed_f[c] = cfg_.weed_loss_enabled ? weed_competition(c) : 1.0;
 }
 
 // ---------------------------------------------------------------------------
