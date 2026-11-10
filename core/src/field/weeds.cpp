@@ -194,6 +194,13 @@ void Field::step_weeds(std::size_t c, const DailyWeather& wx) {
         s.w_seed_a[i] *= ps::math::exp(-w.decay_upper_per_day);
         s.w_seed_b[i] *= ps::math::exp(-w.decay_lower_per_day);
 
+        // weed_loss_enabled = false (a per-save need switched off): the weeds do not come. Plants that stand are taken off the field into the residue
+        // (carbon and nitrogen kept), nothing germinates, nothing grows and so nothing draws mineral N; the seed bank only ages and is there when the need is switched on again.
+        if (!cfg_.weed_loss_enabled) {
+            weed_to_residue(c, g, 1.0);
+            continue;
+        }
+
         // germination and emergence
         {
             const real tr = tri_response(s.soil_t[c], w.germ_t_min_c, w.germ_t_opt_c, w.germ_t_max_c);
