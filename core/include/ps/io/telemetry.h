@@ -40,7 +40,10 @@ public:
 
     // Enqueues one row (values.size() must equal channel_names().size());
     // never blocks on file IO itself. Called once per tick by World.
+    // Without a started CSV sink the row is dropped (nothing would ever read it).
     void record_row(std::uint64_t tick, real sim_time, std::vector<real> values);
+    // Rows waiting for the IO thread (0 without a sink); for tests.
+    [[nodiscard]] std::size_t queued_rows() const;
 
 private:
     struct Row {
@@ -53,7 +56,7 @@ private:
 
     std::vector<std::string> names_;
 
-    std::mutex queue_m_;
+    mutable std::mutex queue_m_;
     std::condition_variable queue_cv_;
     std::deque<Row> queue_;
     bool stop_requested_ = false;

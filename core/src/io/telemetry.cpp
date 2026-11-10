@@ -31,11 +31,19 @@ void TelemetryRegistry::stop() {
 }
 
 void TelemetryRegistry::record_row(std::uint64_t tick, real sim_time, std::vector<real> values) {
+    // No sink, no queue: a World that never called start_csv (every game and test World) used to keep every tick's row in this queue for good,
+    // ~1.2 KB per tick with a vehicle, 0.3 MB per sim-s, hours of a helper left running = GBs.
+    if (!running_) return;
     {
         std::lock_guard<std::mutex> lock(queue_m_);
         queue_.push_back(Row{tick, sim_time, std::move(values)});
     }
     queue_cv_.notify_one();
+}
+
+std::size_t TelemetryRegistry::queued_rows() const {
+    std::lock_guard<std::mutex> lock(queue_m_);
+    return queue_.size();
 }
 
 void TelemetryRegistry::io_thread_main(std::string csv_path) {

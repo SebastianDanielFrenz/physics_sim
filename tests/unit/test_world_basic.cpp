@@ -53,3 +53,11 @@ TEST_CASE("World state_hash is stable across two identical runs", "[world]") {
     };
     REQUIRE(run() == run());
 }
+
+TEST_CASE("A World with no CSV sink keeps no telemetry rows (the queue was unbounded: ~0.3 MB per sim-s with a vehicle)", "[world][telemetry]") {
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+    for (int i = 0; i < 2400; ++i) world.step();
+    CHECK(world.telemetry().queued_rows() == 0);
+}
