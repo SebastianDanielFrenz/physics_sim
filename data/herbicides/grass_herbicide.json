@@ -66,6 +66,16 @@
         "damage_out": "[AS] ... outside the window."
       }
     },
+    "sugar_beet": {
+      "max_bbch": 39.0,
+      "damage_in": 0.0,
+      "damage_out": 0.5,
+      "source": {
+        "max_bbch": "[AS] graminicides are selective for dicots; the sugar beet labels found (LfL Bayern empfehlungen_rube_5_graeser, ISIP lw-08 Zuckerrueben) time the treatment by the grass stage (BBCH 11-12 of the grasses, Targa Super label: ab 2- bis 4-Blattstadium der Ungraeser), not by a beet stage; the beet limit here is the row-closing stage.",
+        "damage_in": "[AS] share of the stand lost at the label dose inside the window.",
+        "damage_out": "[AS] ... outside the window."
+      }
+    },
     "default": {
       "max_bbch": 30.0,
       "damage_in": 0.05,
@@ -83,5 +93,5 @@
       "dose_exponent": "[AS] crop damage grows with dose^exponent (an overdose hurts more than proportionally)."
     }
   },
-  "source": "F1c herbicide: a generic post-emergence grass herbicide (ACCase type). Every number [AS]; no product label was consulted."
+  "source": "F1c herbicide: a generic post-emergence grass herbicide (ACCase type). Every number [AS]; no product label was consulted. The sugar_beet row (farm needs, 2026-11-10) is the beet graminicide use: ACCase graminicides (fluazifop, quizalofop, cycloxydim) leave dicot crops untouched; the crop stage limit is [AS], the weed timing (grass at BBCH 11-12 to 2-4 leaf) is that of LfL Bayern / ISIP sugar beet grass recommendations (Fusilade Max, Targa Super)."
 }
