@@ -46,6 +46,7 @@ struct TillageEffect {
     real seedbed_fineness = 0.0;        // tilth the tool leaves in workable soil, 0 = clods, 1 = fine seedbed
     real crop_kill = 0.0;               // share of the standing crop destroyed (it goes into the residue pools)
     real weed_kill[kWeedKinds] = {0.0, 0.0, 0.0, 0.0};   // share of the emerged weeds destroyed, by kind
+    real weed_setback = 0.0;            // share of the thermal time the SURVIVING emerged weeds (annuals, volunteers) lose: cut, uprooted and replanted plants restart development
     bool active() const {
         if (depth_m > 0.0 || crop_kill > 0.0) return true;
         for (real k : weed_kill)

@@ -442,6 +442,10 @@ void Field::do_tillage(std::size_t c, const TillageEffect& t, real cov) {
     for (std::size_t g = 0; g < G; ++g) {
         const real k = eff(t.weed_kill[cfg_.weeds[g].kind], cov);
         if (k > 0.0) weed_to_residue(c, g, k);
+        // Survivors of a pass are plants cut, uprooted or part-buried: they restart from a young stage. Without this a survivor keeps its full
+        // thermal time and every post-emergence spray window (BBCH-bound) has closed on it for the whole season (vault: weed age finding).
+        const std::size_t i = c * G + g;
+        if (t.weed_setback > 0.0 && !cfg_.weeds[g].perennial && s_.w_dens[i] > 0.0) s_.w_tt[i] *= 1.0 - eff(t.weed_setback, cov);
     }
     if (!(t.depth_m > 0.0)) return;
 

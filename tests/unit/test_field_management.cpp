@@ -897,3 +897,33 @@ TEST_CASE("M14 weeds emerging into soil with no mineral N stay killable (no 0/0 
     std::printf("M14 weed plants/m2 %.1f -> %.2f after a total spray\n", plants, after);
     CHECK(after < 0.5 * plants);
 }
+
+TEST_CASE("M15 survivors of a tillage pass restart young: weed_setback cuts their thermal time, 0 keeps it", "[field][management][weeds]") {
+    FieldConfig c = mcfg(1, 1, 0.2);
+    REQUIRE(!c.weeds.empty());
+    Field f(c);
+    run_synth(f, 70, 8.0, 18.0, 3.0, 2.0);   // warm days: the groups emerge and age
+    const FieldCheckpoint before_cp = f.checkpoint();
+    const OperationEffect harrow = op(c, "seedbed_harrow");
+    REQUIRE(harrow.tillage.weed_setback > 0.0);
+    OperationEffect no_setback = harrow;
+    no_setback.tillage.weed_setback = 0.0;
+
+    const ManagementView b = f.management_view(0);
+    f.apply_all(harrow);
+    const ManagementView a = f.management_view(0);
+    Field g(c);
+    g.restore(before_cp);
+    g.apply_all(no_setback);
+    const ManagementView z = g.management_view(0);
+    int checked = 0;
+    for (std::size_t k = 0; k < b.weeds.size(); ++k) {
+        if (c.weeds[k].perennial || !(b.weeds[k].plants_m2 > 0.1)) continue;
+        std::printf("M15 %s tt %.0f -> %.0f (control %.0f), plants %.2f -> %.3f\n", c.weeds[k].name.c_str(), b.weeds[k].tt_gdd, a.weeds[k].tt_gdd,
+                    z.weeds[k].tt_gdd, b.weeds[k].plants_m2, a.weeds[k].plants_m2);
+        CHECK(z.weeds[k].tt_gdd == Catch::Approx(b.weeds[k].tt_gdd));                          // no setback: the survivors keep their age
+        CHECK(a.weeds[k].tt_gdd == Catch::Approx(b.weeds[k].tt_gdd * (1.0 - harrow.tillage.weed_setback)).epsilon(1e-9));
+        ++checked;
+    }
+    REQUIRE(checked >= 1);
+}

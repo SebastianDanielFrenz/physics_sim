@@ -334,32 +334,34 @@ def write_operations():
         t.update(kw)
         keys = list(t.keys())
         t["source"] = tag(keys, "parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.")
+        if "weed_setback" in t:
+            t["source"]["weed_setback"] = "[AS] survivors of a mechanical pass are cut, uprooted or part-buried plants that restart from a young stage (recalled harrowing/hoeing practice: weed harrowing is timed for the white-thread to 2-leaf stage because survivors re-establish); the share of thermal time lost is not measured."
         return t
 
     dump(os.path.join(ROOT, "operations", "plough.json"), op(
         "plough", "F1c operation: mouldboard plough, 25 cm. The inversion buries surface residue, seed and lime in the lower layer and brings the lower soil up.",
         tillage=tillage(0.25, mix_surface=0.0, mix_upper=0.0, mix_lower=0.0, inversion=0.9, residue_chop=0.0, loosening=0.8,
-                        seedbed_fineness=0.25, crop_kill=1.0,
+                        seedbed_fineness=0.25, crop_kill=1.0, weed_setback=0.75,
                         weed_kill={"annual_grass": 0.95, "annual_broadleaf": 0.95, "perennial": 0.6, "volunteer": 0.95})))
     dump(os.path.join(ROOT, "operations", "cultivator.json"), op(
         "cultivator", "F1c operation: field cultivator / chisel, 12 cm, no inversion. Mixes the worked layers and keeps part of the residue near the surface.",
         tillage=tillage(0.12, mix_surface=0.5, mix_upper=0.6, mix_lower=0.3, inversion=0.0, residue_chop=0.2, loosening=0.5,
-                        seedbed_fineness=0.55, crop_kill=1.0,
+                        seedbed_fineness=0.55, crop_kill=1.0, weed_setback=0.75,
                         weed_kill={"annual_grass": 0.8, "annual_broadleaf": 0.8, "perennial": 0.3, "volunteer": 0.8})))
     dump(os.path.join(ROOT, "operations", "stubble_cultivator.json"), op(
         "stubble_cultivator", "F1c operation: shallow stubble tillage, 6 cm: mixes the straw into the top layer, chops it, makes weed and volunteer seed germinate.",
         tillage=tillage(0.06, mix_surface=0.5, mix_upper=0.4, mix_lower=0.0, inversion=0.0, residue_chop=0.5, loosening=0.2,
-                        seedbed_fineness=0.3, crop_kill=0.0,
+                        seedbed_fineness=0.3, crop_kill=0.0, weed_setback=0.75,
                         weed_kill={"annual_grass": 0.7, "annual_broadleaf": 0.7, "perennial": 0.2, "volunteer": 0.7})))
     dump(os.path.join(ROOT, "operations", "seedbed_harrow.json"), op(
         "seedbed_harrow", "F1c operation: seedbed harrow, 5 cm: fine seedbed, shallow mixing.",
         tillage=tillage(0.05, mix_surface=0.4, mix_upper=0.5, mix_lower=0.0, inversion=0.0, residue_chop=0.1, loosening=0.2,
-                        seedbed_fineness=0.9, crop_kill=0.0,
+                        seedbed_fineness=0.9, crop_kill=0.0, weed_setback=0.75,
                         weed_kill={"annual_grass": 0.85, "annual_broadleaf": 0.85, "perennial": 0.2, "volunteer": 0.85})))
     dump(os.path.join(ROOT, "operations", "weeder.json"), op(
         "weeder", "F1c operation: mechanical weeding (harrow / hoe) at 3 cm in the standing crop: kills small weeds, damages a little of the crop.",
         tillage=tillage(0.03, mix_surface=0.0, mix_upper=0.1, mix_lower=0.0, inversion=0.0, residue_chop=0.0, loosening=0.1,
-                        seedbed_fineness=0.0, crop_kill=0.03,
+                        seedbed_fineness=0.0, crop_kill=0.03, weed_setback=0.5,
                         weed_kill={"annual_grass": 0.6, "annual_broadleaf": 0.6, "perennial": 0.0, "volunteer": 0.4})))
     drill = {"crop": "winter_wheat", "seeds_per_m2": 300.0, "depth_m": 0.035, "quality": 0.95, "residue_tolerance": 0.5}
     drill["source"] = tag(["seeds_per_m2", "depth_m", "quality", "residue_tolerance"],

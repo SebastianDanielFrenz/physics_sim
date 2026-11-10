@@ -231,6 +231,7 @@ std::string operation_validation_error(const std::string& name, const OperationE
     c.frac("tillage.loosening", t.loosening);
     c.frac("tillage.seedbed_fineness", t.seedbed_fineness);
     c.frac("tillage.crop_kill", t.crop_kill);
+    c.frac("tillage.weed_setback", t.weed_setback);
     for (int k = 0; k < kWeedKinds; ++k) c.frac("tillage.weed_kill", t.weed_kill[k]);
     c.fail_if((t.mix_surface > 0.0 || t.mix_upper > 0.0 || t.mix_lower > 0.0 || t.inversion > 0.0 || t.loosening > 0.0 ||
                t.seedbed_fineness > 0.0 || t.residue_chop > 0.0) && !(t.depth_m > 0.0),

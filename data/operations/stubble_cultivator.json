@@ -11,6 +11,7 @@
     "loosening": 0.2,
     "seedbed_fineness": 0.3,
     "crop_kill": 0.0,
+    "weed_setback": 0.75,
     "weed_kill": {
       "annual_grass": 0.7,
       "annual_broadleaf": 0.7,
@@ -27,6 +28,7 @@
       "loosening": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
       "seedbed_fineness": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
       "crop_kill": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured.",
+      "weed_setback": "[AS] survivors of a mechanical pass are cut, uprooted or part-buried plants that restart from a young stage (recalled harrowing/hoeing practice: weed harrowing is timed for the white-thread to 2-leaf stage because survivors re-establish); the share of thermal time lost is not measured.",
       "weed_kill": "[AS] parameter set of a tool pass; shares of the covered area (see docs/data_formats/operation.md). Recalled tool behaviour, not measured."
     }
   },
