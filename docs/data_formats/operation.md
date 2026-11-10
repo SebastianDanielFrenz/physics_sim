@@ -39,6 +39,7 @@ the effect on the cell is the area-weighted share `f x coverage` for a coverage 
 | `loosening` | share of compaction and consolidation removed in the worked layers (settles again with rain and time) |
 | `seedbed_fineness` | tilth the tool leaves in workable soil (0 clods, 1 fine) |
 | `crop_kill` | share of a standing crop destroyed (it goes into the residue pools) |
+| `weed_setback` | share of the thermal time the surviving emerged annual weeds and volunteers lose to the pass (they restart from a young stage); optional, default 0 |
 | `weed_kill` | object with the kinds `annual_grass`, `annual_broadleaf`, `perennial`, `volunteer`: share of the emerged weeds destroyed |
 
 Workability follows from the root-zone wetness (soil `management` block). A pass in wet or very dry soil does less, leaves

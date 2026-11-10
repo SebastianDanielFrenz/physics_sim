@@ -746,6 +746,7 @@ OperationEffect parse_operation_json(const json& j, const std::string& origin, c
         t.loosening = w.number("loosening", false, 0.0);
         t.seedbed_fineness = w.number("seedbed_fineness", false, 0.0);
         t.crop_kill = w.number("crop_kill", false, 0.0);
+        t.weed_setback = w.number("weed_setback", false, 0.0);
         if (const json* wk = w.child("weed_kill")) {
             if (!wk->is_object()) w.fail("\"weed_kill\" must be an object of weed kinds");
             for (auto it = wk->begin(); it != wk->end(); ++it) {
