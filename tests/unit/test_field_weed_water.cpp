@@ -288,7 +288,7 @@ TEST_CASE("W3b a weedy winter wheat field: weeds transpire, the field drains les
     CHECK(none.residual < 1e-6);
 }
 
-TEST_CASE("W4 selection: the same crop and the same product favour the same weeds in every weather record", "[field][weeds][selection][long]") {
+TEST_CASE("W4 selection: the same product favours the same weeds in every weather record", "[field][weeds][selection][long]") {
     // Managed scenario's palette: weeds [black_grass, cleavers, couch_grass, volunteer_wheat], herbicides [grass, broadleaf, total].
     double gain_sum = 0.0;
     for (const std::uint64_t seed : {11ull, 12ull, 13ull}) {
@@ -299,9 +299,11 @@ TEST_CASE("W4 selection: the same crop and the same product favour the same weed
         std::printf("W4 seed %llu seedbank/m2 [black_grass cleavers couch volunteer]: none %.1f %.1f %.1f %.1f | grass spray %.1f %.1f %.1f %.1f | broadleaf spray %.1f %.1f %.1f %.1f; grain %.2f %.2f %.2f\n",
                     static_cast<unsigned long long>(seed), plain.seeds[0], plain.seeds[1], plain.seeds[2], plain.seeds[3], grass.seeds[0], grass.seeds[1], grass.seeds[2],
                     grass.seeds[3], broad.seeds[0], broad.seeds[1], broad.seeds[2], broad.seeds[3], plain.yield, grass.yield, broad.yield);
-        // the crop selects: autumn-sown winter wheat keeps the autumn-germinating grass, the spring-germinating broadleaf has gone
-        CHECK(plain.seeds[1] < 0.05 * 150.0);
-        CHECK(plain.seeds[0] > 10.0 * plain.seeds[1]);
+        // The broadleaf herbicide removes the cleavers in every record, the grass herbicide leaves them (measured broadleaf/none 0.31,
+        // 0.012, 0.035; grass/none 1.02, 0.96, 1.04). An earlier check here said unsprayed cleavers die out in winter wheat: that was a
+        // weeds.cpp 0/0 bug (emergence into soil without mineral N made the group's age NaN, so it never set seed), not selection.
+        CHECK(broad.seeds[1] < 0.5 * plain.seeds[1]);
+        CHECK(grass.seeds[1] > 0.5 * plain.seeds[1]);
         // the product selects: the grass herbicide each autumn removes the grass in every record, the broadleaf herbicide does not
         CHECK(grass.seeds[0] < 0.02 * plain.seeds[0] + 0.5);
         CHECK(broad.seeds[0] > 0.5 * plain.seeds[0]);

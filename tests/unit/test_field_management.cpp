@@ -862,3 +862,38 @@ TEST_CASE("M13 managed and unmanaged scenarios run ten years, close every balanc
     CHECK(b.weed_biomass_max_g_m2 > 1.5 * a.weed_biomass_max_g_m2);
     CHECK(mean_grain(a) > mean_grain(b));
 }
+
+TEST_CASE("M14 weeds emerging into soil with no mineral N stay killable (no 0/0 in the age and resistance blend)", "[field][management][weeds]") {
+    FieldConfig c = mcfg(1, 1, 0.2);
+    REQUIRE(c.nutrients_enabled);
+    REQUIRE(!c.weeds.empty());
+    for (auto& s : c.soils) {
+        s.nutrients.no3_init_kg_ha = 0.0;
+        s.nutrients.nh4_init_kg_ha = 0.0;
+        s.nutrients.org_n_kg_ha = 0.0;
+        s.nutrients.n_deposition_kg_ha_day = 0.0;
+    }
+    Field f(c);
+    // warm, moist days: germination runs, but with no mineral N nothing can emerge
+    run_synth(f, 40, 8.0, 18.0, 3.0, 2.0);
+    const NutrientView nv = f.nutrient_view(0);
+    std::printf("M14 mineral N %.3g kg/ha after 40 days\n", nv.nmin);
+    REQUIRE(nv.nmin == 0.0);
+    // then N arrives and the groups emerge
+    f.apply_all(OperationEffect(1.0, dep(c, "can_27", "broadcast", 0.3)));
+    run_synth(f, 30, 8.0, 18.0, 3.0, 2.0);
+    const ManagementView before = f.management_view(0);
+    double plants = 0.0;
+    for (const WeedGroupView& g : before.weeds) {
+        CHECK(std::isfinite(g.tt_gdd));
+        CHECK(std::isfinite(g.plants_m2));
+        for (int m = 0; m < kMaxMoa; ++m) CHECK(std::isfinite(g.resistant_plants[m]));
+        plants += g.plants_m2;
+    }
+    REQUIRE(plants > 1.0);
+    f.apply_all(op(c, "spray_total_herbicide"));
+    double after = 0.0;
+    for (const WeedGroupView& g : f.management_view(0).weeds) after += g.plants_m2;
+    std::printf("M14 weed plants/m2 %.1f -> %.2f after a total spray\n", plants, after);
+    CHECK(after < 0.5 * plants);
+}

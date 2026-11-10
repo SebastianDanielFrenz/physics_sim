@@ -205,10 +205,16 @@ void Field::step_weeds(std::size_t c, const DailyWeather& wx) {
                 s.w_seed_a[i] -= ga;
                 s.w_seed_b[i] -= gb;
                 real em = (gs * w.emerge_surface + ga * w.emerge_upper + gb * w.emerge_lower) * germ_pass;
+                real got = 0.0;
                 if (em > 0.0) {
                     const real want = em * w.seedling_g * 10.0 * w.n_conc_pct / 100.0;
-                    const real got = take_mineral_n(s, c, want);
+                    got = take_mineral_n(s, c, want);
                     if (want > 0.0) em *= got / want;
+                }
+                // No mineral N leaves em at 0: nothing emerges. Blending with em == 0 into a group with no plants
+                // is 0/0, which made its age and resistance NaN - a NaN survival in every later spray, so the group
+                // could never be killed again.
+                if (em > 0.0) {
                     const real d_old = s.w_dens[i];
                     for (std::size_t m = 0; m < M; ++m)
                         s.w_res_pl[i * M + m] = (s.w_res_pl[i * M + m] * d_old + s.w_res_sd[i * M + m] * em) / (d_old + em);
