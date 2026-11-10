@@ -94,6 +94,15 @@ struct FieldConfig {
     // mineralisation, is built from decomposed residue (humification coefficient), and sets the plant-available water of
     // the soil. Needs management_enabled and an organic_matter block in every soil. false = bit-identical.
     bool soc_enabled = false;
+    // Needs of the crop that a game may switch off (farm game "needs": lime, pesticide, weed spraying). true (default) = the model as before,
+    // bit-identical; false removes the yield effect of that cause and keeps every state stepping:
+    //  - lime_need_enabled false: the pH growth factor is 1 (pH, the lime pools and their ledger still step);
+    //  - pathogen_loss_enabled false: the pathogen loss is 0, stress_rotation 1 (inoculum, suppression and fungicide protection still step);
+    //  - weed_loss_enabled false: the weed competition factor is 1 and the weeds draw no water from the crop's bucket and shade no soil
+    //    (the weeds still emerge, grow, take mineral nitrogen and seed, so the sprays still act on them).
+    bool lime_need_enabled = true;
+    bool pathogen_loss_enabled = true;
+    bool weed_loss_enabled = true;
 };
 
 struct StressFactors {
@@ -388,6 +397,12 @@ public:
 
     // Soil organic carbon (std::logic_error without soc_enabled).
     bool soc_enabled() const { return cfg_.soc_enabled; }
+    // The needs of the crop (FieldConfig::lime_need_enabled, pathogen_loss_enabled, weed_loss_enabled), changed between steps; not hashed, not in a checkpoint.
+    void set_needs(bool lime, bool pathogen_loss, bool weed_loss) {
+        cfg_.lime_need_enabled = lime;
+        cfg_.pathogen_loss_enabled = pathogen_loss;
+        cfg_.weed_loss_enabled = weed_loss;
+    }
     SocView soc_view(int cell) const;
 
     // --- persistence ---
