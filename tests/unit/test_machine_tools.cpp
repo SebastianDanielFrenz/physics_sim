@@ -519,6 +519,53 @@ TEST_CASE("the first tick in the ground starts a strip and writes none", "[machi
     CHECK(tool.worked_area_m2 == 0.0);
 }
 
+TEST_CASE("a jump of a working tool sweeps no strip once its edge is broken", "[machine][vehicle]") {
+    // A thaw or a load moves the rig by set_pose: without break_tool_edges the next tick books the whole jump as one quad.
+    // The 'unbroken' section is the sabotage: without the call the largest quad is the whole jump (> width x 20 m).
+    MountRig r = worked_rig(on_dirt(), 5);
+    r.run(4.0);
+    REQUIRE(r.world->tool_state(r.implement, 0).working);
+    const machine::ToolDesc& tool = r.world->tool_desc(r.implement, 0);
+    std::vector<machine::WorkQuad> quads;
+    r.world->drain_work(quads);
+    quads.clear();
+    const auto jump = [&] {
+        for (const BodyId b : {r.tractor_body, r.implement_body}) {
+            Pose p = r.world->get_pose(b);
+            p.position.x += 25.0;
+            r.world->backend().set_pose(b, p);
+        }
+    };
+    const auto largest_after = [&](real seconds) {
+        r.run(seconds);
+        quads.clear();
+        r.world->drain_work(quads);
+        real largest = 0.0;
+        for (const machine::WorkQuad& q : quads) largest = std::max(largest, machine::work_area(q));
+        return largest;
+    };
+    SECTION("unbroken: the jump is one quad (what the farm saw)") {
+        jump();
+        CHECK(largest_after(1.0) > tool.width_m * 20.0);
+    }
+    SECTION("break_tool_edges") {
+        jump();
+        r.world->break_tool_edges(r.implement);
+        CHECK(largest_after(1.0) < tool.width_m * 3.0 / 240.0);
+        CHECK(r.world->tool_state(r.implement, 0).working);
+        CHECK_FALSE(quads.empty());
+    }
+    SECTION("reset_vehicle breaks it too") {
+        jump();
+        r.world->reset_vehicle(r.implement, vehicle::VehicleResetOptions{});
+        CHECK(largest_after(1.0) < tool.width_m * 3.0 / 240.0);
+    }
+    SECTION("a vehicle without tools: a no-op") {
+        r.world->break_tool_edges(r.tractor);
+        CHECK(largest_after(1.0) < tool.width_m * 3.0 / 240.0);
+    }
+}
+
 TEST_CASE("work from two tools drains ordered by tick, vehicle and tool", "[machine][vehicle]") {
     MountCfg cfg = on_dirt();
     cfg.edit_implement = [](vehicle::VehicleDesc& d) {

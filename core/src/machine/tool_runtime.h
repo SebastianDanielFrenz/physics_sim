@@ -28,6 +28,9 @@ public:
     // Force and torque about the centre of mass, world axes.
     void substep(const Pose& pose, const Motion& motion, Vec3& force, Vec3& torque);
     void tick_end(const Pose& pose, std::uint64_t tick);
+    // The next tick's position does not continue this one (a teleport, a thaw): no strip is swept across the jump. The
+    // working state is untouched; the strip starts again at the next tick's edge.
+    void break_edge() { have_edge_ = false; }
     void disconnect_shaft() { shaft_connected_ = false; shaft_fraction_ = 0.0; state_.pto_speed_fraction = 0.0; state_.pto_torque_nm = 0.0; }
 
     [[nodiscard]] const ToolDesc& desc() const { return desc_; }
