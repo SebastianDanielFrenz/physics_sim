@@ -420,6 +420,8 @@ public:
     // instantaneous mechanical energy ledger. Sim-thread-only live
     // accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(VehicleId id, std::size_t wheel_index) const;
+    // How deep the wheel sank into soft soil in the last substep (m); 0 without a soil source that gives a bearing here. Sim thread only.
+    [[nodiscard]] real wheel_soil_sinkage(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy(VehicleId id) const;
     // PHYS-033 P4 I7a C6: the vehicle's fuel tank content in kg (live,
     // sim-thread-only; 0 for a vehicle without a fuel_tank).

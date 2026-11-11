@@ -94,6 +94,7 @@ public:
     // Tools. The soil source is read from jobs, concurrently, and may be replaced between steps; without one no tool
     // has soil under it. The vehicles of a World with a tool step through the island path.
     void set_soil_source(std::shared_ptr<const machine::ISoilSource> soil) { soil_ = std::move(soil); }
+    [[nodiscard]] const machine::ISoilSource* soil_source() const { return soil_.get(); }
     [[nodiscard]] std::size_t tool_count(VehicleId id) const { return tools_[id.index].size(); }
     [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).desc(); }
     [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).state(); }

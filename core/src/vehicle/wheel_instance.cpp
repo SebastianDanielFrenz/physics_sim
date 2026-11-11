@@ -228,6 +228,8 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
     pre_mz_ = 0.0;
     pre_mx_ = 0.0;
     pre_froll_ = 0.0;
+    soil_sinkage_ = 0.0;
+    pre_soil_resistance_ = 0.0;
     pre_vx_contact_ = 0.0;
     pre_vy_contact_ = 0.0;
     pre_airborne_ = !(hit_ground_ && fz > 0.0);
@@ -271,6 +273,17 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         if (in.grip != nullptr && contact_surface_ != kInvalidSurfaceId)
             lambda_mu *= in.grip->factor(static_cast<int>(contact_surface_),
                                        std::sqrt(vx_contact * vx_contact + vy_contact * vy_contact));
+        // Soft soil (soil_bearing.h): where the source gives a bearing, the soil's thrust limit caps the tyre's mu and the compaction resistance
+        // is added to the rolling drag below. No source or no bearing here: nothing happens, bit-identical.
+        if (in.soil != nullptr) {
+            const machine::SoilBearing sb = in.soil->bearing(cf.point.x, cf.point.y);
+            if (sb.valid) {
+                const machine::WheelSoilResponse sr = machine::wheel_soil_response(sb, fz, desc_.wheel_width, desc_.wheel_radius);
+                soil_sinkage_ = sr.sinkage_m;
+                pre_soil_resistance_ = sr.resistance_n;
+                lambda_mu = std::min(lambda_mu, sr.thrust_limit_n / fz);
+            }
+        }
         const real crr_surface = in.surfaces ? in.surfaces->crr_for(contact_surface_) : real(0.0);
 
         TyreSlipInput slip_in;
@@ -327,7 +340,8 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         const real crr_total = tyre_->desc().qsy1 + crr_surface + tyre_->desc().qsy2 * std::abs(tw.forces.fx_pure) / tyre_->desc().fz0 +
                                 tyre_rolling_speed_term(tyre_->desc(), vx_contact);
         const real froll_ramp = std::clamp(vx_contact / tyre_->desc().rolling_resistance_v_eps, real(-1.0), real(1.0));
-        pre_froll_ = -froll_ramp * fz * crr_total;
+        pre_froll_ = -froll_ramp * fz * crr_total; // exactly the pre-soil expression (floating point is not associative: no soil, no change)
+        if (pre_soil_resistance_ > 0.0) pre_froll_ -= froll_ramp * pre_soil_resistance_;
     }
     // Airborne or fz <= 0 (plan section 5.6 point 6): {0, 0}, and the
     // relaxation step above is skipped entirely (kappa_eq/alpha_eq hold).

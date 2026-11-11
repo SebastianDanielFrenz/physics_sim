@@ -96,6 +96,9 @@ struct VehicleTickEnv {
     const environment::ConditionGrip* grip = nullptr;
     // What the hitch asks of this vehicle's brakes, 0..1; it adds to the brake channel as a second driver would.
     real brake_link = 0.0;
+    // The soft-soil source the wheels ask for bearing (nullptr = none; a wheel is then exactly what it was). World fills it from the soil source
+    // it was given for tools.
+    const machine::ISoilSource* soil = nullptr;
 };
 
 // One tick's working state between tick_begin and tick_end, owned by the caller:
@@ -211,6 +214,7 @@ public:
     // and the cumulative/instantaneous mechanical energy ledger. Sim-
     // thread-only live accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(std::size_t i) const { return powertrain_.hub_omega(i); }
+    [[nodiscard]] real wheel_soil_sinkage(std::size_t i) const { return wheels_[i]->soil_sinkage(); }
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy() const { return powertrain_.ledger(); }
     // PHYS-033 P4 I7a C6: backs World::fuel_tank_mass/set_fuel_tank_mass
     // (the set is applied at the next tick boundary - Powertrain::begin_tick).

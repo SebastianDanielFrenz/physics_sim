@@ -234,6 +234,7 @@ void World::stage_vehicle_islands() {
         // Weather plan W6: hand the installed environment's condition grip to
         // the wheels (nullptr without surface conditions, a no-op then).
         if (environment_) env.grip = environment_->condition_grip();
+        env.soil = vehicle_system_->soil_source();
         // Weather plan W4: per-vehicle air (valid entries only while an atmosphere-providing environment is installed).
         vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz,
                                   std::span<const environment::VehicleAir>(vehicle_air_));
@@ -1274,6 +1275,10 @@ vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) co
 
 bool World::wheel_is_driven(VehicleId id, std::size_t wheel_index) const {
     return vehicle_system_->at(id).wheel_is_driven(wheel_index);
+}
+
+real World::wheel_soil_sinkage(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_soil_sinkage(wheel_index);
 }
 
 real World::wheel_omega(VehicleId id, std::size_t wheel_index) const {

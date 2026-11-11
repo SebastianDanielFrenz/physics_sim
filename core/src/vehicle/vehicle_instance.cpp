@@ -684,6 +684,7 @@ void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidB
         in.partner_compression = w.arb_partner >= 0 ? wheels_[static_cast<std::size_t>(w.arb_partner)]->compression() : 0.0;
         in.surfaces = surfaces_;
         in.grip = env.grip;
+        in.soil = env.soil;
 
         const real omega_old = powertrain_.hub_omega(i);
         hub_omega_old_scratch_[i] = omega_old; // PHYS-033 P4 I3 plan section 6.7: needed after solve() below

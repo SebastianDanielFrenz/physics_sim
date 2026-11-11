@@ -10,6 +10,7 @@
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/environment/condition_grip.h"
 #include "ps/io/surface_table.h"
+#include "ps/machine/soil_source.h"
 #include "ps/vehicle/tyre_model.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/vehicle/wheel_state.h"
@@ -40,6 +41,8 @@ struct WheelPreSolveInput {
     // W6: the installed environment's condition grip (nullptr = none). The
     // wheel multiplies the class lambda_mu by its factor at the contact speed.
     const environment::ConditionGrip* grip = nullptr;
+    // Soft soil under the wheel (nullptr = none).
+    const machine::ISoilSource* soil = nullptr;
 };
 
 // The hub's implicit torque-law terms this wheel contributes THIS substep
@@ -121,6 +124,7 @@ public:
     // type from WheelTelemetry above). Computed on demand from state
     // already held by this instance - no extra storage duplicating
     // last_telemetry_'s fields.
+    [[nodiscard]] real soil_sinkage() const { return soil_sinkage_; }
     [[nodiscard]] WheelState wheel_state() const {
         WheelState s;
         s.steer_angle = last_steer_angle_;
@@ -193,6 +197,9 @@ private:
     // scenario's state_hash stays bit-identical).
     real spin_angle_ = 0.0;
     real last_steer_angle_ = 0.0;
+    // Soft soil (soil_bearing.h): how deep the wheel sank this substep (0 without soil), unhashed - a read-out for the farm's rut layer.
+    real soil_sinkage_ = 0.0;
+    real pre_soil_resistance_ = 0.0;
 
     WheelTelemetry last_telemetry_;
 };

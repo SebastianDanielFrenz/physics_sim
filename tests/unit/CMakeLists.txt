@@ -65,6 +65,7 @@ add_executable(ps_unit_tests
   test_machine_coupling.cpp
   test_machine_linkage.cpp
   test_machine_tools.cpp
+  test_soil_bearing.cpp
   test_wheel_contact_frame.cpp
   test_powertrain_network.cpp
   test_powertrain_friction_lcp.cpp

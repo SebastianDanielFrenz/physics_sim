@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "ps/machine/soil_bearing.h"
 #include "ps/types.h"
 
 namespace ps::machine {
@@ -27,6 +28,9 @@ class ISoilSource {
 public:
     virtual ~ISoilSource() = default;
     [[nodiscard]] virtual SoilSample sample(real x, real y) const noexcept = 0; // world metres
+    // How the ground carries a wheel here (ps/machine/soil_bearing.h). The default says "no soft soil": a source that does not override it leaves
+    // every wheel exactly as it was. Same contract as sample(): called from the vehicle jobs, reads only, never allocates.
+    [[nodiscard]] virtual SoilBearing bearing(real x, real y) const noexcept { (void)x; (void)y; return SoilBearing{}; }
 };
 
 } // namespace ps::machine
