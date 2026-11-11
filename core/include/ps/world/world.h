@@ -384,6 +384,10 @@ public:
     // What goes through the tool, kg/s: the term `specific_energy_kj_kg` of its shaft power is taken against it. The game states it
     // (the product out of a tank, later a combine's crop); between steps only; any tool, 0 for none.
     void set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s);
+    // The vehicle's tools sweep no strip from their last edge to the next one: call after moving a vehicle with tools by
+    // anything but its own driving (set_pose on its chassis, a thaw, a load), or the jump is booked as worked ground.
+    // reset_vehicle does it itself. Between steps only; a vehicle without tools is a no-op.
+    void break_tool_edges(VehicleId id);
     // Appends the quads the tools swept since the last drain, in (tick, vehicle, tool) order. Between steps; machine::
     // WorkLedger turns them into cells. Each tool holds 4096 quads; a fuller buffer drops the newest and counts them.
     void drain_work(std::vector<machine::WorkQuad>& out);
@@ -513,7 +517,7 @@ public:
     [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug(VehicleId id) const;
     // PHYS-033 P4 I3 plan section 4.5: an out-of-band "teleport" of a
     // vehicle's drivetrain state (vehicle_reset.h's own header comment) -
-    // call only between ticks, never from a job.
+    // call only between ticks, never from a job. Also breaks the vehicle's tool edges (break_tool_edges).
     void reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts);
     // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
     // contract as wheel_telemetry above - see VehicleInstance::

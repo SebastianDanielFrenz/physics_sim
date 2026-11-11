@@ -104,6 +104,7 @@ public:
         if (t.desc().kind != machine::ToolKind::Applicator) throw std::invalid_argument("set_tool_enabled: tool '" + t.desc().name + "' is not an applicator");
         t.set_enabled(on);
     }
+    void break_tool_edges(VehicleId id) { for (machine::ToolRuntime& t : tools_[id.index]) t.break_edge(); }
     // Appends every buffered quad to `out` in (tick, vehicle, tool) order. Between steps; allocates.
     void drain_work(std::vector<machine::WorkQuad>& out);
     [[nodiscard]] std::uint64_t work_dropped() const;

@@ -880,6 +880,11 @@ void World::set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) {
     vehicle_system_->set_tool_gauge_depth(id, tool, depth_m);
 }
 
+void World::break_tool_edges(VehicleId id) {
+    if (in_step_) throw std::logic_error("break_tool_edges: only between steps");
+    vehicle_system_->break_tool_edges(id);
+}
+
 void World::set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s) {
     if (in_step_) throw std::logic_error("set_tool_material_flow: only between steps");
     vehicle_system_->set_tool_material_flow(id, tool, kg_s);
@@ -1354,6 +1359,7 @@ drivetrain::PowertrainDebug World::powertrain_debug(VehicleId id) const {
 
 void World::reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts) {
     vehicle_system_->at(id).reset(opts, *backend_);
+    vehicle_system_->break_tool_edges(id); // a teleport is no swept strip
 }
 
 real World::vehicle_shadow_dv_error(VehicleId id) const {
