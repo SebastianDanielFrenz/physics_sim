@@ -927,3 +927,37 @@ TEST_CASE("M15 survivors of a tillage pass restart young: weed_setback cuts thei
     }
     REQUIRE(checked >= 1);
 }
+
+// TR1: wheel traffic (Field::apply_traffic, farm soft soil step 4)
+//   A wrong implementation would: write the damage into another cell, ignore the clamp at 1, move the state for an amount of 0, accept a negative amount
+//   (healing the soil), or work on a field without management.
+// Recorded sabotage (seen to fail, restored): nutrients.cpp apply_traffic adds into cell 0 instead of `cell` -> the "only that cell" checks.
+TEST_CASE("TR1 apply_traffic adds structure damage to the one cell, clamps at 1, and an amount of 0 moves nothing", "[field][management][traffic]") {
+    const FieldConfig c = mcfg(2, 2, 0.2);
+    Field f(c);
+    Field g(c);
+    const std::uint64_t h0 = f.fold_hash(1469598103934665603ull);
+    const double d0 = f.management_view(3).damage;
+    f.apply_traffic(3, 0.0);
+    CHECK(f.fold_hash(1469598103934665603ull) == h0); // 0 is bit-identical
+    f.apply_traffic(3, 0.15);
+    CHECK(f.management_view(3).damage == Approx(d0 + 0.15).margin(1.0e-12));
+    for (int cell = 0; cell < 3; ++cell) CHECK(f.management_view(cell).damage == g.management_view(cell).damage); // only that cell
+    CHECK(f.fold_hash(1469598103934665603ull) != h0);
+    f.apply_traffic(3, 5.0);
+    CHECK(f.management_view(3).damage == 1.0); // clamped
+    CHECK_THROWS_AS(f.apply_traffic(3, -0.01), std::invalid_argument);
+    CHECK_THROWS_AS(f.apply_traffic(3, std::nan("")), std::invalid_argument);
+    CHECK_THROWS_AS(f.apply_traffic(4, 0.1), std::out_of_range);
+    CHECK_THROWS_AS(f.apply_traffic(-1, 0.1), std::out_of_range);
+    // the damage is what tillage reads: a damaged cell's next day curve number moves the water (runoff), the damage recovers by the existing law
+    Field r(c);
+    r.apply_traffic(0, 0.5);
+    const double before = r.management_view(0).damage;
+    run_synth(r, 30, 8.0, 18.0, 3.0, 2.0);
+    CHECK(r.management_view(0).damage < before); // the existing recovery
+    FieldConfig nm = c;
+    nm.management_enabled = false;
+    Field plain(nm);
+    CHECK_THROWS_AS(plain.apply_traffic(0, 0.1), std::logic_error);
+}

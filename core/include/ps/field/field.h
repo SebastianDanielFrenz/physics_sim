@@ -355,6 +355,13 @@ public:
     void apply(int cell, const OperationEffect& effect, HarvestResult* harvest_out = nullptr);
     HarvestResult apply_all(const OperationEffect& effect);   // the field mean of the harvest effects
 
+    // Wheel traffic (farm soft soil step 4, docs/farm/soft_soil.md decision 3): structure damage added to one cell by the wheels that crossed it,
+    // already weighed by the caller (pressure above the critical value for the wetness x the share of the cell the tyres covered). The same
+    // damage tillage writes, so the draft, the root depth, the curve number and the yield read it; its own recovery is the existing one.
+    // management_enabled only (std::logic_error otherwise); std::out_of_range for a bad cell, std::invalid_argument for a negative or
+    // non-finite amount. An amount of 0 changes nothing, bit for bit.
+    void apply_traffic(int cell, real damage);
+
     // With pathogens_enabled the model owns `rotation` (std::logic_error when f.rotation != 1).
     void set_stress(int cell, const StressFactors& f);
     // Test only: every day starts with the profile brought back to field

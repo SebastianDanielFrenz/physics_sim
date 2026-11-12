@@ -328,6 +328,14 @@ void Field::apply(int cell, const OperationEffect& e, HarvestResult* harvest_out
     apply_management(c, e, 2, nullptr);
 }
 
+void Field::apply_traffic(int cell, real damage) {
+    if (!cfg_.management_enabled) throw std::logic_error("Field::apply_traffic: the field runs without management");
+    if (cell < 0 || cell >= cell_count()) throw std::out_of_range("Field::apply_traffic: bad cell");
+    if (!(damage >= 0.0) || !std::isfinite(damage)) throw std::invalid_argument("Field::apply_traffic: damage must be finite and >= 0");
+    const std::size_t c = static_cast<std::size_t>(cell);
+    s_.damage[c] = std::min(1.0, s_.damage[c] + damage);
+}
+
 void Field::apply_deposit(std::size_t c, const OperationEffect& e) {
     const Deposit& d = e.deposit;
     if (d.material == 0) return;
