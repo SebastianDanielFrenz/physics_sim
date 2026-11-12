@@ -313,3 +313,22 @@ TEST_CASE("Powershift: loader rejections", "[powershift][drivetrain][io]") {
     // forward_range on another gearbox type
     CHECK_THROWS_WITH(load_edited({}, [](nlohmann::json& g) { g["type"] = "dual_clutch"; }), ContainsSubstring("powershift"));
 }
+
+// A standing start with the starting clutch still slipping (launch_locked_ false): the input rpm of the start gear follows the output through the slipping
+// clutch, so a low reading is the launch itself. With the pedal at or past kLaunchHoldThrottle the box stays in its start gear; with a light pedal the
+// stall guard acts as before. Recorded sabotage: remove the `slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle` return in powershift_desired
+// -> the heavy-pedal case drops to a lower gear and fails.
+TEST_CASE("Powershift: a slipping standing start with the pedal down stays in the start gear; a light pedal still downshifts", "[powershift][drivetrain][automatic]") {
+    auto run = [](real throttle) {
+        Box b(make_desc());
+        REQUIRE(b.at.current() == 6);
+        b.s.throttle = throttle;
+        b.s.engine_omega = 1500.0 * 2.0 * kPi / 60.0;
+        b.s.input_omega = 100.0 * 2.0 * kPi / 60.0; // the clutch slips: the input shaft is far below the engine
+        b.s.output_omega = 900.0 * 2.0 * kPi / 60.0 / b.at.ratio(6); // gear 6 would read 900 rpm: under the zero-throttle down line (1000)
+        return b.step_for(0.01).target;
+    };
+    CHECK(run(0.8) == 6);
+    CHECK(run(0.5) == 6);
+    CHECK(run(0.25) < 6);
+}
