@@ -16,6 +16,7 @@ constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the comm
 constexpr real kInhibitRpm = real(300.0);        // [AS] no direction change above this input rpm in 1st / R1
 constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0); // 1/s [AS]
 constexpr real kLaunchMinThrottle = real(0.05);
+constexpr real kLaunchHoldThrottle = real(0.5);  // [AS] a powershift launch with the pedal at least this far down stays in its gear while the starting clutch slips
 
 template <typename T>
 std::uint64_t fnv1a(std::uint64_t h, const T& v) {
@@ -442,6 +443,10 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
     const real r = in_rpm(g);
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
     const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
+    // A launch that still slips (the starting clutch has not locked): the input rpm follows the output through the slipping clutch, so a low in_rpm is the launch
+    // itself, not a lugging engine (the engine is at or above the down line). Without this the stall guard (and the down line) read it as a crawl and drop a standing start from the start gear to gear 1
+    // (60 kW farm tractor, 2026-11-12: 2.5 m in 5 s instead of ~10 m).
+    if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle) return g;
     const real target = dn + ps.target_fraction * (up - dn);
     const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
     const int n = forward_count();
