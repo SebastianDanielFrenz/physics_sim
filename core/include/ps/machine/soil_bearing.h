@@ -39,8 +39,9 @@ struct WheelSoilResponse {
     bool bottomed = false;       // the wheel sank to its axle: the soil cannot carry it at all
 };
 
-// One wheel of load `fz` (N), tyre width `width` (m) and radius `radius` (m). With no load or invalid soil: all zero and an unlimited thrust.
-[[nodiscard]] inline WheelSoilResponse wheel_soil_response(const SoilBearing& s, real fz, real width, real radius) {
+// One wheel of load `fz` (N), tyre width `width` (m) and radius `radius` (m). With no load or invalid soil: all zero and an unlimited thrust. `thrust_factor` is the
+// tyre class's lug/adhesion factor on the thrust ceiling (TyreDesc::soil_thrust_factor, 1 for a smooth tyre); it scales only the thrust, not the sinkage or the resistance.
+[[nodiscard]] inline WheelSoilResponse wheel_soil_response(const SoilBearing& s, real fz, real width, real radius, real thrust_factor = 1.0) {
     WheelSoilResponse out;
     out.thrust_limit_n = 1.0e30;
     if (!s.valid || !(fz > 0.0) || !(width > 0.0) || !(radius > 0.0)) return out;
@@ -62,7 +63,7 @@ struct WheelSoilResponse {
     const real z = out.sinkage_m;
     out.patch_length_m = std::sqrt(std::max(real(0.0), d * z - z * z));
     out.resistance_n = width * modulus * ps::math::pow(z, s.n + 1.0) / (s.n + 1.0);
-    out.thrust_limit_n = width * out.patch_length_m * s.cohesion_pa + fz * ps::math::tan(s.phi_rad);
+    out.thrust_limit_n = (width * out.patch_length_m * s.cohesion_pa + fz * ps::math::tan(s.phi_rad)) * thrust_factor;
     return out;
 }
 

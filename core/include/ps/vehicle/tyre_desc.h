@@ -201,6 +201,11 @@ struct TyreDesc {
     //   flagged to the coordinator).
     real low_speed_damping_ratio = 1.5; // dimensionless; 0 disables the term entirely
     real low_speed_damping_vx = 2.0;    // m/s; fade reaches 0 at this TOTAL contact speed
+
+    // Soft soil (soil_bearing.h): the lug/adhesion factor of the tyre class on the soil's thrust ceiling (cohesion x patch + load x tan phi). A lugged agricultural
+    // tyre bites into the soil and shears it deeper than the bare friction law's contact plane (Brixius 1987 gross traction ratio of a lugged tyre against the
+    // smooth-wheel soil law); a road tyre has no lugs: 1.0. The soil stays one truth for every tyre. Only read where a soil source gives a bearing.
+    real soil_thrust_factor = 1.0;
 };
 
 } // namespace ps::vehicle

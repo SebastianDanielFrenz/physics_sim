@@ -226,6 +226,8 @@ TyreDesc read_tyre_object(const json& j) {
     // PHYS-033 I1: additive fields, tyre/1 unchanged.
     d.low_speed_damping_ratio = j.value("low_speed_damping_ratio", d.low_speed_damping_ratio);
     d.low_speed_damping_vx = j.value("low_speed_damping_vx", d.low_speed_damping_vx);
+    d.soil_thrust_factor = j.value("soil_thrust_factor", d.soil_thrust_factor);
+    if (!(d.soil_thrust_factor > real(0.0))) throw std::runtime_error("tyre '" + d.name + "': soil_thrust_factor must be > 0, got " + std::to_string(d.soil_thrust_factor));
 
     if (j.contains("longitudinal")) {
         const auto& g = j.at("longitudinal");

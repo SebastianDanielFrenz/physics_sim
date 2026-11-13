@@ -278,7 +278,7 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         if (in.soil != nullptr) {
             const machine::SoilBearing sb = in.soil->bearing(cf.point.x, cf.point.y);
             if (sb.valid) {
-                const machine::WheelSoilResponse sr = machine::wheel_soil_response(sb, fz, desc_.wheel_width, desc_.wheel_radius);
+                const machine::WheelSoilResponse sr = machine::wheel_soil_response(sb, fz, desc_.wheel_width, desc_.wheel_radius, tyre_->desc().soil_thrust_factor);
                 soil_sinkage_ = sr.sinkage_m;
                 pre_soil_resistance_ = sr.resistance_n;
                 lambda_mu = std::min(lambda_mu, sr.thrust_limit_n / fz);
