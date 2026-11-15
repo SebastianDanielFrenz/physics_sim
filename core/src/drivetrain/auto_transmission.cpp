@@ -11,7 +11,8 @@ namespace {
 constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * real(3.14159265358979323846));
 constexpr real kHoldMargin = real(1.3);          // [AS] C_h over the torque handed over
 constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
-constexpr real kInertiaBoost = real(1.5);        // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
+constexpr real kPeakPerCapacity = real(1.9);   // [AS] shift clutch capacity / engine peak torque (tractor_24f24r_powershift.json)
+constexpr real kInertiaBoost = real(1.5);       // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
 constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the command above this = power on
 constexpr real kInhibitRpm = real(300.0);        // [AS] no direction change above this input rpm in 1st / R1
 constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0); // 1/s [AS]
@@ -505,6 +506,11 @@ void AutoTransmission::start_shift(int next, const Sensors& s, real th) {
     upshift_ = std::abs(ratio(next)) < std::abs(ratio(cur_));
     power_on_ = th > kPowerOnThrottle;
     c_hold_ = hold_capacity(s);
+    if (desc_.powershift && desc_.tcu.powershift->torque_return_s > real(0.0)) {
+        // The torque the rows carried at the decision, against the engine's peak (the shift clutch is rated 1.9 x it [AS]).
+        ret_f0_ = power_on_ ? std::clamp(std::abs(s.input_torque_prev) * kPeakPerCapacity / desc_.clutch.capacity_nm, real(0.0), real(1.0))
+                            : real(1.0);
+    }
     t_phase_ = real(0.0);
     // A rolling DCT launch counts as done once a shift starts.
     launch_locked_ = true;
@@ -512,7 +518,11 @@ void AutoTransmission::start_shift(int next, const Sensors& s, real th) {
     phase_ = (desc_.dual_clutch && desc_.clutch.preselect_time_s > real(0.0) && pre_ != next) ? Phase::Preselect : Phase::Torque;
     if (phase_ == Phase::Torque) pre_ = next;
     // Tractor plan stage 1: a shift into another range first opens both clutches (the range selector moves).
-    if (desc_.powershift && desc_.range_change_time_s > real(0.0) && next > 0 && cur_ > 0 && range_of(next) != range_of(cur_)) phase_ = Phase::Range;
+    if (desc_.powershift && desc_.range_change_time_s > real(0.0) && next > 0 && cur_ > 0 && range_of(next) != range_of(cur_)) {
+        phase_ = Phase::Range;
+        // Both clutches were open: the torque comes back from zero, not from what the rows carried before the interruption.
+        if (desc_.tcu.powershift->torque_return_s > real(0.0) && power_on_) ret_f0_ = real(0.0);
+    }
 }
 
 void AutoTransmission::complete_shift() {
@@ -756,6 +766,9 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
             act.cap_kinetic = C * e;
             break;
         case Phase::Range: // both clutches open: the interruption
+            // torque_return_s also lets the old clutch go over that time instead of at once (a 2 m/s^2 step down otherwise).
+            if (desc_.powershift && desc_.tcu.powershift->torque_return_s > real(0.0) && power_on_)
+                act.cap_kinetic = std::max(real(0.0), real(1.0) - t_phase_ / desc_.tcu.powershift->torque_return_s) * c_hold_;
             break;
         case Phase::Torque: {
             const real x = std::min(real(1.0), t_phase_ / cd.torque_phase_s);
@@ -823,6 +836,10 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
         o.lockup_cap_static = desc_.lockup_static_factor * o.lockup_cap_kinetic;
     }
     o.throttle_ceiling = (phase_ == Phase::Inertia && upshift_ && power_on_) ? desc_.tcu.upshift_torque_fraction : real(1.0);
+    if (desc_.powershift && phase_ == Phase::Closing && desc_.tcu.powershift->torque_return_s > real(0.0)) {
+        const real x = std::min(real(1.0), t_phase_ / desc_.tcu.powershift->torque_return_s);
+        o.throttle_ceiling = lerp(ret_f0_, real(1.0), x);
+    }
     o.current = cur_;
     o.target = tgt_;
     o.phase = phase_;
@@ -865,6 +882,7 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, e_launch_);
     h = fnv1a(h, launch_locked_);
     if (rev_held_) h = fnv1a(h, rev_held_);
+    if (desc_.powershift && desc_.tcu.powershift && desc_.tcu.powershift->torque_return_s > real(0.0)) h = fnv1a(h, ret_f0_);
     if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
         h = fnv1a(h, ratio_);
         h = fnv1a(h, step_);

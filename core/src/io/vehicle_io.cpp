@@ -3850,7 +3850,7 @@ ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::s
         // powershift is checked when the powershift is built.
         const json& o = cj.at("powershift");
         const std::string w = ctx + ".powershift";
-        check_keys(o, {"start_gear", "target_fraction", "max_skip", "shift_pressure_fraction", "min_upshift_pull_fraction", "upshift_min_time_s"}, w);
+        check_keys(o, {"start_gear", "target_fraction", "max_skip", "shift_pressure_fraction", "min_upshift_pull_fraction", "upshift_min_time_s", "torque_return_s"}, w);
         ps::drivetrain::PowershiftTcuDesc p;
         if (o.contains("start_gear") && !o.at("start_gear").is_number_integer()) throw std::runtime_error(w + ": 'start_gear' must be an integer");
         if (o.contains("max_skip") && !o.at("max_skip").is_number_integer()) throw std::runtime_error(w + ": 'max_skip' must be an integer");
@@ -3860,8 +3860,10 @@ ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::s
         p.shift_pressure_fraction = num(o, "shift_pressure_fraction", p.shift_pressure_fraction, w);
         p.min_upshift_pull_fraction = num(o, "min_upshift_pull_fraction", p.min_upshift_pull_fraction, w);
         p.upshift_min_time_s = num(o, "upshift_min_time_s", p.upshift_min_time_s, w);
-        if (!(p.min_upshift_pull_fraction >= real(0.0)) || p.min_upshift_pull_fraction >= real(1.0) || !(p.upshift_min_time_s >= real(0.0))) {
-            throw std::runtime_error(w + ": min_upshift_pull_fraction in [0, 1) and upshift_min_time_s >= 0 required");
+        p.torque_return_s = num(o, "torque_return_s", p.torque_return_s, w);
+        if (!(p.min_upshift_pull_fraction >= real(0.0)) || p.min_upshift_pull_fraction >= real(1.0) || !(p.upshift_min_time_s >= real(0.0)) ||
+            !(p.torque_return_s >= real(0.0))) {
+            throw std::runtime_error(w + ": min_upshift_pull_fraction in [0, 1), upshift_min_time_s >= 0 and torque_return_s >= 0 required");
         }
         if (p.start_gear < 1 || p.max_skip < 1 || !(p.target_fraction > real(0.0)) || !(p.target_fraction < real(1.0)) ||
             !(p.shift_pressure_fraction > real(0.0)) || p.shift_pressure_fraction > real(1.0)) {

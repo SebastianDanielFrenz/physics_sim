@@ -245,9 +245,19 @@ engine down at the hold capacity. Before, the inertia phase waited for a crossin
 `max_inertia_phase_s` with the engine at its high idle and a torque slam: a 60 kW tractor's 9 -> 6 took 1.3 s (now 0.7 s
 with the 0.35 s range change in it). Powershift only. Pacing: with `upshift_min_time_s` 0.8 a launching tractor sits on the
 governor's droop line (2340 rpm, no torque) between shifts; 0.4 gave 0-30 km/h in 10.05 s instead of 12.86 s (150 kW class,
-10.5 t trailer) and 8.6 s instead of 13.1 s (60 kW class, empty). The in-range jerk (13-17 m/s3) is the torque returning
-along the governor's droop line after each shift (measured: an inertia ramp of the on-coming clutch and a torque return
-ramp of the engine ceiling changed it by under 10 % and were not kept).
+10.5 t trailer) and 8.6 s instead of 13.1 s (60 kW class, empty). The shift jerk (13-17 m/s3 in range, 22-35 on a range
+change) is a step in the chassis acceleration: the old clutch lets go at once (a range change opens both) and the torque
+comes back in ~0.07 s (a governed engine on its droop line returns from ~0 to full as its rpm drops to the new gear).
+
+`torque_return_s` (powershift tcu key, default 0 = off and bit-identical, [AS]; 2026-11-15): after a POWER-ON shift the
+engine's throttle ceiling rises from the torque fraction the rows carried at the decision (against the engine peak, the
+shift clutch rated 1.9 x it) to 1 over this time once the new clutch has taken over (Closing), and in a range change the old
+clutch is released over the same time instead of at once and the ceiling starts at 0. A loaded engine already at full torque
+is unaffected. With 0.25 s and `range_change_time_s` 0.2 the worst jerk of the farm 100 kW tractor with a 12 t trailer went
+21.6 -> 12.0 m/s3 (range changes 22 -> 10-12, in range 12 -> 12), 150 kW class with 15 t 22.1 -> 14.7, 60 kW empty 34.8 -> 21.6;
+the shifts take 0.1-0.15 s longer (range change 0.55 s). Rejected: a longer `torque_phase_s` (0.15 -> 14.1, 0.25 -> 18.8
+worse), a ceiling ramp from the throttle (does not bind on a governed engine) and a slower inertia ramp of the on-coming
+clutch (< 10 %). Test: "torque_return_s softens the shift jerk under load" in test_powershift_tractor.cpp.
 
 Stage 1b (loaded tractors, farm measurement: a shift every ~0.3 s below 15 km/h, each keeping 0.26-0.57 of the pull):
 `min_upshift_pull_fraction` (default 0 = off, [0,1)) limits a skip to the pull it keeps, `|ratio(next)| / |ratio(g)|` at

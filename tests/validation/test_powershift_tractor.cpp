@@ -243,6 +243,7 @@ struct ShiftRecord {
     real min_fraction = 1.0;
     bool settled = false;
     real t = 0.0, kmh = 0.0; // when the shift began and the ground speed then
+    real peak_jerk = 0.0;    // max |jerk| of the chassis (acceleration smoothed over 0.1 s, jerk over a further 0.1 s) from the start to 0.1 s after the shift
 };
 
 std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real seconds, real trailer_mass = 0.0, real throttle = 1.0) {
@@ -294,6 +295,13 @@ std::vector<ShiftRecord> record_shifts(const vehicle::VehicleDesc& desc, real se
                 s.min_fraction = pre > 1.0 ? mn / pre : 1.0;
             }
             s.duration = (j - i) * r.world->dt();
+            {
+                const int w = 24; // 0.1 s at 240 Hz
+                std::vector<real> acc(static_cast<std::size_t>(n), 0.0);
+                for (int k = w; k < n; ++k) acc[static_cast<std::size_t>(k)] = (vel[static_cast<std::size_t>(k)] - vel[static_cast<std::size_t>(k - w)]) / (w * r.world->dt());
+                for (int k = std::max(2 * w, i); k < std::min(n, j + 48); ++k)
+                    s.peak_jerk = std::max(s.peak_jerk, std::abs(acc[static_cast<std::size_t>(k)] - acc[static_cast<std::size_t>(k - w)]) / (w * r.world->dt()));
+            }
             s.range_change = s.from > 0 && s.to > 0 && gb.forward_range[static_cast<std::size_t>(s.from - 1)] != gb.forward_range[static_cast<std::size_t>(s.to - 1)];
             out.push_back(s);
             i = j;
@@ -499,6 +507,36 @@ TEST_CASE("Powershift tractor: a power-on downshift under a heavy load takes the
     CHECK(down->duration <= 0.35 + 0.25);
 }
 
+// torque_return_s (2026-11-15, owner: "every shift caused sudden G-forces"): a power-on shift lets the old clutch go and the engine torque
+// return over 0.25 s instead of in ~0.07 s. Under a 12 t trailer the worst in-shift jerk drops from ~22 to ~12 m/s3 (range changes 22 -> 10-12, in
+// range ~12 -> 12), the shifts last 0.1-0.15 s longer. Recorded sabotage: torque_return_s 0 (the key off) -> the worst jerk is the old one and the
+// CHECK below fails.
+TEST_CASE("Powershift tractor: torque_return_s softens the shift jerk under load", "[powershift][tractor][validation]") {
+    auto with_return = [](real tr, real range_s) {
+        vehicle::VehicleDesc d = powershift_desc();
+        for (auto& c : d.controllers)
+            if (auto* t = std::get_if<drivetrain::AutomaticTcuDesc>(&c.params); t && t->powershift) t->powershift->torque_return_s = tr;
+        for (auto& c : d.powertrain.components)
+            if (auto* g = std::get_if<drivetrain::GearboxDesc>(&c.params)) g->range_change_time_s = range_s;
+        return d;
+    };
+    auto worst = [](const std::vector<ShiftRecord>& s) {
+        real m = 0.0;
+        int n = 0;
+        for (const auto& r : s) {
+            std::printf("[ps jerk]   t %.2f %.1f km/h %d -> %d dur %.2f jerk %.1f%s\n", static_cast<double>(r.t), static_cast<double>(r.kmh), r.from, r.to, static_cast<double>(r.duration),
+                        static_cast<double>(r.peak_jerk), r.range_change ? " range" : "");
+            if (r.to > r.from && r.from > 0 && r.kmh > 8.5) { m = std::max(m, r.peak_jerk); ++n; } // not the launch shift (the wheels still spinning up)
+        }
+        REQUIRE(n >= 3);
+        return m;
+    };
+    const real off = worst(record_shifts(with_return(0.0, 0.2), 12.0, 12000.0));
+    const real on = worst(record_shifts(with_return(0.25, 0.2), 12.0, 12000.0));
+    std::printf("[ps jerk] torque_return_s 0: %.1f m/s3   0.25: %.1f m/s3\n", static_cast<double>(off), static_cast<double>(on));
+    CHECK(on <= 0.7 * off); // measured 11.9 vs 21.7 (0.55) on this fixture; the key off gives ratio 1.0
+}
+
 // Shift-feel measurement on any vehicle file (the farm's tractors): PS_VEH = path, PS_TRAILER = kg, PS_MASS = chassis kg, PS_THROTTLE, PS_SECONDS, PS_GEAR_REQ = a gear to hold-start in (0 = D).
 // Per shift: when, gear change, duration, engine rpm at its start against the schedule's up line, the peak |jerk| of the chassis around it (a smoothed over 0.1 s) and the pull kept.
 TEST_CASE("Tractor shift feel diag: farm tractor shifts, jerk and decision lag", "[.][diag][powershift]") {
@@ -508,6 +546,7 @@ TEST_CASE("Tractor shift feel diag: farm tractor shifts, jerk and decision lag",
     for (auto& c : desc.controllers)
         if (auto* t = std::get_if<drivetrain::AutomaticTcuDesc>(&c.params); t && t->powershift) {
             if (std::getenv("PS_MINT")) t->powershift->upshift_min_time_s = std::atof(std::getenv("PS_MINT"));
+            if (std::getenv("PS_TRET")) t->powershift->torque_return_s = std::atof(std::getenv("PS_TRET"));
             if (std::getenv("PS_MINPULL")) t->powershift->min_upshift_pull_fraction = std::atof(std::getenv("PS_MINPULL"));
             if (std::getenv("PS_DWELL")) t->min_time_in_gear_s = std::atof(std::getenv("PS_DWELL"));
             if (std::getenv("PS_UTF")) t->upshift_torque_fraction = std::atof(std::getenv("PS_UTF"));
@@ -517,6 +556,7 @@ TEST_CASE("Tractor shift feel diag: farm tractor shifts, jerk and decision lag",
     for (auto& c : desc.powertrain.components)
         if (auto* g = std::get_if<drivetrain::GearboxDesc>(&c.params)) {
             if (std::getenv("PS_RANGE")) g->range_change_time_s = std::atof(std::getenv("PS_RANGE"));
+            if (std::getenv("PS_TPH")) g->shift_clutch.torque_phase_s = std::atof(std::getenv("PS_TPH"));
             if (std::getenv("PS_ENGAGE")) g->shift_clutch.engage_time_s = std::atof(std::getenv("PS_ENGAGE"));
         }
     const real z0 = std::getenv("PS_Z") ? std::atof(std::getenv("PS_Z")) : 1.28;

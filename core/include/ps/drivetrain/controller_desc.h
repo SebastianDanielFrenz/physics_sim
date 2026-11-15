@@ -229,6 +229,11 @@ struct PowershiftTcuDesc {
     // Stage 1b (0 = off): the least time in a gear before an UPSHIFT (downshifts keep min_time_in_gear_s only), so a heavy
     // launch cannot chain a shift every 0.3 s through the low gears. [AS]
     real upshift_min_time_s = 0.0; // >= 0
+    // 0 = off. After a POWER-ON shift the engine's torque returns over this time (a throttle ceiling rising from the torque
+    // fraction the rows carried before the shift to 1 once the new clutch has taken over): a governed engine that sat on its
+    // droop line returns from ~0 to full torque in tens of ms as its rpm drops to the new gear, a 2-3 m/s^2 step felt as a
+    // jolt; a loaded engine already at full torque is unaffected (start fraction ~1). [AS]
+    real torque_return_s = 0.0; // >= 0
 };
 
 // Tractor plan stage 2: the driver law of an automatic_tcu driving a HydroCvt gearbox ("hydro" block, required with it).

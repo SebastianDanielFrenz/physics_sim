@@ -1024,7 +1024,7 @@ one gear (manual mode, paddles); manual mode ends after `manual_timeout_s` witho
 | `creep_torque_nm` | real (N·m) | `40` | `>= 0` | dual_clutch: clutch capacity kept at idle in D/R without throttle (creep); an automatic creeps through its converter |
 | `cvt` | object, see below | **required** on a cvt gearbox | rejected on any other (`"... the automatic_tcu's 'cvt' block is for a cvt gearbox only"`); a cvt without it: `"... a cvt gearbox needs the automatic_tcu's 'cvt' block (its ratio law)"` | the variator's ratio law |
 | `hydro` | object, see gearbox.md "Hydro-mechanical CVT gearboxes" (curves `speed_rpm_vs_command` and `engine_rpm_vs_power` required, x spanning 0..1) | **required** on a hydro_cvt gearbox | rejected on any other | the driver law |
-| `powershift` | object: `start_gear` (1), `target_fraction` (0.5, in [0,1]), `max_skip` (4), `shift_pressure_fraction` (0.6), `min_upshift_pull_fraction` (0 = off, [0,1)), `upshift_min_time_s` (0 = off) | **required** on a powershift gearbox | rejected on any other | tractor shift law, see [gearbox.md](gearbox.md#powershift-gearboxes-tractor-plan-stage-1) |
+| `powershift` | object: `start_gear` (1), `target_fraction` (0.5, in [0,1]), `max_skip` (4), `shift_pressure_fraction` (0.6), `min_upshift_pull_fraction` (0 = off, [0,1)), `upshift_min_time_s` (0 = off), `torque_return_s` (0 = off) | **required** on a powershift gearbox | rejected on any other | tractor shift law, see [gearbox.md](gearbox.md#powershift-gearboxes-tractor-plan-stage-1) |
 
 **`cvt` ratio law** (CVT plan C1, `CvtTcuDesc`; unknown keys rejected): `target_rpm_vs_throttle` (Curve1D, **required**,
 throttle x within [0, 1], every rpm `> 0`), `sport_target_rpm_vs_throttle` (optional, same rules; empty = the D curve),
