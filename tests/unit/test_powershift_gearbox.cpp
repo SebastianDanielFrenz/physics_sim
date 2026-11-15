@@ -333,7 +333,7 @@ TEST_CASE("Powershift: a slipping standing start with the pedal down stays in th
     CHECK(run(0.25) < 6);
 }
 // The guard above must not hold forever: an engine that lugged below launch_anti_stall_rpm drops launch_locked_ and, below the bite rpm, cannot relock it
-// (farm slurry tanker, 2026-11-15: gear 6 held at 0.6-1 m/s, the engine at 1025 rpm, the pull 28 kN, while gear 4 was the right one). The guard gives up
+// (found 2026-11-15 chasing a farm slurry case; that case was the manual-box tractor.json, so this guard is hardening, covered by this unit test only). The guard gives up
 // after kLaunchHoldMaxS (2 s [AS]) and the normal law takes the gear that restores the band. Recorded sabotage: kLaunchHoldMaxS huge -> the box is
 // still in gear 6 after 3 s and the second CHECK fails.
 TEST_CASE("Powershift: the slipping-launch guard gives up after kLaunchHoldMaxS and lets the box downshift", "[powershift][drivetrain][automatic]") {

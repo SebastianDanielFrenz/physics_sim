@@ -451,7 +451,7 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
     // itself, not a lugging engine (the engine is at or above the down line). Without this the stall guard (and the down line) read it as a crawl and drop a standing start from the start gear to gear 1
     // (60 kW farm tractor, 2026-11-12: 2.5 m in 5 s instead of ~10 m).
     // Only for kLaunchHoldMaxS: a launch that is still slipping after that is not a launch (a 40 t+ load at a crawl, the engine
-    // on its governor, the starting clutch never locking) and the normal law may choose another gear (farm slurry tanker, 2026-11-15).
+    // on its governor, the starting clutch never locking) and the normal law may choose another gear (found 2026-11-15 while chasing a farm slurry case that turned out to be the manual-box tractor.json; reproduced here by the unit test only).
     if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle && launch_hold_t_ < kLaunchHoldMaxS) return g;
     const real target = dn + ps.target_fraction * (up - dn);
     const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
