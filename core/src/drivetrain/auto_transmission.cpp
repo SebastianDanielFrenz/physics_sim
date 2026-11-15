@@ -768,6 +768,12 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
             // upshift_torque_fraction) so the input drops to the new gear's speed in tens of ms.
             onc.cap_kinetic = (upshift_ && power_on_) ? std::min(C, kInertiaBoost * c_hold_)
                                                       : ((upshift_ || !power_on_) ? c_hold_ : real(0.0));
+            // Powershift, power-on downshift: the engine revs up to the new gear's speed on its own (clutch open), but a
+            // governed engine at full throttle (or a range change that kept both clutches open for 0.35 s) is already at
+            // or past it - waiting for a crossing that never comes cost the 60 kW farm tractor 0.6 s with the clutch open
+            // at the governor's high idle, then a 34 kN*m slam when max_inertia_phase_s gave up. From the synchronous
+            // speed up the clutch takes the engine down to it at the hold capacity.
+            if (desc_.powershift && !upshift_ && power_on_ && s.input_omega - ratio(next_) * s.output_omega > real(0.0)) onc.cap_kinetic = c_hold_;
             break;
         case Phase::Closing: {
             const real x = std::min(real(1.0), t_phase_ / cd.engage_time_s);

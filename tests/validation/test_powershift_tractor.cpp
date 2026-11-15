@@ -63,7 +63,7 @@ struct Rig {
     bool stalled = false;
     std::uint64_t hash_acc = 1469598103934665603ULL;
 
-    Rig(const vehicle::VehicleDesc& tractor, real trailer_mass, int workers) {
+    Rig(const vehicle::VehicleDesc& tractor, real trailer_mass, int workers, real body_mass = 6000.0, real z0 = 1.28) {
         WorldConfig wc;
         wc.job_workers = workers;
         world = std::make_unique<World>(wc);
@@ -77,10 +77,10 @@ struct Rig {
         world->create_body(ground, mesh);
 
         BodyDesc ba;
-        ba.shape = BoxShape{Vec3{1.2, 0.35, 0.9}};
-        ba.mass = 6000.0;
+        ba.shape = BoxShape{Vec3{1.2, 0.35, z0 > 1.2 ? 0.9 : 0.25}};
+        ba.mass = body_mass;
         ba.friction = 0.5;
-        ba.pose.position = Vec3{0.0, 0.0, 1.28};
+        ba.pose.position = Vec3{0.0, 0.0, z0};
         a = world->create_body(ba);
         va = world->create_vehicle(tractor, a, {}, "");
         if (trailer_mass > 0.0) {
@@ -92,7 +92,7 @@ struct Rig {
             bb.shape = BoxShape{Vec3{2.5, 0.5, 0.3}};
             bb.mass = trailer_mass;
             bb.friction = 0.5;
-            bb.pose.position = Vec3{sa.x - sb.x, 0.0, 1.1};
+            bb.pose.position = Vec3{sa.x - sb.x, 0.0, z0 + sa.z - sb.z + (z0 == 1.28 ? (1.1 - 1.28 - (sa.z - sb.z)) : 0.0)};
             b = world->create_body(bb);
             vb = world->create_vehicle(tipper, b, {}, "trailer");
             world->attach(va, "socket_hitch", vb, "socket_hitch_eye");
@@ -481,4 +481,111 @@ TEST_CASE("Powershift tractor diag: launch shifts under a tractor-heavy trailer"
     for (const auto& s : shifts)
         std::printf("[ps launch] t %5.2f  %5.1f km/h  %2d -> %2d %s %.3f s  kept %.2f%s\n", static_cast<double>(s.t), static_cast<double>(s.kmh), s.from, s.to, s.range_change ? "RANGE " : "inside",
                     static_cast<double>(s.duration), static_cast<double>(s.min_fraction), s.settled ? "" : " (unsettled)");
+}
+
+// A power-on downshift under a heavy load (a 6 t tractor, 34 t trailer, full pedal, start gear 11: the launch drops 11 -> 8 across a range): the box takes the
+// range change plus a short sync and the pull is back. Before the fix the on-coming clutch stayed open for the whole inertia phase of a power-on downshift: a
+// governed engine at full throttle was already past the new gear's speed, flared to its high idle, and the phase ended only at max_inertia_phase_s (0.6 s) with
+// a slam (60 kW farm tractor, 2026-11-15: 9 -> 6 took 1.3 s, hub torque 0 -> 34 kN*m). Recorded sabotage: the on-coming capacity back to 0 in a power-on
+// downshift's inertia phase (the line in AutoTransmission::update's Inertia case) -> the shift lasts 0.95 s here.
+TEST_CASE("Powershift tractor: a power-on downshift under a heavy load takes the range change plus a short sync", "[powershift][tractor][validation]") {
+    const auto shifts = record_shifts(powershift_desc(), 6.0, 34000.0);
+    const ShiftRecord* down = nullptr;
+    for (const auto& s : shifts)
+        if (s.to < s.from) { down = &s; break; }
+    REQUIRE(down != nullptr);
+    std::printf("[ps downshift] t %.2f  %d -> %d  %.3f s  (range %d)\n", static_cast<double>(down->t), down->from, down->to, static_cast<double>(down->duration), down->range_change ? 1 : 0);
+    CHECK(down->range_change);
+    CHECK(down->duration <= 0.35 + 0.25);
+}
+
+// Shift-feel measurement on any vehicle file (the farm's tractors): PS_VEH = path, PS_TRAILER = kg, PS_MASS = chassis kg, PS_THROTTLE, PS_SECONDS, PS_GEAR_REQ = a gear to hold-start in (0 = D).
+// Per shift: when, gear change, duration, engine rpm at its start against the schedule's up line, the peak |jerk| of the chassis around it (a smoothed over 0.1 s) and the pull kept.
+TEST_CASE("Tractor shift feel diag: farm tractor shifts, jerk and decision lag", "[.][diag][powershift]") {
+    const char* veh = std::getenv("PS_VEH");
+    if (!veh) return;
+    vehicle::VehicleDesc desc = io::load_vehicle_json(veh);
+    for (auto& c : desc.controllers)
+        if (auto* t = std::get_if<drivetrain::AutomaticTcuDesc>(&c.params); t && t->powershift) {
+            if (std::getenv("PS_MINT")) t->powershift->upshift_min_time_s = std::atof(std::getenv("PS_MINT"));
+            if (std::getenv("PS_MINPULL")) t->powershift->min_upshift_pull_fraction = std::atof(std::getenv("PS_MINPULL"));
+            if (std::getenv("PS_DWELL")) t->min_time_in_gear_s = std::atof(std::getenv("PS_DWELL"));
+            if (std::getenv("PS_UTF")) t->upshift_torque_fraction = std::atof(std::getenv("PS_UTF"));
+            if (std::getenv("PS_UPF")) t->schedule.up_rpm_at_full_throttle = std::atof(std::getenv("PS_UPF"));
+            if (std::getenv("PS_DNF")) t->schedule.down_rpm_at_full_throttle = std::atof(std::getenv("PS_DNF"));
+        }
+    for (auto& c : desc.powertrain.components)
+        if (auto* g = std::get_if<drivetrain::GearboxDesc>(&c.params)) {
+            if (std::getenv("PS_RANGE")) g->range_change_time_s = std::atof(std::getenv("PS_RANGE"));
+            if (std::getenv("PS_ENGAGE")) g->shift_clutch.engage_time_s = std::atof(std::getenv("PS_ENGAGE"));
+        }
+    const real z0 = std::getenv("PS_Z") ? std::atof(std::getenv("PS_Z")) : 1.28;
+    const real trailer = std::getenv("PS_TRAILER") ? std::atof(std::getenv("PS_TRAILER")) : 0.0;
+    const real mass = std::getenv("PS_MASS") ? std::atof(std::getenv("PS_MASS")) : 6000.0;
+    const real th = std::getenv("PS_THROTTLE") ? std::atof(std::getenv("PS_THROTTLE")) : 1.0;
+    const real secs = std::getenv("PS_SECONDS") ? std::atof(std::getenv("PS_SECONDS")) : 30.0;
+    const real gear_req = std::getenv("PS_GEAR_REQ") ? std::atof(std::getenv("PS_GEAR_REQ")) : kD;
+    const drivetrain::GearboxDesc& gb = gearbox_of(desc);
+    const drivetrain::AutomaticTcuDesc* tcu = nullptr;
+    for (const auto& c : desc.controllers)
+        if (const auto* t = std::get_if<drivetrain::AutomaticTcuDesc>(&c.params)) tcu = t;
+    REQUIRE(tcu != nullptr);
+    const real up = tcu->schedule.up_rpm_at_zero_throttle + th * (tcu->schedule.up_rpm_at_full_throttle - tcu->schedule.up_rpm_at_zero_throttle);
+    Rig r(desc, trailer, 4, mass, z0);
+    r.run(1.0);
+    r.world->set_control("park_lock", 0.0);
+    r.world->set_control("handbrake", 0.0);
+    r.world->set_control("brake", 0.0);
+    r.world->set_control("gear_request", gear_req);
+    r.world->set_control("throttle", th);
+    const real dt = r.world->dt();
+    const int n = static_cast<int>(secs / dt);
+    std::vector<real> v(n), rpm(n), tq(n);
+    std::vector<int> gear(n), phase(n);
+    for (int i = 0; i < n; ++i) {
+        r.step();
+        v[i] = r.speed();
+        rpm[i] = r.pt().engine_rpm;
+        gear[i] = r.pt().gear;
+        phase[i] = static_cast<int>(r.pt().shift_phase);
+        tq[i] = r.hub_torque_total();
+    }
+    // acceleration smoothed over 0.1 s, jerk over a further 0.1 s
+    const int w = static_cast<int>(0.1 / dt);
+    std::vector<real> a(n, 0.0), j(n, 0.0);
+    for (int i = w; i < n; ++i) a[i] = (v[i] - v[i - w]) / (w * dt);
+    for (int i = 2 * w; i < n; ++i) j[i] = (a[i] - a[i - w]) / (w * dt);
+    std::printf("[feel] %s trailer %.0f kg th %.2f  up line %.0f rpm  final v %.1f km/h gear %d stalled %d\n", veh, static_cast<double>(trailer), static_cast<double>(th), static_cast<double>(up),
+                static_cast<double>(v[n - 1] * 3.6), gear[n - 1], r.stalled ? 1 : 0);
+    if (std::getenv("PS_T0")) {
+        const int i0 = static_cast<int>(std::atof(std::getenv("PS_T0")) / dt), i1 = static_cast<int>(std::atof(std::getenv("PS_T1")) / dt);
+        for (int i = i0; i < std::min(n, i1); i += 5)
+            std::printf("[trace] t %.3f gear %2d ph %d rpm %5.0f v %5.2f a %5.2f hubTq %8.0f\n", i * static_cast<double>(dt), gear[i], phase[i], static_cast<double>(rpm[i]), static_cast<double>(v[i] * 3.6),
+                        static_cast<double>(a[i]), static_cast<double>(tq[i]));
+    }
+    int shifts = 0;
+    real worst_jerk = 0.0;
+    for (int i = 1; i < n;) {
+        const bool busy = phase[i] != 0 && phase[i] != 5;
+        if (busy && !(phase[i - 1] != 0 && phase[i - 1] != 5) && gear[i - 1] > 0) {
+            int e = i;
+            while (e < n && phase[e] != 0) ++e; // until Idle again (the closing ramp included)
+            real pj = 0.0, a0 = a[i], amin = 1e9, amax = -1e9;
+            for (int k = i; k < std::min(n, e + 24); ++k) { pj = std::max(pj, std::abs(j[k])); amin = std::min(amin, a[k]); amax = std::max(amax, a[k]); }
+            worst_jerk = std::max(worst_jerk, pj);
+            const int jmp = std::min(n - 1, e);
+            std::printf("[feel] t %6.2f %5.1f km/h  %2d -> %2d  dur %.2f s  rpm@start %5.0f (up %.0f)  a %.2f..%.2f (before %.2f)  peak jerk %.1f m/s3\n", i * static_cast<double>(dt), static_cast<double>(v[i] * 3.6),
+                        gear[i - 1], gear[jmp], (e - i) * static_cast<double>(dt), static_cast<double>(rpm[i]), static_cast<double>(up), static_cast<double>(amin), static_cast<double>(amax), static_cast<double>(a0),
+                        static_cast<double>(pj));
+            ++shifts;
+            i = e;
+        } else
+            ++i;
+    }
+    // time spent with the engine above the up line before a gear change is a decision lag; report the longest stretch
+    int longest = 0, cur = 0;
+    for (int i = 0; i < n; ++i) { cur = (rpm[i] > up + 20.0 && phase[i] == 0) ? cur + 1 : 0; longest = std::max(longest, cur); }
+    { int k30 = -1; for (int i = 0; i < n; ++i) if (v[i] >= 30.0 / 3.6) { k30 = i; break; } std::printf("[feel] t30 %.2f s  t10 %.2f\n", k30 < 0 ? -1.0 : k30 * static_cast<double>(dt), 0.0); }
+    std::printf("[feel] shifts %d  worst jerk %.1f m/s3  longest stretch above the up line with no shift %.2f s  gears: %d..%d (gearbox %zu forward)\n", shifts, static_cast<double>(worst_jerk), longest * static_cast<double>(dt), gear[0],
+                gear[n - 1], gb.forward_ratios.size());
 }

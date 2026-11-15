@@ -238,6 +238,17 @@ governed diesel near its top speed is lightly loaded at the decision and loaded 
 follows the demand (measured: the pre-powershift formula gave 0.6 s shifts). Data `data/gearboxes/tractor_24f24r_powershift.json`
 (24F/24R, 6 ranges of 4, [AS]), fixture `tests/support/fixtures/vehicles/tractor_powershift.json`.
 
+Power-on downshift (2026-11-15, farm tractor measurement): the engine revs up to the new gear's speed with the on-coming
+clutch open, but a governed engine at full throttle, or one that waited out a 0.35 s range change, is already at or past
+that speed. From the synchronous speed up (input faster than the new gear's speed) the on-coming clutch now takes the
+engine down at the hold capacity. Before, the inertia phase waited for a crossing that never came and ended at
+`max_inertia_phase_s` with the engine at its high idle and a torque slam: a 60 kW tractor's 9 -> 6 took 1.3 s (now 0.7 s
+with the 0.35 s range change in it). Powershift only. Pacing: with `upshift_min_time_s` 0.8 a launching tractor sits on the
+governor's droop line (2340 rpm, no torque) between shifts; 0.4 gave 0-30 km/h in 10.05 s instead of 12.86 s (150 kW class,
+10.5 t trailer) and 8.6 s instead of 13.1 s (60 kW class, empty). The in-range jerk (13-17 m/s3) is the torque returning
+along the governor's droop line after each shift (measured: an inertia ramp of the on-coming clutch and a torque return
+ramp of the engine ceiling changed it by under 10 % and were not kept).
+
 Stage 1b (loaded tractors, farm measurement: a shift every ~0.3 s below 15 km/h, each keeping 0.26-0.57 of the pull):
 `min_upshift_pull_fraction` (default 0 = off, [0,1)) limits a skip to the pull it keeps, `|ratio(next)| / |ratio(g)|` at
 least this (one gear up always; 2 gears keep 0.77 on 14 % steps, which the farm saw as 0.76-0.79); `upshift_min_time_s`
