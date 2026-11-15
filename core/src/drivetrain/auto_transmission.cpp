@@ -12,7 +12,8 @@ constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * real(3.14159265358979
 constexpr real kHoldMargin = real(1.3);          // [AS] C_h over the torque handed over
 constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
 constexpr real kPeakPerCapacity = real(1.9);   // [AS] shift clutch capacity / engine peak torque (tractor_24f24r_powershift.json)
-constexpr real kInertiaBoost = real(1.5);       // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
+constexpr real kLaunchHoldMaxS = real(2.0);    // [AS] longest the slipping-launch guard keeps a powershift in its gear
+constexpr real kInertiaBoost = real(1.5);      // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
 constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the command above this = power on
 constexpr real kInhibitRpm = real(300.0);        // [AS] no direction change above this input rpm in 1st / R1
 constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0); // 1/s [AS]
@@ -401,6 +402,8 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     } else if (g > selector_) {
         desired = desc_.powershift ? selector_ : g - 1;
     } else if (desc_.powershift) {
+        // How long the slipping-launch guard in powershift_desired has been holding the gear (it gives up after kLaunchHoldMaxS).
+        launch_hold_t_ = (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle) ? launch_hold_t_ + s.h : real(0.0);
         desired = powershift_desired(s, th, g);
     } else {
         const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
@@ -447,7 +450,9 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
     // A launch that still slips (the starting clutch has not locked): the input rpm follows the output through the slipping clutch, so a low in_rpm is the launch
     // itself, not a lugging engine (the engine is at or above the down line). Without this the stall guard (and the down line) read it as a crawl and drop a standing start from the start gear to gear 1
     // (60 kW farm tractor, 2026-11-12: 2.5 m in 5 s instead of ~10 m).
-    if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle) return g;
+    // Only for kLaunchHoldMaxS: a launch that is still slipping after that is not a launch (a 40 t+ load at a crawl, the engine
+    // on its governor, the starting clutch never locking) and the normal law may choose another gear (farm slurry tanker, 2026-11-15).
+    if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle && launch_hold_t_ < kLaunchHoldMaxS) return g;
     const real target = dn + ps.target_fraction * (up - dn);
     const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
     const int n = forward_count();
@@ -882,6 +887,7 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, e_launch_);
     h = fnv1a(h, launch_locked_);
     if (rev_held_) h = fnv1a(h, rev_held_);
+    if (desc_.powershift && launch_hold_t_ > real(0.0)) h = fnv1a(h, launch_hold_t_);
     if (desc_.powershift && desc_.tcu.powershift && desc_.tcu.powershift->torque_return_s > real(0.0)) h = fnv1a(h, ret_f0_);
     if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
         h = fnv1a(h, ratio_);

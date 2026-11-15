@@ -332,3 +332,17 @@ TEST_CASE("Powershift: a slipping standing start with the pedal down stays in th
     CHECK(run(0.5) == 6);
     CHECK(run(0.25) < 6);
 }
+// The guard above must not hold forever: an engine that lugged below launch_anti_stall_rpm drops launch_locked_ and, below the bite rpm, cannot relock it
+// (farm slurry tanker, 2026-11-15: gear 6 held at 0.6-1 m/s, the engine at 1025 rpm, the pull 28 kN, while gear 4 was the right one). The guard gives up
+// after kLaunchHoldMaxS (2 s [AS]) and the normal law takes the gear that restores the band. Recorded sabotage: kLaunchHoldMaxS huge -> the box is
+// still in gear 6 after 3 s and the second CHECK fails.
+TEST_CASE("Powershift: the slipping-launch guard gives up after kLaunchHoldMaxS and lets the box downshift", "[powershift][drivetrain][automatic]") {
+    Box b(make_desc());
+    REQUIRE(b.at.current() == 6);
+    b.s.throttle = 1.0;
+    b.s.engine_omega = 1100.0 * 2.0 * kPi / 60.0;
+    b.s.input_omega = 1000.0 * 2.0 * kPi / 60.0; // slipping by 100 rpm: above launch_lock_slip_rpm, below the bite rpm - never relocks
+    b.s.output_omega = 1100.0 * 2.0 * kPi / 60.0 / b.at.ratio(6); // gear 6 reads 1100 rpm: under the full-throttle down line (1400)
+    CHECK(b.step_for(1.0).target == 6); // inside the guard's time
+    CHECK(b.step_for(2.0).target < 6);  // 3 s in: the normal law downshifts
+}
