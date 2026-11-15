@@ -361,3 +361,5 @@ A simple 5-speed + reverse manual box:
   (`data/gearboxes/tractor_12f4r.json`) uses larger
   `neutral_phase_s`/`grind_after_s`/`abort_after_s` values deliberately;
   read its `source` note before assuming manual-box defaults transfer.
+
+A launch that is still slipping after the guard timeout with the engine below launch bite_rpm + 150 [AS] (an undersized tractor at 0.10-0.15 of its torque: clutch at its creep capacity, engine at the anti-stall rpm, wheels standing) is not held in the start gear: the start gear is no floor then and the box takes max_skip gears lower per decision, down to gear 1 (farm tractor_150, 2026-11-16: 0 -> 2.4 km/h at 0.15, 1.7 km/h at 0.10). Undersized is slower, never stuck.

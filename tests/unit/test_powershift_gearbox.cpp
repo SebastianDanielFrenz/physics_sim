@@ -346,3 +346,25 @@ TEST_CASE("Powershift: the slipping-launch guard gives up after kLaunchHoldMaxS 
     CHECK(b.step_for(1.0).target == 6); // inside the guard's time
     CHECK(b.step_for(2.0).target < 6);  // 3 s in: the normal law downshifts
 }
+// A launch stuck at the anti-stall rpm (farm tractor_150 at 0.10-0.15 of its torque, 2026-11-16: gear 11 = the start gear held, the engine at 1047 rpm,
+// the clutch at its creep capacity, 0.05 m/s for 60 s): once the guard has given up, the start gear is no floor - the box takes a lower gear
+// (max_skip at a time) so the same clutch torque gives more at the wheels. Recorded sabotage: remove the `launch_hold_t_ >= kLaunchHoldMaxS` branch in the
+// `best == g` block of powershift_desired -> the box is still in gear 6 after 4 s and the second CHECK fails. A running engine (above the bite rpm) is left alone.
+TEST_CASE("Powershift: a launch stuck at the anti-stall rpm takes a lower gear than the start gear", "[powershift][drivetrain][automatic]") {
+    auto stuck = [](real engine_rpm) {
+        Box b(make_desc());
+        REQUIRE(b.at.current() == 6);
+        b.s.throttle = 1.0;
+        b.s.engine_omega = engine_rpm * 2.0 * kPi / 60.0;
+        b.s.input_omega = b.s.engine_omega; // the clutch slips hard: the input shaft turns with the engine, the wheels stand
+        b.s.output_omega = 60.0 * 2.0 * kPi / 60.0 / b.at.ratio(6); // the tractor stands (gear 6 reads 60 rpm)
+        const int at1 = b.step_for(1.0).target;
+        const int at4 = b.step_for(3.0).target;
+        return std::make_pair(at1, at4);
+    };
+    const auto low = stuck(1047.0);
+    CHECK(low.first == 6);  // inside the guard's time
+    CHECK(low.second < 6);  // 4 s of standing: a lower gear
+    const auto running = stuck(1900.0);
+    CHECK(running.second == 6); // the engine is up in the band, the launch is just slow: stays
+}

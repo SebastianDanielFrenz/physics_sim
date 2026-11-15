@@ -12,6 +12,7 @@ constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * real(3.14159265358979
 constexpr real kHoldMargin = real(1.3);          // [AS] C_h over the torque handed over
 constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
 constexpr real kPeakPerCapacity = real(1.9);   // [AS] shift clutch capacity / engine peak torque (tractor_24f24r_powershift.json)
+constexpr real kStuckBiteMarginRpm = real(150.0); // [AS] a stuck launch: the engine is not even this far above the bite rpm
 constexpr real kLaunchHoldMaxS = real(2.0);    // [AS] longest the slipping-launch guard keeps a powershift in its gear
 constexpr real kInertiaBoost = real(1.5);      // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
 constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the command above this = power on
@@ -477,7 +478,16 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
                 break;
             }
         }
-        if (best == g) return g;
+        if (best == g) {
+            // A launch that has slipped for kLaunchHoldMaxS without the engine getting above its bite rpm is too heavy for this gear
+            // (an undersized tractor at 0.10-0.15 of the torque sits at the anti-stall rpm with the clutch at its creep capacity, wheels
+            // standing): the start gear is not a floor then, take a lower one (max_skip of them at a time) - a lower ratio gives the
+            // same clutch torque more at the wheels. Never refused, only slower.
+            if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle && launch_hold_t_ >= kLaunchHoldMaxS && dwell &&
+                s.engine_omega * kRadPerSecToRpm < t.launch_bite_rpm + kStuckBiteMarginRpm)
+                return std::max(1, g - ps.max_skip);
+            return g;
+        }
         // Never into a gear the upshift line would send straight back (hunting) unless the engine is about to stall.
         if (!stall_guard && in_rpm(best) >= up * real(0.95)) return g;
         return best;
