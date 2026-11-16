@@ -13,6 +13,7 @@ constexpr real kHoldMargin = real(1.3);          // [AS] C_h over the torque han
 constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
 constexpr real kPeakPerCapacity = real(1.9);   // [AS] shift clutch capacity / engine peak torque (tractor_24f24r_powershift.json)
 constexpr real kStuckBiteMarginRpm = real(150.0); // [AS] a stuck launch: the engine is not even this far above the bite rpm
+constexpr real kLugHoldS = real(2.0); // [AS] a locked gear that has kept the engine below the down line this long is too tall for the load
 constexpr real kLaunchHoldMaxS = real(2.0);    // [AS] longest the slipping-launch guard keeps a powershift in its gear
 constexpr real kInertiaBoost = real(1.5);      // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
 constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the command above this = power on
@@ -387,7 +388,10 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
         tgt_ = 1;
         return;
     }
-    if (phase_ != Phase::Idle) return; // one decision per completed shift
+    if (phase_ != Phase::Idle) {
+        lug_t_ = real(0.0);
+        return; // one decision per completed shift
+    }
     const int g = cur_;
     const ShiftScheduleDesc sch = active_schedule(s);
     const real r = in_rpm(g);
@@ -404,6 +408,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
         desired = desc_.powershift ? selector_ : g - 1;
     } else if (desc_.powershift) {
         // How long the slipping-launch guard in powershift_desired has been holding the gear (it gives up after kLaunchHoldMaxS).
+        lug_t_ = (!(slip_launch() && !launch_locked_) && th >= kLaunchHoldThrottle && r < dn) ? lug_t_ + s.h : real(0.0);
         launch_hold_t_ = (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle) ? launch_hold_t_ + s.h : real(0.0);
         desired = powershift_desired(s, th, g);
     } else {
@@ -486,6 +491,10 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
             if (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle && launch_hold_t_ >= kLaunchHoldMaxS && dwell &&
                 s.engine_omega * kRadPerSecToRpm < t.launch_bite_rpm + kStuckBiteMarginRpm)
                 return std::max(1, g - ps.max_skip);
+            // A locked gear that has kept the engine below the down line for kLugHoldS while no lower gear reaches the target rpm: the load is
+            // too heavy for the gear (an undersized tractor behind a soil tool lugs at ~1000 rpm and creeps; farm 2026-11-16). One gear lower
+            // lifts the engine to where its torque curve is and pulls harder; repeated every kLugHoldS until the engine is above the line.
+            if (lug_t_ >= kLugHoldS && dwell) return g - 1;
             return g;
         }
         // Never into a gear the upshift line would send straight back (hunting) unless the engine is about to stall.
@@ -898,6 +907,7 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, launch_locked_);
     if (rev_held_) h = fnv1a(h, rev_held_);
     if (desc_.powershift && launch_hold_t_ > real(0.0)) h = fnv1a(h, launch_hold_t_);
+    if (desc_.powershift && lug_t_ > real(0.0)) h = fnv1a(h, lug_t_);
     if (desc_.powershift && desc_.tcu.powershift && desc_.tcu.powershift->torque_return_s > real(0.0)) h = fnv1a(h, ret_f0_);
     if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
         h = fnv1a(h, ratio_);

@@ -189,6 +189,7 @@ private:
     int manual_gear_ = 1;
     real manual_t_ = 0.0;
     real time_in_gear_ = 0.0;
+    real lug_t_ = 0.0;         // powershift: time the engine has been below the down line in a locked gear (hashed only while > 0)
     real launch_hold_t_ = 0.0; // powershift: time the slipping-launch guard has held the gear (hashed only while > 0)
     real ret_f0_ = 1.0; // powershift torque_return_s: throttle-ceiling start fraction of the Closing ramp (hashed only with the key)
     bool kickdown_spent_ = false;

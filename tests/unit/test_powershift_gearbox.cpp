@@ -368,3 +368,24 @@ TEST_CASE("Powershift: a launch stuck at the anti-stall rpm takes a lower gear t
     const auto running = stuck(1900.0);
     CHECK(running.second == 6); // the engine is up in the band, the launch is just slow: stays
 }
+// Lugging in a locked gear (farm 2026-11-16: an undersized tractor behind a soil tool sat at ~1050 rpm in gear 4 for 12 s and crept at 0.4 m/s, then
+// went to gear 1 only at the anti-stall point and recovered at 0.6 m/s): when the engine has been below the down line for kLugHoldS and no lower gear
+// reaches the target rpm, the box takes ONE gear lower per kLugHoldS. Recorded sabotage: remove the `lug_t_ >= kLugHoldS` line in powershift_desired ->
+// the box is still in gear 6 after 3 s and the second CHECK fails.
+TEST_CASE("Powershift: a locked gear that lugs the engine below the down line takes one lower gear every 2 s", "[powershift][drivetrain][automatic]") {
+    auto lug = [](real rpm) {
+        Box b(make_desc());
+        REQUIRE(b.at.current() == 6);
+        b.set_input_rpm(1500.0); // engine up and locked (slip 0, above the bite rpm)
+        b.step_for(0.2);
+        b.set_input_rpm(rpm);
+        const int at1 = b.step_for(1.0).target;
+        const int at4 = b.step_for(3.0).target;
+        return std::make_pair(at1, at4);
+    };
+    const auto low = lug(800.0); // below the 1400 down line; no lower gear reaches the 1775 target (gear 1 reads 1559)
+    CHECK(low.first == 6);
+    CHECK(low.second == 5); // one gear, not the stuck-launch skip of max_skip
+    const auto fine = lug(1500.0); // inside the band: nothing to do
+    CHECK(fine.second == 6);
+}
