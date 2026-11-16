@@ -10,8 +10,12 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace ps;
@@ -82,4 +86,23 @@ TEST_CASE("Front weight: a wheel-less block on the front socket moves the axle l
     CHECK(std::abs(wp.y - tp.y) < 0.005);
     CHECK(std::abs((wp.z - tp.z) - (0.78 - 1.28)) < 0.01);
     CHECK(w->coupling_state(with.hitch).max_error_m < 0.005);
+}
+
+// Negative control: the relaxed gate only opened for a towed hitch point. A wheel-less file with neither a machine block nor a
+// towed point (none at all, or only a towing one) is still rejected with the message it always had.
+TEST_CASE("Front weight: a wheel-less vehicle with no machine block and no towed hitch point is still rejected", "[machine][vehicle][io]") {
+    namespace fs = std::filesystem;
+    const std::string tag = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const char* const bodies[] = {
+        R"({"format":"physics_sim.vehicle/2","name":"nw","source":"x","wheels":[]})",
+        R"({"format":"physics_sim.vehicle/2","name":"nw","source":"x","wheels":[],"hitch_points":[{"name":"h","role":"towing"}]})",
+    };
+    int n = 0;
+    for (const char* body : bodies) {
+        const fs::path f = fs::temp_directory_path() / ("ps_front_weight_neg_" + tag + "_" + std::to_string(n++) + ".json");
+        { std::ofstream(f) << body; }
+        CHECK_THROWS_WITH(io::load_vehicle_json(f.string()), Catch::Matchers::ContainsSubstring("has no 'wheels' array"));
+        std::error_code ec;
+        fs::remove(f, ec);
+    }
 }
