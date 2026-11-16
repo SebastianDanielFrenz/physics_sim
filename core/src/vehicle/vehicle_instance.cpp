@@ -634,8 +634,9 @@ void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidB
         ctx.traction_torque_fraction=traction_fraction;
         ctx.traction_floor_fraction=tc_desc.min_fraction;
     }
+    ctx.radar_speed_mps=pose_s.orientation.inverse().rotate(twist_s.linear).x;
     if(assist_traction||lc_owns)
-        ctx.ground_speed_mps=pose_s.orientation.inverse().rotate(twist_s.linear).x;
+        ctx.ground_speed_mps=ctx.radar_speed_mps;
     ctx.brake = controls.brake;
     ctx.handbrake = controls.handbrake;
     if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6

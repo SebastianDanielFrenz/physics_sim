@@ -2807,6 +2807,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             as.engine_omega = engine_ ? network_.omega(engine_crank_) : real(0.0);
             as.input_omega = network_.omega(gearbox_in_);
             as.output_omega = network_.omega(gearbox_out_);
+            as.ground_speed_mps = ctx.radar_speed_mps;
+            as.output_speed_mps = approx_speed_mps();
             as.throttle = engine_ ? last_throttle_command_.command : ctx.throttle;
             // Hybrid: the schedule reads the driver's pedal command (before the TC ceiling), as in every other car. It used to
             // read requested / (motor + ICE envelope power), a fraction of the whole system's capability: ~0.3 at full pedal

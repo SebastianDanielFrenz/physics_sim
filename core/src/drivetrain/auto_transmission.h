@@ -84,6 +84,10 @@ public:
         real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN();
         real down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
         real close_time_s = std::numeric_limits<real>::quiet_NaN();
+        // Powershift wheel-slip guard: the radar ground speed (NaN = no sensor, guard off) and the speed the gearbox output implies at
+        // the wheels (output shaft through the final drive and the wheel radius).
+        real ground_speed_mps = std::numeric_limits<real>::quiet_NaN();
+        real output_speed_mps = 0.0;
         real mode_channel = 0.0;     // kTransmissionModeChannel, >= 0.5 = sport schedule
         real input_torque_prev = 0.0; // |torque the two shift rows carried last substep| (input-referred)
         real engine_torque_demand = 0.0; // CVT plan C1: the engine's demand last substep (clamping-force feed-forward)

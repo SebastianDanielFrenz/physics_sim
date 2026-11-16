@@ -20,6 +20,9 @@ constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the comm
 constexpr real kInhibitRpm = real(300.0);        // [AS] no direction change above this input rpm in 1st / R1
 constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0); // 1/s [AS]
 constexpr real kLaunchMinThrottle = real(0.05);
+constexpr real kSpinSlipLimit = real(0.5);      // [AS] driven-wheel slip (gearbox output speed against radar ground speed) above which a powershift does not upshift ...
+constexpr real kSpinSpeedLimitMps = real(3.0);  // [AS] ... while the ground speed is below this
+constexpr real kSpinSpeedFloorMps = real(0.5);  // [AS] slip = (wheel - ground) / max(ground, this)
 constexpr real kLaunchHoldThrottle = real(0.5);  // [AS] a powershift launch with the pedal at least this far down stays in its gear while the starting clutch slips
 
 template <typename T>
@@ -463,7 +466,12 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
     const bool dwell = time_in_gear_ >= t.min_time_in_gear_s;
     const int n = forward_count();
     const int top = std::clamp(selector_ > 0 ? selector_ : n, 1, n);
-    if (dwell && time_in_gear_ >= ps.upshift_min_time_s && r > up && g < top && in_rpm(g + 1) > dn) {
+    // Wheel-slip guard (a real TCU compares the driven wheels with a radar or the undriven wheels): spinning wheels at a crawl make the output
+    // shaft look fast, and an upshift there only cuts the torque at the ground (farm 2026-11-16: a 26.8 t tanker spinning at kappa 2.7-3.0 on soft ground,
+    // 0.47 -> 0.28 m/s, shifted 11 -> 14 -> 17). No upshift while the wheels run this far ahead of the ground at low speed; no sensor = no guard.
+    const bool spinning = std::isfinite(s.ground_speed_mps) && std::abs(s.ground_speed_mps) < kSpinSpeedLimitMps &&
+                          (s.output_speed_mps - std::abs(s.ground_speed_mps)) > kSpinSlipLimit * std::max(std::abs(s.ground_speed_mps), kSpinSpeedFloorMps);
+    if (dwell && time_in_gear_ >= ps.upshift_min_time_s && r > up && g < top && in_rpm(g + 1) > dn && !spinning) {
         int best = g + 1;
         for (int k = g + 2; k <= std::min(top, g + ps.max_skip); ++k) {
             if (in_rpm(k) < target) break;

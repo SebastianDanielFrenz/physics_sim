@@ -388,4 +388,22 @@ TEST_CASE("Powershift: a locked gear that lugs the engine below the down line ta
     CHECK(low.second == 5); // one gear, not the stuck-launch skip of max_skip
     const auto fine = lug(1500.0); // inside the band: nothing to do
     CHECK(fine.second == 6);
+}// Wheel-slip guard (farm 2026-11-16: tractor_large with a 26.8 t tanker in a full-lock turn on soft ground, driven wheels at kappa 2.7-3.0, 0.47 -> 0.28 m/s,
+// the box shifted 11 -> 14 -> 17 on the output shaft speed): no upshift while the gearbox output runs more than kSpinSlipLimit ahead of the radar ground
+// speed at a ground speed below kSpinSpeedLimitMps. A moving tractor with matching speeds, a fast one and one without a sensor shift as before.
+// Recorded sabotage: remove `&& !spinning` from the upshift condition in powershift_desired -> the spinning case goes to gear 9 and fails.
+TEST_CASE("Powershift: no upshift while the driven wheels spin ahead of the ground at a crawl", "[powershift][drivetrain][automatic]") {
+    auto decide = [](real ground, real output_speed) {
+        Box b(make_desc());
+        b.set_input_rpm(2900.0); // far above the up line: gear 6 -> 9 when nothing holds it
+        b.s.ground_speed_mps = ground;
+        b.s.output_speed_mps = output_speed;
+        return b.step_for(0.01).target;
+    };
+    CHECK(decide(0.3, 2.0) == 6);   // wheels at 2 m/s over 0.3 m/s of ground: slip 5.7
+    CHECK(decide(0.0, 0.6) == 6);   // standing, wheels turning: (0.6 - 0) / 0.5 floor
+    CHECK(decide(0.3, 0.35) == 9);  // grip: 0.05 m/s of slip speed
+    CHECK(decide(2.0, 2.2) == 9);   // slip 0.1
+    CHECK(decide(4.0, 9.0) == 9);   // above the speed limit the guard is off (the law reads slip elsewhere)
+    CHECK(decide(std::numeric_limits<real>::quiet_NaN(), 2.0) == 9); // no radar: no guard
 }
