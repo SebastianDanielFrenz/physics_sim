@@ -363,3 +363,7 @@ A simple 5-speed + reverse manual box:
   read its `source` note before assuming manual-box defaults transfer.
 
 A launch that is still slipping after the guard timeout with the engine below launch bite_rpm + 150 [AS] (an undersized tractor at 0.10-0.15 of its torque: clutch at its creep capacity, engine at the anti-stall rpm, wheels standing) is not held in the start gear: the start gear is no floor then and the box takes max_skip gears lower per decision, down to gear 1 (farm tractor_150, 2026-11-16: 0 -> 2.4 km/h at 0.15, 1.7 km/h at 0.10). Undersized is slower, never stuck.
+
+### Load-sensing lug rule (`lug_margin`)
+
+Powershift only, `powershift.lug_margin` (0 = off, bit-identical; farm uses 1.1 [AS]). The plain law has a hysteresis trap: between the down line and the up line every gear is a stable point, so a heavy tractor that landed in a tall gear a few rpm above the down line (farm 2026-11-16: 14-80 rpm above 1400, 1.5 m/s where the plain version reached 1.65 m/s one gear lower) never leaves it. With `lug_margin` the box steps ONE gear down when, in a locked gear, the command is at least 0.95 and the engine has stayed below `lug_margin` x the down line for 2 s (the existing lug hold), and only if the lower gear's input rpm stays below the up line (hunting guard; otherwise it skips). The timer restarts with every shift. State hashed only while the timer runs. Test: test_powershift_gearbox.cpp "lug_margin steps down out of the trap" (rule off = the trap holds).
