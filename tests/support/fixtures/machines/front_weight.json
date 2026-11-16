@@ -1,0 +1,18 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "front_weight",
+  "source": "Test fixture: a removable front weight (ballast block) with no wheels and no machine, hung on a locked three-point front socket. Origin at the centre of mass, 0.4 m ahead of the sockets' plane and 0.1 m below the top socket.",
+  "wheels": [],
+  "hitch_points": [
+    {
+      "name": "socket_front",
+      "class": "../../../../data/hitch_classes/three_point_locked.json",
+      "role": "towed",
+      "sockets": {
+        "socket_3pt_top": [-0.4, 0.0, 0.4],
+        "socket_3pt_L": [-0.4, 0.4, -0.2],
+        "socket_3pt_R": [-0.4, -0.4, -0.2]
+      }
+    }
+  ]
+}

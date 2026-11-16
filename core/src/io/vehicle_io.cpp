@@ -4251,8 +4251,15 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                   "(physics_sim.vehicle/2) - see 'brake_system' (PHYS-033 Q7)");
     }
 
-    // Only a machine goes without wheels: an implement carried by a linkage.
-    if (!j.contains("wheels") || !j.at("wheels").is_array() || (j.at("wheels").empty() && !j.contains("machine"))) {
+    // Only a machine or a dead weight goes without wheels: an implement carried by a linkage, or a ballast block (no machine,
+    // but a "towed" hitch point that holds it to a tractor's socket).
+    bool has_towed_point = false;
+    if (j.contains("hitch_points") && j.at("hitch_points").is_array()) {
+        for (const auto& hp : j.at("hitch_points")) {
+            if (hp.is_object() && hp.value("role", std::string("towing")) == "towed") has_towed_point = true;
+        }
+    }
+    if (!j.contains("wheels") || !j.at("wheels").is_array() || (j.at("wheels").empty() && !j.contains("machine") && !has_towed_point)) {
         throw std::runtime_error("vehicle " + path + " has no 'wheels' array");
     }
     // Injected tyres (VehicleLoadOptions::tyres): every key must name a wheel of this file (typo guard); a wheel with
