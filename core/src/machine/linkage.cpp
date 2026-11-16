@@ -27,6 +27,6 @@ void validate_linkage(const LinkageDesc& d) {
     if (d.position_channel.empty() || d.mode_channel.empty() || d.draft_channel.empty()) fail("a channel name is empty");
 }
 
-real linkage_angle(const Vec3& link_local) { return math::atan2(link_local.z, -link_local.x); }
+real linkage_angle(const Vec3& link_local, real direction) { return math::atan2(link_local.z, -direction * link_local.x); }
 
 } // namespace ps::machine

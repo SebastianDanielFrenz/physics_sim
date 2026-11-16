@@ -43,14 +43,16 @@ struct LinkageDesc {
 
 void validate_linkage(const LinkageDesc& d); // std::invalid_argument
 
-// The angle of a link in the chassis' x-z plane, pointing to the tractor's rear: 0 level, up positive.
-[[nodiscard]] real linkage_angle(const Vec3& link_local);
+// The angle of a link in the chassis' x-z plane: 0 level, up positive. `direction` +1 for links that point to the tractor's rear (the default,
+// a rear linkage), -1 for links that point forward (a front linkage).
+[[nodiscard]] real linkage_angle(const Vec3& link_local, real direction = 1.0);
 
 // One coupling's linkage: the tractor's pivots and the implement's pins, in their chassis.
 struct LinkageGeometry {
     Vec3 lower_pivot_local{}, top_pivot_local{}; // towing chassis
     Vec3 lower_pin_local{}, top_pin_local{};     // towed chassis
     real lower_length_m = 0.0, top_length_m = 0.0;
+    real direction = 1.0;           // +1 the links point to the rear, -1 to the front (a front linkage)
     real reference_angle_rad = 0.0; // the lower link's angle in the towing chassis at the hitch point's pose
     real min_angle_rad = 0.0, max_angle_rad = 0.0; // from that pose
     real max_lift_torque_nm = 0.0; // about the lower pivot

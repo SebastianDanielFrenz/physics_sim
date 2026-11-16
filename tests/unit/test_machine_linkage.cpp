@@ -142,6 +142,61 @@ TEST_CASE("linkage rows: one substep takes each row where the implicit spring pu
     }
 }
 
+// A front linkage is the rear one seen in a mirror (x -> -x): same angle, same lift torque, same forces with x negated and the axial vectors' y and z negated.
+TEST_CASE("a front linkage (links pointing forward) solves as the mirror image of a rear one", "[machine][vehicle]") {
+    const machine::HitchClassDesc hitch = locked_class();
+    constexpr real h = 1.0 / 960.0;
+    const auto mp = [](const Vec3& v) { return Vec3{-v.x, v.y, v.z}; };   // a point or a velocity
+    const auto ma = [](const Vec3& v) { return Vec3{v.x, -v.y, -v.z}; };  // an axial vector (angular velocity, torque)
+    machine::LinkageGeometry rear = tractor_geometry();
+    rear.max_lift_torque_nm = 1e9;
+    machine::LinkageGeometry front = rear;
+    front.lower_pivot_local = mp(rear.lower_pivot_local);
+    front.top_pivot_local = mp(rear.top_pivot_local);
+    front.lower_pin_local = mp(rear.lower_pin_local);
+    front.top_pin_local = mp(rear.top_pin_local);
+    front.direction = -1.0;
+    const Vec3 rear_lower = Vec3{-2.04, 0.0, -0.68} - rear.lower_pivot_local;
+    front.reference_angle_rad = machine::linkage_angle(mp(rear_lower), -1.0);
+    CHECK(front.reference_angle_rad == Approx(rear.reference_angle_rad).margin(1e-12));
+
+    std::mt19937_64 rng(11);
+    std::uniform_real_distribution<real> u(-1.0, 1.0);
+    for (int trial = 0; trial < 100; ++trial) {
+        Pair r = resting_pair();
+        r.a.inv_mass = 1.0 / 6000.0;
+        r.a.inv_inertia_world = Mat3::diagonal(1.0 / 4000.0, 1.0 / 9000.0, 1.0 / 9000.0);
+        r.a.linear = Vec3{u(rng), u(rng), u(rng)};
+        r.b.linear = r.a.linear + Vec3{u(rng), u(rng), u(rng)} * 0.1;
+        r.a.angular = Vec3{u(rng), u(rng), u(rng)} * 0.2;
+        r.b.angular = r.a.angular + Vec3{u(rng), u(rng), u(rng)} * 0.1;
+        r.b.position += Vec3{u(rng), u(rng), u(rng)} * 0.005;
+        Pair f = r;
+        f.a.position = mp(r.a.position - r.a.position) + r.a.position; // the tractor stays where it is: the mirror plane is its own x = 0
+        f.b.position = r.a.position + mp(r.b.position - r.a.position);
+        f.a.linear = mp(r.a.linear);
+        f.b.linear = mp(r.b.linear);
+        f.a.angular = ma(r.a.angular);
+        f.b.angular = ma(r.b.angular);
+
+        const machine::LinkageMeasure mr = machine::measure_linkage(r.a, r.b, rear);
+        const machine::LinkageMeasure mf = machine::measure_linkage(f.a, f.b, front);
+        REQUIRE(mf.lift_angle == Approx(mr.lift_angle).margin(1e-9));
+        REQUIRE(mf.lift_rate == Approx(mr.lift_rate).margin(1e-9));
+        const machine::LiftCommand lift{true, mr.lift_angle + 0.02, 0.0};
+        const machine::LinkageSolve sr = machine::solve_linkage(r.a, r.b, rear, hitch, h, lift);
+        const machine::LinkageSolve sf = machine::solve_linkage(f.a, f.b, front, hitch, h, lift);
+        REQUIRE(sf.lift_acting);
+        CHECK(sf.lift_torque_nm == Approx(sr.lift_torque_nm).margin(1e-6));
+        const Vec3 fr = mp(sr.wrench.force_on_a), tr = ma(sr.wrench.torque_on_a), tb = ma(sr.wrench.torque_on_b);
+        CHECK(sf.wrench.force_on_a.x == Approx(fr.x).margin(1e-5));
+        CHECK(sf.wrench.force_on_a.y == Approx(fr.y).margin(1e-5));
+        CHECK(sf.wrench.force_on_a.z == Approx(fr.z).margin(1e-5));
+        CHECK(sf.wrench.torque_on_a.y == Approx(tr.y).margin(1e-4));
+        CHECK(sf.wrench.torque_on_b.y == Approx(tb.y).margin(1e-4));
+    }
+}
+
 TEST_CASE("linkage rows: the lift only lifts, and stops at its force", "[machine][vehicle]") {
     machine::LinkageGeometry g = tractor_geometry();
     const machine::HitchClassDesc hitch = locked_class();

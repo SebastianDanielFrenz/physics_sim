@@ -257,7 +257,8 @@ machine::CouplingDesc System::mate_points(VehicleId towing, std::string_view tow
         const Vec3 lower = a->lower_pin_local - lift.lower_pivot_local;
         g.lower_length_m = lower.length();
         g.top_length_m = (a->top_pin_local - lift.top_pivot_local).length();
-        g.reference_angle_rad = machine::linkage_angle(lower);
+        g.direction = lower.x > 0.0 ? real(-1.0) : real(1.0); // links that run forward from their pivot: a front linkage
+        g.reference_angle_rad = machine::linkage_angle(lower, g.direction);
         g.min_angle_rad = lift.min_angle_rad;
         g.max_angle_rad = lift.max_angle_rad;
         g.max_lift_torque_nm = lift.max_lift_force_n * g.lower_length_m;

@@ -5,6 +5,8 @@ A towing hitch point of class `three_point_locked` carries a `linkage` block in 
 `solve_linkage` in `core/src/machine/coupling_solver.cpp`. Unknown keys are rejected. A hitch point without the block stays
 a plain rigid hitch.
 
+A linkage may sit at the FRONT of a tractor: when the lower pins lie ahead of the lower pivot (`direction` -1 in `LinkageGeometry`, derived at attach) the angle is measured toward the front, up still positive, and every row is the rear one mirrored (test "a front linkage ... mirror image"). A rear linkage is unchanged bit for bit. Give a front linkage its own `channels` (`lift_front`...) so it lifts apart from the rear one.
+
 The links are massless and collapse on the tractor's centre plane: the two lower links into one, from the lower pivot to the
 middle of the lower pins, the top link from the top pivot to the top pin. That is a planar four-bar with one degree of freedom,
 the lower link's angle. The implement's pitch follows from the geometry. Both points stand on three sockets, one of them named `*_top`: the middle of the other two is the lower pin, that one the top pin.

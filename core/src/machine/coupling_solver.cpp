@@ -168,6 +168,7 @@ struct LinkagePoints {
     Vec3 lower, top;                         // pivot - pin, world
     Vec3 y;                                  // the towing chassis' lateral axis
     real lower_length = 0.0, top_length = 0.0, angle = 0.0;
+    real direction = 1.0; // +1 links to the rear, -1 to the front
 };
 
 [[nodiscard]] LinkagePoints linkage_points(const LinkageBody& a, const LinkageBody& b, const LinkageGeometry& g) {
@@ -182,7 +183,8 @@ struct LinkagePoints {
     p.top_length = p.top.length();
     p.y = a.orientation.rotate(Vec3::unit_y());
     const Vec3 link_local = a.orientation.conjugate().rotate(p.lower * real(-1.0));
-    p.angle = math::atan2(link_local.z, -link_local.x) - g.reference_angle_rad;
+    p.direction = g.direction;
+    p.angle = math::atan2(link_local.z, -g.direction * link_local.x) - g.reference_angle_rad;
     return p;
 }
 
@@ -213,6 +215,12 @@ struct LinkagePoints {
     r.linear = t * -inv_l;
     r.angular_a = cross(p.ra_lower, t) * -inv_l - p.y;
     r.angular_b = cross(p.rb_lower, t) * inv_l;
+    // A front linkage's links point the other way: the same angle (up positive) moves every point the opposite way about the lateral axis.
+    if (p.direction < 0.0) {
+        r.linear = r.linear * real(-1.0);
+        r.angular_a = r.angular_a * real(-1.0);
+        r.angular_b = r.angular_b * real(-1.0);
+    }
     return r;
 }
 
