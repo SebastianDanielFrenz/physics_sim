@@ -46,6 +46,7 @@
 #include "ps/io/vehicle_io.h"
 #include "ps/vehicle/vehicle_reset.h"
 #include "vehicle_test_helpers.h"
+#include <chrono>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -380,7 +381,7 @@ TEST_CASE("L1: regen_blend loads and validates", "[electric][brake][io]") {
         json j = base;
         j["brake_system"]["regen_blend"] = std::move(blend);
         if (!motor_patch.is_null()) for (auto& c : j["powertrain"]["components"]) if (c["id"] == "front_motor") c.update(motor_patch);
-        const std::string path = kData + "/vehicles/_tmp_brake_blend_l1.json";
+        const std::string path = kData + "/vehicles/_tmp_brake_blend_l1_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json";
         { std::ofstream o(path); o << j.dump(2); }
         struct Cleanup { std::string p; ~Cleanup() { std::remove(p.c_str()); } } cleanup{path};
         return io::load_vehicle_json(path);

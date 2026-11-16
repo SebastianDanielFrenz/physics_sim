@@ -43,6 +43,7 @@
 #include "ps/io/vehicle_io.h"
 #include "ps/vehicle/vehicle_reset.h"
 #include "vehicle_test_helpers.h"
+#include <chrono>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -364,7 +365,7 @@ TEST_CASE("G6: the path gating configuration loads and validates", "[electric][b
         json k = j;
         k["brake_system"]["regen_blend"] = std::move(rb);
         // part paths are relative to the vehicle file, so write next to it
-        const std::string path = kData + "/vehicles/_tmp_g6.json";
+        const std::string path = kData + "/vehicles/_tmp_g6_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json";
         std::ofstream(path) << k.dump();
         struct Cleanup { std::string p; ~Cleanup() { std::remove(p.c_str()); } } cleanup{path};
         return io::load_vehicle_json(path);

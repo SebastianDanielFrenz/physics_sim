@@ -16,6 +16,7 @@
 #include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/world.h"
 
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -185,7 +186,7 @@ TEST_CASE("contents mass: the loader reads the block and rejects bad values", "[
     std::ifstream in(fixture_path("vehicle_tank_sedan.json"));
     const nlohmann::json base = nlohmann::json::parse(in);
     // Written next to the fixture's own directory so its relative refs resolve; removed again at once.
-    const std::filesystem::path tmp = std::filesystem::path(PS_SOURCE_DIR) / "tests/support/fixtures/_contents_mass_tmp.json";
+    const std::filesystem::path tmp = std::filesystem::path(PS_SOURCE_DIR) / ("tests/support/fixtures/_contents_mass_tmp_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
     auto load = [&](const nlohmann::json& j) {
         {
             std::ofstream out(tmp);
