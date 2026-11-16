@@ -4,6 +4,7 @@
 //
 // Recorded sabotage (2026-11-16): the loader gate back to "wheels empty needs a machine" -> FW1 throws on load.
 
+#include "ps/io/hitch_io.h"
 #include "ps/machine/coupling.h"
 #include "ps/vehicle/wheel_telemetry.h"
 #include "machine_test_rig.h"
@@ -105,4 +106,17 @@ TEST_CASE("Front weight: a wheel-less vehicle with no machine block and no towed
         std::error_code ec;
         fs::remove(f, ec);
     }
+}
+
+// The front socket's class: the same hold as the rear's three_point_locked, a name of its own.
+TEST_CASE("Front weight: three_point_front is three_point_locked under another name", "[machine][io]") {
+    const auto dir = std::string(PS_SOURCE_DIR) + "/data/hitch_classes/";
+    const machine::HitchClassDesc a = io::load_hitch_class_json(dir + "three_point_locked.json");
+    const machine::HitchClassDesc b = io::load_hitch_class_json(dir + "three_point_front.json");
+    CHECK(a.name == "three_point_locked");
+    CHECK(b.name == "three_point_front");
+    CHECK(a.frequency_hz == b.frequency_hz);
+    CHECK(a.damping_ratio == b.damping_ratio);
+    CHECK(a.max_latch_error_m == b.max_latch_error_m);
+    CHECK(a.max_latch_speed_m_s == b.max_latch_speed_m_s);
 }

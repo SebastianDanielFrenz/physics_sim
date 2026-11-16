@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.hitch_class/1",
+  "name": "three_point_front",
+  "source": "The same locked three-point hitch for a socket at the FRONT of a tractor, with a class name of its own so a game that mates a tool to a tractor by class name picks the front socket and not the rear one (a front weight, a front loader frame). A three-point implement with the links stabilised. Between two plain sockets: one rigid body with the tractor. On a hitch point with a linkage (docs/data_formats/linkage.md) the linkage replaces the pitch row and this class gives the frequency, the latch and the locked yaw and roll.",
+  "yaw": {"mode": "locked"},
+  "pitch": {"mode": "locked"},
+  "roll": {"mode": "locked"},
+  "frequency_hz": 60,
+  "damping_ratio": 1,
+  "latch": {"time_s": 0.5, "max_error_m": 0.05, "max_angle_deg": 5, "max_speed_m_s": 0.5}
+}

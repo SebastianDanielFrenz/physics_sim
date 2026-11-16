@@ -14,6 +14,7 @@ yaw about the towing z, pitch about the resulting y, roll about the towed x.
 | `drawbar_pin` | ±75 | ±20 | ±25 | a tractor's drawbar and a trailer eye |
 | `fifth_wheel` | ±90 | ±12 | locked | a truck's turntable |
 | `three_point_locked` | locked | locked | locked | a mounted implement; with a `linkage` block on the towing point the angle rows make way for the lift, [linkage.md](linkage.md) |
+| `three_point_front` | locked | locked | locked | `three_point_locked` under a class name of its own, for a socket at the front of a tractor (a game that mates by class name then tells front from rear) |
 
 The numbers are `data/hitch_classes/*.json`'s own; check there before you quote one.
 
