@@ -388,7 +388,43 @@ TEST_CASE("Powershift: a locked gear that lugs the engine below the down line ta
     CHECK(low.second == 5); // one gear, not the stuck-launch skip of max_skip
     const auto fine = lug(1500.0); // inside the band: nothing to do
     CHECK(fine.second == 6);
-}// Wheel-slip guard (farm 2026-11-16: tractor_large with a 26.8 t tanker in a full-lock turn on soft ground, driven wheels at kappa 2.7-3.0, 0.47 -> 0.28 m/s,
+}
+
+// The hysteresis trap (farm 2026-11-16, tractor_150 behind a pro harrow at 20 % torque: gear 12, 1414-1480 rpm, 14-80 rpm ABOVE the 1400 full-throttle down line, 1.5 m/s
+// where the plain version reached 1.65 m/s in a lower gear): between the down and the up line every gear is a stable point, so the plain law never leaves it. With lug_margin
+// the engine under margin x the down line at (nearly) full command for kLugHoldS steps one gear down - unless that gear would sit past the up line.
+// Recorded sabotage: lug_margin 0 (rule off) -> the box stays in gear 6 and the first CHECK fails.
+TEST_CASE("Powershift: lug_margin steps down out of the trap just above the down line, with a hunting guard", "[powershift][drivetrain][automatic]") {
+    auto trap = [](real margin, real rpm, real throttle) {
+        auto d = make_desc();
+        d.tcu.powershift->lug_margin = margin;
+        Box b(std::move(d));
+        REQUIRE(b.at.current() == 6);
+        b.set_input_rpm(1500.0);
+        b.step_for(0.2);
+        b.s.throttle = throttle;
+        b.set_input_rpm(rpm);
+        const int at1 = b.step_for(1.0).target;
+        const int at4 = b.step_for(3.0).target;
+        return std::make_pair(at1, at4);
+    };
+    const auto on = trap(1.1, 1465.0, 1.0); // 1465 < 1.1 x 1400 = 1540; gear 5 reads 1674 < the 2150 up line
+    CHECK(on.first == 6);  // not before kLugHoldS
+    CHECK(on.second == 5); // one gear, after it
+    CHECK(trap(0.0, 1465.0, 1.0).second == 6); // rule off: the trap holds (sabotage form)
+    CHECK(trap(1.1, 1600.0, 1.0).second == 6); // above margin x down line: fine
+    CHECK(trap(1.1, 1465.0, 0.5).second == 6); // not a full command: no rule
+    CHECK(trap(1.1, 2000.0, 1.0).second == 6); // (would not be reached anyway: above 1540)
+    // Hunting guard: a lower gear that would read past the up line is skipped.
+    auto d = make_desc();
+    d.tcu.powershift->lug_margin = 5.0; // 1.5 x... margin big enough to count 1900 rpm as lugging
+    Box b(std::move(d));
+    b.set_input_rpm(1900.0); // gear 5 would read 2172 > up 2150
+    b.step_for(0.2);
+    b.set_input_rpm(1900.0);
+    CHECK(b.step_for(4.0).target == 6);
+}
+// Wheel-slip guard (farm 2026-11-16: tractor_large with a 26.8 t tanker in a full-lock turn on soft ground, driven wheels at kappa 2.7-3.0, 0.47 -> 0.28 m/s,
 // the box shifted 11 -> 14 -> 17 on the output shaft speed): no upshift while the gearbox output runs more than kSpinSlipLimit ahead of the radar ground
 // speed at a ground speed below kSpinSpeedLimitMps. A moving tractor with matching speeds, a fast one and one without a sensor shift as before.
 // Recorded sabotage: remove `&& !spinning` from the upshift condition in powershift_desired -> the spinning case goes to gear 9 and fails.

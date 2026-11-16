@@ -13,6 +13,7 @@ constexpr real kHoldMargin = real(1.3);          // [AS] C_h over the torque han
 constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
 constexpr real kPeakPerCapacity = real(1.9);   // [AS] shift clutch capacity / engine peak torque (tractor_24f24r_powershift.json)
 constexpr real kStuckBiteMarginRpm = real(150.0); // [AS] a stuck launch: the engine is not even this far above the bite rpm
+constexpr real kLugFullThrottle = real(0.95); // [AS] 'full fuel request' for the lug_margin rule
 constexpr real kLugHoldS = real(2.0); // [AS] a locked gear that has kept the engine below the down line this long is too tall for the load
 constexpr real kLaunchHoldMaxS = real(2.0);    // [AS] longest the slipping-launch guard keeps a powershift in its gear
 constexpr real kInertiaBoost = real(1.5);      // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
@@ -393,6 +394,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     }
     if (phase_ != Phase::Idle) {
         lug_t_ = real(0.0);
+        lug2_t_ = real(0.0);
         return; // one decision per completed shift
     }
     const int g = cur_;
@@ -412,6 +414,8 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     } else if (desc_.powershift) {
         // How long the slipping-launch guard in powershift_desired has been holding the gear (it gives up after kLaunchHoldMaxS).
         lug_t_ = (!(slip_launch() && !launch_locked_) && th >= kLaunchHoldThrottle && r < dn) ? lug_t_ + s.h : real(0.0);
+        lug2_t_ = (desc_.tcu.powershift->lug_margin > real(0.0) && !(slip_launch() && !launch_locked_) && th >= kLugFullThrottle &&
+                   r < desc_.tcu.powershift->lug_margin * dn) ? lug2_t_ + s.h : real(0.0);
         launch_hold_t_ = (slip_launch() && !launch_locked_ && th >= kLaunchHoldThrottle) ? launch_hold_t_ + s.h : real(0.0);
         desired = powershift_desired(s, th, g);
     } else {
@@ -509,6 +513,9 @@ int AutoTransmission::powershift_desired(const Sensors& s, real th, int g) const
         if (!stall_guard && in_rpm(best) >= up * real(0.95)) return g;
         return best;
     }
+    // Load-sensing lug (PowershiftTcuDesc::lug_margin): above the down line but under margin x it at full command for kLugHoldS: one gear lower, unless
+    // that gear's rpm would be past the up line (the upshift would send it straight back).
+    if (lug2_t_ >= kLugHoldS && dwell && g > 1 && in_rpm(g - 1) < up) return g - 1;
     return g;
 }
 
@@ -916,6 +923,7 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     if (rev_held_) h = fnv1a(h, rev_held_);
     if (desc_.powershift && launch_hold_t_ > real(0.0)) h = fnv1a(h, launch_hold_t_);
     if (desc_.powershift && lug_t_ > real(0.0)) h = fnv1a(h, lug_t_);
+    if (desc_.powershift && lug2_t_ > real(0.0)) h = fnv1a(h, lug2_t_);
     if (desc_.powershift && desc_.tcu.powershift && desc_.tcu.powershift->torque_return_s > real(0.0)) h = fnv1a(h, ret_f0_);
     if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
         h = fnv1a(h, ratio_);

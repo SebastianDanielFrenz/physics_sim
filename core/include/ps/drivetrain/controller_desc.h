@@ -234,6 +234,10 @@ struct PowershiftTcuDesc {
     // droop line returns from ~0 to full torque in tens of ms as its rpm drops to the new gear, a 2-3 m/s^2 step felt as a
     // jolt; a loaded engine already at full torque is unaffected (start fraction ~1). [AS]
     real torque_return_s = 0.0; // >= 0
+    // Load-sensing lug rule (farm 2026-11-16): with the command at (nearly) full and the engine kept below lug_margin x the down line for kLugHoldS
+    // in a locked gear, step down one gear if the next lower gear's input rpm stays below the up line (no hunting). Catches the hysteresis
+    // trap between the down line and the up line where a heavy tractor sits in a tall gear just above the down line. 0 = off (default, bit-identical); [AS] 1.1.
+    real lug_margin = 0.0; // 0 or >= 1
 };
 
 // Tractor plan stage 2: the driver law of an automatic_tcu driving a HydroCvt gearbox ("hydro" block, required with it).
